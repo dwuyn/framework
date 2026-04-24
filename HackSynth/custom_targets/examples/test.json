@@ -1,0 +1,18 @@
+ {
+   "heartbleed_authorized_validation": {
+     "name": "CVE-2014-0160 (Heartbleed) Validation",
+    "description": "Validate whether authorized TLS services are affected by CVE-2014-0160 and record remediation evidence.",
+     "target": "10.105.196.239",
+     "type": "network",
+     "success_criteria": {
+       "type": "manual",
+      "value": "Verified vulnerability status using approved internal tooling, documented affected services, and confirmed remediation/retest results.",
+       "description": "Human-verified security assessment completed"
+     },
+     "hints": [
+       "Only test systems you own or are explicitly authorized to assess",
+       "Document service, port, certificate, and software version evidence",
+       "After patching, retest and attach proof of non-vulnerable status"
+     ]
+   }
+ }

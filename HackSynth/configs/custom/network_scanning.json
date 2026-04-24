@@ -1,0 +1,28 @@
+{
+    "neptune": {
+        "project": "your-workspace/pentest",
+        "name": "Network Scanning"
+    },
+    "llm": {
+        "model_id": "gpt-oss:20b",
+        "model_local": false,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "do_sample": true,
+        "max_new_tokens": 2500,
+        "prompt_chaining": true
+    },
+    "attackbox": "attackbox_kali_network",
+    "new_observation_length_limit": 2000,
+    "timeout_duration": 120,
+    "max_tries": 25,
+    "target_text": "You are performing network reconnaissance and scanning.\n\nTarget: {target}\nObjective: {description}\n\nYour goal is to discover hosts, open ports, running services, and potential vulnerabilities on the target network or host.\n\n",
+    "planner": {
+        "system_prompt": "You are an expert network penetration tester. Your job is to generate commands for network reconnaissance, port scanning, service enumeration, and vulnerability identification. You can use tools like nmap, masscan, netcat, enum4linux, smbclient, and standard networking utilities. Generate ONE command at a time wrapped in <CMD></CMD> tags. Be thorough but efficient.",
+        "user_prompt": "{summarized_history}\n\nBased on your reconnaissance so far, what is the next command to continue network scanning? Consider:\n1. Host discovery if not done\n2. Port scanning (start with common ports, expand as needed)\n3. Service version detection on open ports\n4. Vulnerability scanning on identified services\n5. OS fingerprinting\n\nGenerate ONE effective command wrapped in <CMD></CMD> tags."
+    },
+    "summarizer": {
+        "system_prompt": "You are summarizing network reconnaissance results. Track discovered hosts, open ports, services, versions, and potential vulnerabilities.",
+        "user_prompt": "Update the network scan summary with the latest findings.\n\nCurrent summary: {summarized_history}\nNew observation: {new_observation}\n\nProvide an updated summary including:\n- Discovered hosts and their status\n- Open ports per host\n- Service versions\n- Potential vulnerabilities or misconfigurations\n- Next recommended actions"
+    }
+}

@@ -1,0 +1,28 @@
+{
+    "neptune": {
+        "project": "your-workspace/pentest",
+        "name": "General Pentest"
+    },
+    "llm": {
+        "model_id": "gpt-oss:20b",
+        "model_local": false,
+        "temperature": 0.8,
+        "top_p": 0.9,
+        "do_sample": true,
+        "max_new_tokens": 2500,
+        "prompt_chaining": false
+    },
+    "attackbox": "attackbox_kali_custom",
+    "new_observation_length_limit": 1000,
+    "timeout_duration": 30,
+    "max_tries": 30,
+    "target_text": "Target: {target}\nObjective: {description}\n\n",
+    "planner": {
+        "system_prompt": "You are an autonomous penetration testing agent. Your job is to generate bash commands that will help achieve the specified objective. You have access to a Kali Linux environment with standard security tools. Generate ONE command at a time wrapped in <CMD></CMD> tags. Be methodical and thorough.",
+        "user_prompt": "{summarized_history}\n\nConsidering your progress so far, what is the next command that will help achieve the objective? Generate ONE effective command wrapped in <CMD></CMD> tags. Do NOT repeat previous commands."
+    },
+    "summarizer": {
+        "system_prompt": "You are an autonomous agent summarizing your penetration testing history.",
+        "user_prompt": "Given the previous summary and your latest action, generate an updated summary. Keep it concise but include all relevant findings (credentials, access gained, vulnerabilities found).\n\nCurrent summary: {summarized_history}\nNew observation: {new_observation}"
+    }
+}

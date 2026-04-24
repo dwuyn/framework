@@ -1,0 +1,70 @@
+{
+    "local_network_scan": {
+        "name": "Local Network Discovery",
+        "description": "Discover all active hosts on the local network segment 192.168.1.0/24, identify open ports, and enumerate running services.",
+        "target": "192.168.1.0/24",
+        "type": "network",
+        "success_criteria": {
+            "type": "multi",
+            "value": [
+                {
+                    "type": "regex",
+                    "value": "Host.*is up"
+                },
+                {
+                    "type": "regex",
+                    "value": "open.*port|\\d+/tcp.*open"
+                }
+            ],
+            "operator": "and",
+            "description": "Found at least one live host with open ports"
+        },
+        "hints": [
+            "Start with host discovery: nmap -sn",
+            "Then do port scanning on live hosts",
+            "Use service version detection: -sV"
+        ]
+    },
+    "single_host_enum": {
+        "name": "Single Host Enumeration",
+        "description": "Perform comprehensive enumeration of the target host including all ports, services, versions, and potential vulnerabilities.",
+        "target": "10.10.10.10",
+        "type": "network",
+        "success_criteria": {
+            "type": "multi",
+            "value": [
+                {
+                    "type": "regex",
+                    "value": "\\d+/tcp.*open"
+                },
+                {
+                    "type": "regex",
+                    "value": "(version|VERSION|Service Info)"
+                }
+            ],
+            "operator": "and",
+            "description": "Identified open ports with service versions"
+        },
+        "hints": [
+            "Full port scan: nmap -p-",
+            "Version detection: -sV",
+            "Script scanning: -sC or --script vuln"
+        ]
+    },
+    "smb_enumeration": {
+        "name": "SMB Enumeration",
+        "description": "Enumerate SMB shares and users on the target Windows host.",
+        "target": "192.168.1.100",
+        "type": "network",
+        "success_criteria": {
+            "type": "regex",
+            "value": "(Sharename|IPC\\$|ADMIN\\$|C\\$|Domain|User|shares found)",
+            "description": "Found SMB shares or user information"
+        },
+        "hints": [
+            "Use enum4linux for comprehensive SMB enumeration",
+            "Try smbclient -L for listing shares",
+            "Check for null sessions"
+        ]
+    }
+}

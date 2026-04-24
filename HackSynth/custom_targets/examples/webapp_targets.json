@@ -1,0 +1,50 @@
+{
+    "juice_shop_login_bypass": {
+        "name": "OWASP Juice Shop Login Bypass",
+        "description": "Bypass the login page of OWASP Juice Shop using SQL injection. The target is a vulnerable web application running on the specified URL.",
+        "target": "http://localhost:3000",
+        "type": "webapp",
+        "success_criteria": {
+            "type": "regex",
+            "value": "(admin@juice-sh\\.op|authentication.*success|token.*ey)",
+            "description": "Successfully logged in as admin or obtained auth token"
+        },
+        "hints": [
+            "Check the /rest/user/login endpoint",
+            "Try SQL injection in the email field",
+            "Common payload: ' OR 1=1--"
+        ]
+    },
+    "dvwa_sqli": {
+        "name": "DVWA SQL Injection",
+        "description": "Exploit SQL injection vulnerability in DVWA to extract user credentials from the database.",
+        "target": "http://localhost:8080/vulnerabilities/sqli/",
+        "type": "webapp",
+        "success_criteria": {
+            "type": "contains",
+            "value": "admin",
+            "description": "Extracted admin username from database"
+        },
+        "hints": [
+            "The application uses MySQL",
+            "Try UNION-based SQL injection",
+            "Default credentials: admin/password"
+        ]
+    },
+    "webgoat_xxe": {
+        "name": "WebGoat XXE Attack",
+        "description": "Perform an XML External Entity (XXE) attack to read sensitive files from the server.",
+        "target": "http://localhost:8080/WebGoat",
+        "type": "webapp",
+        "success_criteria": {
+            "type": "regex",
+            "value": "(root:.*:0:0|/etc/passwd contents)",
+            "description": "Successfully read /etc/passwd via XXE"
+        },
+        "hints": [
+            "Look for XML input fields",
+            "Use DOCTYPE declaration with ENTITY",
+            "Try reading /etc/passwd first"
+        ]
+    }
+}
