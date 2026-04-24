@@ -1,0 +1,94 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vulnbot"
+version = "0.1.0"
+description = "Autonomous Penetration Testing Multi-Agent Framework powered by LLMs"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "VulnBot Team"}
+]
+keywords = ["penetration-testing", "security", "llm", "multi-agent", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Security",
+]
+
+dependencies = [
+    "chardet>=5.2.0",
+    "click>=8.1.7",
+    "cryptography>=42.0.5",
+    "fastapi>=0.110.0",
+    "httpx>=0.27.0",
+    "langchain>=0.3.7",
+    "langchain-community>=0.3.5",
+    "langchain-core>=0.3.15",
+    "langchain-openai>=0.2.5",
+    "loguru>=0.7.2",
+    "numpy>=1.26.4",
+    "ollama>=0.3.3",
+    "openai>=1.53.0",
+    "paramiko>=3.0.0",
+    "pexpect>=4.9.0",
+    "prompt-toolkit>=3.0.47",
+    "pydantic>=2.9.2",
+    "pydantic-settings>=2.6.1",
+    "PyMySQL>=1.1.1",
+    "rich>=13.7.1",
+    "ruamel.yaml>=0.18.6",
+    "SQLAlchemy>=1.4.50",
+    "tenacity>=8.0.0",
+]
+
+[project.optional-dependencies]
+rag = [
+    "langchain-milvus>=0.1.7",
+    "langchain-huggingface>=0.1.2",
+    "pymilvus>=2.4.9",
+    "sentence-transformers>=3.2.1",
+]
+web = [
+    "streamlit>=1.39.0",
+    "uvicorn>=0.32.0",
+]
+all = [
+    "vulnbot[rag,web]",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+vulnbot = "cli:main"
+
+[project.urls]
+Homepage = "https://github.com/KHenryAegis/VulnBot"
+Documentation = "https://github.com/KHenryAegis/VulnBot"
+Repository = "https://github.com/KHenryAegis/VulnBot"
+
+[tool.setuptools]
+packages = ["vulnbot", "actions", "config", "db", "db.models", "db.repository", "prompts", "rag", "roles", "server", "server.chat", "utils"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.yml", "*.json", "*.md"]
+
+[tool.black]
+line-length = 120
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
