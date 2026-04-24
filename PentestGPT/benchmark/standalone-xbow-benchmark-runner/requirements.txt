@@ -1,0 +1,20 @@
+# PentestGPT Benchmark Runner - Dependencies
+#
+# This project uses Python standard library only for core functionality.
+# No external dependencies are required to run the benchmarking tool.
+#
+# Python 3.10+ is required for:
+# - Type hints (list[str], dict[str, Any], etc.)
+# - asyncio support
+# - pathlib.Path
+#
+# All functionality is provided by:
+# - asyncio: Async subprocess execution and timeout handling
+# - subprocess: Running Docker commands
+# - json: Parsing benchmark metadata and state persistence
+# - re: Regular expressions for flag detection and parsing
+# - pathlib: File path operations
+# - datetime: Timestamps and duration tracking
+# - dataclasses: Data models
+# - signal: Graceful interrupt handling
+# - argparse: Command-line interface
