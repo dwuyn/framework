@@ -1,0 +1,234 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from llama_index.core import SimpleDirectoryReader, SummaryIndex
+from llama_index.llms.openai import OpenAI
+from utils.prompt import PentestAgentPrompt
+from utils.model_manager import get_model
+from recon_agent import ReconAgent
+from langchain.memory import ConversationBufferMemory
+from langchain_core.messages import HumanMessage, AIMessage
+from git import Repo
+import dotenv
+import subprocess
+import logging
+import json
+import time
+import yaml
+import os
+import re
+
+logger = logging.getLogger(__name__)
+
+config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'config.yaml')
+with open(config_path, 'r', encoding='utf-8') as f:
+    config = yaml.safe_load(f)
+
+execution_config = config['runtime']['execution']
+
+class ExecutionAgent:
+    def __init__(self, doc_dir:str) -> None:
+        model_name = execution_config['model']
+        # print(f"DEBUG: Execution Config model is: {model_name}")  
+        logger.info(f"Using model: {model_name}")
+        
+        dotenv.load_dotenv()
+        
+        try:
+            self.llm = get_model(model_name)
+        except Exception as e:
+            logger.error(f"Failed to load model {model_name}: {str(e)}")
+            self.llm = OpenAI(temperature=0, model="gpt-4o")
+            logger.warning("Using fallback OpenAI model")
+
+        reader = SimpleDirectoryReader(doc_dir, recursive=True)
+        documents = reader.load_data()
+        repo_summary_index = SummaryIndex.from_documents(documents)
+        self.repo_query_engine = repo_summary_index.as_chat_engine(
+            chat_mode="context",
+            llm=self.llm,
+            verbose=True,
+            system_prompt="You're an excellent cybersecurity penetration tester assistant. You should provide step by step guide for executing the exploit."
+        )
+        self.memory = ConversationBufferMemory(
+            return_messages=True,
+            memory_key="history"
+        )
+        logger.info("Initialized with LangChain memory management")
+
+    def _add_to_memory(self, user_msg, ai_msg):
+        self.memory.chat_memory.add_user_message(user_msg)
+        self.memory.chat_memory.add_ai_message(ai_msg)
+
+    def get_conversation_history(self) -> list:
+        """Get complete conversation history"""
+        return self.memory.chat_memory.messages
+
+    def export_conversation_summary(self) -> str:
+        """Export conversation summary for logging"""
+        messages = self.memory.chat_memory.messages
+        if not messages:
+            return ""
+        summary = "Execution Agent Conversation Summary:\n"
+        summary += "=" * 50 + "\n"
+        for i, message in enumerate(messages, 1):
+            role = "User" if isinstance(message, HumanMessage) else "Assistant"
+            summary += f"{i}. {role}: {message.content}\n"
+            summary += "-" * 30 + "\n"
+        return summary
+
+    def chat(self, msg):
+        res = str(self.repo_query_engine.chat(msg))
+        self._add_to_memory(msg, res)
+        return res
+    
+    def chat_with_tool(self, msg):
+        res = str(self.repo_query_engine.chat(msg))
+        self._add_to_memory(msg, res)
+        return res
+
+    def run_shell_command(self, command, path):
+        try:
+            result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=path, timeout=50)
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            return e.stderr
+        except Exception as e:
+            return str(e)
+
+    def extract_json_data(self, long_string):
+        logger.debug("Extracting JSON data from execution agent response")
+        match = re.search(r'```json\s*(\{.*?\})\s*```', long_string, re.DOTALL)
+        if match:
+            long_string = match.group(1)
+        try:
+            return json.loads(long_string)
+        except json.JSONDecodeError:
+            match = re.search(r'(\{.*\})', long_string, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    logger.debug("Extracted string is not valid JSON")
+                    return None
+            logger.debug("No JSON object found in the string")
+            return None
+
+def main():
+    dotenv.load_dotenv()
+    logging.basicConfig(filename='exeuction_agent.log', 
+                        format='%(asctime)s %(levelname)-8s %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S',
+                        level=logging.INFO)
+    curr_topic = execution_config['current_topic']
+    if execution_config['repo_url']:
+        doc_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), execution_config['doc_dir'], execution_config['repo_url'].split('/')[-1].replace('.git', '')))
+        os.makedirs(doc_dir, exist_ok=True)
+        if not os.listdir(doc_dir):
+            Repo.clone_from(execution_config['repo_url'], doc_dir)
+    else: doc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), execution_config['doc_dir'])
+    logger.info(f"Trying to execute exploit poc in {doc_dir}\n\n")
+    start_time = time.time()
+    exec_agent = ExecutionAgent(doc_dir)
+    recon_agent = None
+
+    target_ip = execution_config['target_ip']
+    target_port = execution_config['target_port']
+    attacker_ip = execution_config['attacker_ip']
+    command_to_execute = execution_config['command_to_execute']
+    msg = PentestAgentPrompt.execution_init_exploit_analysis
+    res = exec_agent.chat_with_tool(msg)
+    print("exec agent response:\n")
+    print(res)
+    print("\n")
+    logger.info("exec. agent:\n"+res+"\n\n")
+
+    msg = None
+    if curr_topic:
+        if recon_agent is None:
+            recon_agent = ReconAgent()
+        query_msg = f"Based on the known information, try to provide the information needed listed here. Please do not provide next step and executable.\n{res}"
+        recon_agent.send_message(curr_topic, query_msg)
+        recon_res = recon_agent.run_thread(curr_topic)
+        if recon_res: 
+            msg = recon_res
+            print("recon agent response:\n")
+            print(msg)
+            print("\n")
+            logger.info("recon. agent:\n"+msg+"\n\n")
+        else:
+            print("No response from recon agent")
+            return
+
+    addn_msg = f"\nThe victim application is running on {target_ip}:{target_port}.\nThe attacker machine ip is {attacker_ip}."
+    if msg:
+        guide_msg = f"Here are the answers to your questions: {msg}\n{addn_msg}\n{PentestAgentPrompt.execution_step_by_step_guide}"
+    else:
+        guide_msg = f"{addn_msg}\n{PentestAgentPrompt.execution_step_by_step_guide}"
+
+    res = exec_agent.chat_with_tool(guide_msg)
+    print("exec agent response:\n")
+    print(res)
+    print("\n")
+    logger.info("exec. agent:\n"+res+"\n\n")
+    prepare_end_time = time.time()
+    max_attempts = 100
+    attempts = 0
+    while attempts < max_attempts:
+        json_msg = None
+        try:
+            json_msg = exec_agent.extract_json_data(res)
+            if not json_msg:
+                print("Extracted string is not a valid JSON")
+                res = exec_agent.chat("The previous message is not in valid JSON format. Please return it in valid JSON format with the following structure: {\"analysis\": \"...\", \"next_step\": \"...\", \"executable\": \"...\"}")
+                print("exec agent response:\n")
+                print(res)
+                print("\n")
+                logger.info("exec. agent:\n"+res+"\n\n")
+                attempts += 1
+                continue
+        except Exception as e:
+            print(f"Error parsing JSON: {str(e)}")
+            res = exec_agent.chat("The previous message is not in valid JSON format. Please return it in valid JSON format with the following structure: {\"analysis\": \"...\", \"next_step\": \"...\", \"executable\": \"...\"}")
+            print("exec agent response:\n")
+            print(res)
+            print("\n")
+            logger.info("exec. agent:\n"+res+"\n\n")
+            attempts += 1
+            continue
+        
+        cmd = json_msg.get('executable', 'None')
+        if cmd and cmd != 'None':
+            cmd_res = exec_agent.run_shell_command(cmd, doc_dir)
+            print(cmd_res)
+            logger.info("shell:\n"+cmd_res+"\n\n")
+            res = exec_agent.chat("Here is what I got from executing previous executable command.\n" + cmd_res)
+            print("exec agent response:\n")
+            print(res)
+            print("\n")
+            logger.info("exec. agent:\n"+res+"\n\n")
+            attempts += 1
+        else:
+            break
+    else:
+        print(f"[WARNING] Exceeded maximum attempts ({max_attempts}). Exiting loop to prevent infinite execution.")
+        logger.warning(f"Exceeded maximum attempts ({max_attempts}). Exiting loop to prevent infinite execution.")
+    res = exec_agent.chat(PentestAgentPrompt.execution_summary)
+    print("exec agent response:\n")
+    print(res)
+    print("\n")
+    logger.info("exec. agent:\n"+res+"\n\n")
+    execution_end_time = time.time()
+    prepare_time = prepare_end_time - start_time
+    exec_time = execution_end_time - prepare_end_time
+    # Log conversation summary
+    conversation_summary = exec_agent.export_conversation_summary()
+    if conversation_summary:
+        logger.info("Execution Agent Conversation Summary:\n" + conversation_summary)
+    
+    logging.info(f"exec agent preparing started at {start_time:.6f} and ended at {prepare_end_time:.6f}. The exeuction time is {prepare_time:.6f} seconds")
+    logging.info(f"Searching agent execution started at {prepare_end_time:.6f} and ended at {execution_end_time:.6f}. The exeuction time is {exec_time:.6f} seconds")
+    print(f"Execution time: {prepare_time + exec_time}")
+
+if __name__ == "__main__":
+    main()

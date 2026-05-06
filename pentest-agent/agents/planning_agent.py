@@ -1,0 +1,250 @@
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from utils.doc_handler import DocHandler
+from utils.merge_scores import merge
+from utils.version_limit import get_affected_cve
+from utils.model_manager import model_manager
+import json
+import logging
+import subprocess
+import yaml
+from typing import List, Dict
+from llama_index.core import Settings
+
+logger = logging.getLogger(__name__)
+
+config_path = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "configs", "config.yaml"
+)
+with open(config_path, "r", encoding="utf-8") as f:
+    config = yaml.safe_load(f)
+
+planning_config = config["runtime"]["planning"]
+cvemap_config = planning_config["cvemap"]
+
+if planning_config["economic_mode"]:
+    from utils.cve_info_ec import get_exp_info
+else:
+    from utils.cve_info import get_exp_info
+
+
+def create_summary_and_index(dir, summary_prompt, query, keyword):
+    doc_handler = DocHandler()
+    doc_handler.create_index(dir, summary_prompt, keyword)
+    response = doc_handler.query(query)
+    return str(response)
+
+
+def cvemap_product(product: str, output_dir: str, cvemap_config: Dict) -> List[Dict]:
+    os.makedirs(output_dir, exist_ok=True)
+    cvemap_json_path = os.path.join(output_dir, "cvemap.json")
+    lower_product = product.lower()
+    # query_type = '-q' if cvemap_config.get("fuzzy_search", False) else '-p'
+    all_results = []
+    limit = 50  # batch size
+    offset = 0
+
+    while True:
+        if (
+            cvemap_config.get("max_entry")
+            and len(all_results) >= cvemap_config["max_entry"]
+        ):
+            break
+
+        # cvemap_command = [
+        #     "cvemap",
+        #     query_type, lower_product,
+        #     "-l", str(limit),
+        #     "-offset", str(offset),
+        #     "-j"
+        # ]
+        query_string = (
+            lower_product
+            if cvemap_config.get("fuzzy_search", False)
+            else f"affected_products.product:{lower_product}"
+        )
+
+        cvemap_command = [
+            "vulnx",
+            "search",
+            query_string,
+            "--limit",
+            str(limit),
+            "--offset",
+            str(offset),
+            "-j",
+        ]
+
+        try:
+            shell_result = subprocess.run(
+                cvemap_command,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=50,
+            )
+            current_batch = json.loads(shell_result.stdout)
+            if isinstance(current_batch, dict):
+                current_batch = current_batch.get("results", [])
+            if not current_batch:  # Empty response, stop
+                break
+
+            filtered_batch = []
+            for item in current_batch:
+                cve_id = item.get("cve_id", "")
+
+                # extract year in cve-id
+                try:
+                    year = int(cve_id.split("-")[1])  # year's location
+                except (IndexError, ValueError):
+                    continue  # skip error format
+
+                # check year range
+                if "max_year" in cvemap_config and year > cvemap_config["max_year"]:
+                    continue  # skip entry greater than max_year
+                if "min_year" in cvemap_config and year < cvemap_config["min_year"]:
+                    continue  # skip entry less than min_year
+
+                filtered_batch.append(item)
+
+                # if reach max_entry limit
+                if (
+                    cvemap_config.get("max_entry")
+                    and len(all_results) + len(filtered_batch)
+                    >= cvemap_config["max_entry"]
+                ):
+                    break
+
+            all_results.extend(filtered_batch)
+
+            # check if stop searching
+            stop_conditions = [
+                len(current_batch) < limit,  # normal ending condition
+                cvemap_config.get("min_year")
+                and all(
+                    int(item.get("cve_id", "").split("-")[1])
+                    < cvemap_config["max_year"]
+                    for item in current_batch
+                    if item.get("cve_id")
+                ),  # every entry is less than max_year
+                cvemap_config.get("max_entry")
+                and len(all_results) >= cvemap_config["max_entry"],  # reach max_entry
+            ]
+
+            if any(stop_conditions):
+                break
+
+            offset += limit  # prepare the next batch
+
+        except subprocess.CalledProcessError as e:
+            print("[ERROR] cvemap failed.")
+            print("STDOUT:", e.stdout)
+            print("STDERR:", e.stderr)
+            raise
+        except json.JSONDecodeError:
+            print(f"[WARNING] Failed to decode JSON at offset {offset}")
+            break
+
+    # make sure not exceed max_entry
+    if cvemap_config.get("max_entry"):
+        all_results = all_results[: cvemap_config["max_entry"]]
+
+    with open(cvemap_json_path, "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=2)
+
+    return all_results
+
+
+# ''' Second Search
+# 1. GitHub searcher for CVEs
+# 2. DocHandler for same directory as step 1, but different summary prompt and query.
+# Output: '''
+
+
+def main():
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)-8s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        filename="planning_agent.log",
+        level=logging.INFO,
+    )
+
+    # Get model from configuration
+    model_name = planning_config["model"]
+    llm = model_manager.get_model(model_name)
+    logger.info(f"Using model: {model_name}")
+
+    keyword = planning_config["keyword"]  # phpmailer
+    app = planning_config["app"]  # phpmailer
+    version = planning_config[
+        "version"
+    ]  # "5.2.17" # need to apply github filter for content
+    vuln_type = planning_config["vuln_type"]
+    output_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), planning_config["output_dir"]
+    )
+    logger.info(f"Searching exploit information for {keyword}\n\n")
+    os.makedirs(f"{output_dir}/{keyword}", exist_ok=True)
+
+    res_dir = f"{output_dir}/{keyword}"
+    cvemap_res_dir = f"{output_dir}/{keyword}/CVEMAP"
+    cvemap_res = cvemap_product(
+        app.lower().replace(" ", "_"), cvemap_res_dir, cvemap_config
+    )
+
+    cve_lst = []
+    if version:
+        print(
+            "Version constraint has been set, will use this to save tokens.\nThis MAY NOT ACCURATE, please double check!"
+        )
+        logger.info(
+            "Version constraint has been set, will use this to save tokens.\nThis MAY NOT ACCURATE, please double check!"
+        )
+        limited_lst = get_affected_cve(cvemap_res, version)
+        print(f"The following CVEs will be searched:\n{limited_lst}")
+        logger.info(f"The following CVEs will be searched:\n{limited_lst}")
+        cve_lst = [item["cve_id"] for item in limited_lst]
+    else:
+        print("Version constraint has not been set, will use all related CVEs.")
+        logger.info("Version constraint has not been set, will use all related CVEs.")
+        for item in cvemap_res:
+            cve_lst.append(item["cve_id"])
+
+    exploit_searching_time, exploit_analysis_time = get_exp_info(cve_lst, res_dir, app)
+    if planning_config["economic_mode"]:
+        plan_filename = "plan_ec.json"
+        merge(res_dir, os.path.join(res_dir, plan_filename), True)
+    else:
+        plan_filename = "plan.json"
+        merge(res_dir, os.path.join(res_dir, plan_filename), False)
+
+    with open(os.path.join(res_dir, plan_filename)) as f:
+        json_data = json.load(f)
+
+    logger.info(
+        "exploit suggestions from github search:\n"
+        + json.dumps(json_data, indent=2)
+        + "\n"
+    )
+
+    print(f"Exploit searching time is {(exploit_searching_time):.6f} seconds")
+    print(f"Exploit analysis time is {(exploit_analysis_time):.6f} seconds")
+    print(
+        f"Total exploit time is {(exploit_searching_time + exploit_analysis_time):.6f} seconds"
+    )
+    logging.info(f"Exploit searching time is {(exploit_searching_time):.6f} seconds")
+    logging.info(f"Exploit analysis time is {(exploit_analysis_time):.6f} seconds")
+
+
+if __name__ == "__main__":
+    main()
+
+# ''' Evaluation:
+# 1. Set up VM. Make sure you can ping VM from host machine. Clone vulhub and install docker on VM.
+# 2. Run recon_agent.py --> set IP and topic
+#     a. Final output: Port and version
+#     b. Input for the search agent
+#     c. Run all the associated exploits following the instructions'''

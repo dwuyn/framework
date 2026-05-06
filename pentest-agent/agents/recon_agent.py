@@ -1,0 +1,344 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils.prompt import PentestAgentPrompt
+from utils.model_manager import get_model
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain.memory import ConversationBufferMemory
+from langchain.memory.chat_message_histories import FileChatMessageHistory
+from pydantic import BaseModel, Field
+import dotenv
+import json
+import subprocess
+import re
+import logging
+import time
+import yaml
+import requests
+import os
+
+# Configure logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# File handler
+file_handler = logging.FileHandler('recon_agent.log')
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# Load config
+config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs', 'config.yaml')
+logger.info(f"Loading config from: {config_path}")
+try:
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+    logger.info("Config loaded successfully")
+except Exception as e:
+    logger.error(f"Failed to load config: {str(e)}")
+    sys.exit(1)
+
+recon_config = config['runtime']['recon']
+
+model_name = recon_config['model']
+logger.info(f"Recon config: {json.dumps(recon_config, indent=2)}")
+
+class ReconResponse(BaseModel):
+    analysis: str = Field(description="Analysis of the previous step")
+    next_step: str = Field(description="What to do next")
+    executable: str = Field(description="Command to execute, or 'None' if no command needed")
+
+class ReconAgent:
+    def __init__(self):
+        logger.info("Initializing ReconAgent")
+        self.memory_dir = recon_config['memory_dir']
+        os.makedirs(self.memory_dir, exist_ok=True)
+        
+        logger.info(f"Loading model: {model_name}")
+        # Ensure environment variables are loaded
+        logger.info("Loading environment variables")
+        dotenv.load_dotenv()
+        try:
+            self.llm = get_model(model_name)
+            logger.info(f"Model {model_name} loaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to load model: {str(e)}")
+            self.llm = None
+        
+        # Use LangChain memory management
+        self.memory_map = {}
+        logger.info("Initialized with LangChain memory management")
+
+    def get_memory(self, topic: str) -> ConversationBufferMemory:
+        """Get or create memory instance for specified topic"""
+        if topic not in self.memory_map:
+            # Use pure memory storage, no real-time file I/O
+            memory = ConversationBufferMemory(
+                return_messages=True,
+                memory_key="history"
+            )
+            self.memory_map[topic] = memory
+            logger.info(f"Created new memory for topic: {topic}")
+        return self.memory_map[topic]
+
+    def init_thread(self, topic: str):
+        """Initialize conversation thread"""
+        logger.info(f"Initializing thread for topic: {topic}")
+        # Getting memory will automatically create new conversation history
+        self.get_memory(topic)
+        logger.info(f"Thread initialized for topic: {topic}")
+
+    def send_message(self, topic: str, msg_content: str):
+        """Send message to specified topic"""
+        logger.debug(f"Sending message to topic '{topic}': {msg_content[:100]}...")
+        memory = self.get_memory(topic)
+        memory.chat_memory.add_user_message(msg_content)
+
+    def get_last_message(self, topic: str) -> str:
+        """Get the last message for specified topic"""
+        memory = self.get_memory(topic)
+        messages = memory.chat_memory.messages
+        if messages:
+            return messages[-1].content
+        return ""
+
+    def get_conversation_history(self, topic: str) -> list:
+        """Get complete conversation history for passing to execution agent"""
+        memory = self.get_memory(topic)
+        return memory.chat_memory.messages
+
+
+    def save_memory_to_file(self, topic: str):
+        """Save memory for specified topic to file"""
+        try:
+            memory = self.get_memory(topic)
+            messages = memory.chat_memory.messages
+            
+            if not messages:
+                logger.info(f"No messages to save for topic: {topic}")
+                return
+            
+            # Create file storage
+            memory_file = os.path.join(self.memory_dir, f"{topic}.json")
+            chat_history = FileChatMessageHistory(memory_file)
+            
+            # Write messages from memory to file
+            for message in messages:
+                if isinstance(message, HumanMessage):
+                    chat_history.add_user_message(message.content)
+                elif isinstance(message, AIMessage):
+                    chat_history.add_ai_message(message.content)
+            
+            logger.info(f"Saved {len(messages)} messages to {memory_file}")
+            
+        except Exception as e:
+            logger.error(f"Error saving memory for topic {topic}: {e}")
+
+    def load_memory_from_file(self, topic: str):
+        """Load memory for specified topic from file"""
+        try:
+            memory_file = os.path.join(self.memory_dir, f"{topic}.json")
+            if not os.path.exists(memory_file):
+                logger.info(f"No existing memory file for topic: {topic}")
+                return
+            
+            # Create file storage and read
+            chat_history = FileChatMessageHistory(memory_file)
+            memory = self.get_memory(topic)
+            
+            # Load messages from file to memory
+            for message in chat_history.messages:
+                if isinstance(message, HumanMessage):
+                    memory.chat_memory.add_user_message(message.content)
+                elif isinstance(message, AIMessage):
+                    memory.chat_memory.add_ai_message(message.content)
+            
+            logger.info(f"Loaded {len(chat_history.messages)} messages from {memory_file}")
+            
+        except Exception as e:
+            logger.error(f"Error loading memory for topic {topic}: {e}")
+
+    def run_thread(self, topic: str):
+        """Run conversation thread"""
+        logger.info(f"Running thread for topic: {topic}")
+        memory = self.get_memory(topic)
+        
+        if not memory.chat_memory.messages:
+            logger.warning(f"No messages found for topic: {topic}")
+            return None
+        
+        if not self.llm:
+            logger.error("LLM not initialized, cannot run thread")
+            return None
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Invoking LLM (attempt {attempt+1}/{max_retries})")
+                # Use message history from memory
+                messages = memory.chat_memory.messages
+                # response = self.llm.invoke(messages, timeout=30)  # timeout not supported by Ollama
+                response = self.llm.invoke(messages)
+                response_content = response.content
+                
+                # Add AI response to memory
+                memory.chat_memory.add_ai_message(response_content)
+                
+                logger.info(f"Response added to memory for topic: {topic}")
+                return response_content
+                
+            except Exception as e:
+                logger.error(f"API call failed (attempt {attempt+1}/{max_retries}): {str(e)}")
+                if attempt < max_retries - 1:
+                    wait_time = 2 * (attempt + 1)
+                    logger.info(f"Waiting {wait_time} seconds before retry...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"API call failed after {max_retries} attempts")
+                    return None
+
+    def run_shell_command(self, command):
+        # logger.info(f"Executing command: {command}")
+        try:
+            result = subprocess.run(command, shell=True, check=True, 
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                   text=True, timeout=300)
+            output = result.stdout
+            logger.info(f"Command executed successfully. Output length: {len(output)}")
+            return output
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Command failed with error: {e.stderr}"
+            logger.error(error_msg)
+            return error_msg
+        except subprocess.TimeoutExpired:
+            error_msg = "Command timed out after 300 seconds"
+            logger.error(error_msg)
+            return error_msg
+
+    def extract_json_data(self, long_string):
+        logger.debug("Extracting JSON data")
+        # Prefer to remove markdown code block wrapper
+        match = re.search(r'```json\s*(\{.*?\})\s*```', long_string, re.DOTALL)
+        if match:
+            long_string = match.group(1)
+        try:
+            return json.loads(long_string)
+        except json.JSONDecodeError:
+            match = re.search(r'(\{.*\})', long_string, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    logger.debug("Extracted string is not valid JSON")
+                    return None
+            logger.debug("No JSON object found in the string")
+            return None
+
+    def parse_structured_response(self, response_text):
+        logger.info("Parsing structured response")
+        try:
+            json_data = self.extract_json_data(response_text)
+            if json_data:
+                logger.debug("Successfully parsed JSON response")
+                return ReconResponse(**json_data)
+            executable = "None"
+            next_step = ""
+            analysis = response_text
+            executable_pattern = r'executable:\s*(.*?)\n'
+            match = re.search(executable_pattern, response_text, re.IGNORECASE)
+            if match:
+                executable = match.group(1).strip()
+                logger.info(f"Extracted executable from text: {executable}")
+            else:
+                logger.info("No executable found in text response")
+            return ReconResponse(analysis=analysis, next_step=next_step, executable=executable)
+        except Exception as e:
+            logger.error(f"Error parsing response: {str(e)}")
+            return ReconResponse(analysis=response_text, next_step="", executable="None")
+
+def main():
+    logger.info("Starting ReconAgent")
+    start_time = time.time()
+    
+    try:
+        recon_agent = ReconAgent()
+    except Exception as e:
+        logger.error(f"Failed to initialize ReconAgent: {str(e)}")
+        return
+    
+    curr_topic = config['runtime']['recon'].get('current_topic', 'default_topic')
+    target_ip = config['runtime']['recon'].get('target_ip', 'unknown_ip')
+    
+    logger.info(f"Current topic: {curr_topic}")
+    logger.info(f"Target IP: {target_ip}")
+    
+    # Initialize message
+    recon_init_message = PentestAgentPrompt().recon_init.replace("<Target-Ip>", target_ip)
+    logger.info(f"Initial message: {recon_init_message[:100]}...")
+    
+    # logger.info("Initializing thread")
+    recon_agent.init_thread(curr_topic)
+    
+    # logger.info("Sending initial message")
+    recon_agent.send_message(curr_topic, recon_init_message)
+    recon_agent.send_message(curr_topic, f"I want to exploit target host {target_ip}")
+
+    max_attempts = 10
+    attempts = 0
+    while attempts < max_attempts:
+        res = recon_agent.run_thread(curr_topic)
+        if res:
+            msg = recon_agent.get_last_message(curr_topic)
+            # print("\n[Raw LLM Response]\n", msg)
+            json_msg = recon_agent.extract_json_data(msg)
+            if not json_msg:
+                print("Extracted string is not a valid JSON")
+                recon_agent.send_message(curr_topic, "The previous message is not in valid JSON format. Please return it in valid JSON format")
+                attempts += 1
+                continue
+
+            print("\n==============================")
+            print("[LLM Analysis]\n", json_msg.get("analysis", ""))
+            print("[Next Step]\n", json_msg.get("next_step", ""))
+            print("[Executable Command]\n", json_msg.get("executable", ""))
+            print("==============================\n")
+
+            cmd = json_msg.get('executable')
+            if cmd and cmd != 'None':
+                cmd_res = recon_agent.run_shell_command(cmd)
+                print("[Command Execution Result]\n", cmd_res)
+                recon_agent.send_message(curr_topic, "Here is what I got from executing previous executable command.\n" + cmd_res)
+                attempts += 1
+            else:
+                recon_agent.send_message(curr_topic, PentestAgentPrompt.recon_summary)
+                break
+        else:
+            print(res)
+            break
+
+    logger.info("Requesting final summary")
+    recon_agent.send_message(curr_topic, PentestAgentPrompt.recon_summary)
+    
+    logger.info("Running thread for final summary")
+    final_response = recon_agent.run_thread(curr_topic)
+    
+    if final_response:
+        # logger.info(f"Final summary: {final_response}")
+        print(final_response)
+    else:
+        logger.warning("No final response received")
+
+    logger.info("Saving memory to file")
+    recon_agent.save_memory_to_file(curr_topic)
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print(f"Reconnaissance agent execution completed in {execution_time:.2f} seconds")
+    logger.info(f"Reconnaissance agent execution completed in {execution_time:.2f} seconds")
+
+if __name__ == "__main__":
+    main()
