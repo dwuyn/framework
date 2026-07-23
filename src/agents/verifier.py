@@ -864,7 +864,7 @@ def route_execution_verifier(state: PentestState) -> str:
         return "execution"
     verdict = last.get("verdict", "")
     if verdict == "success":
-        return "end"        # → maintain_access
+        return "end"        # → END (oracle proof already adjudicates)
     if verdict == "replan":
         return "replan"
     if verdict == "exhausted":

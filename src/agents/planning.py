@@ -446,12 +446,8 @@ def planning_node(state: PentestState) -> dict[str, Any]:
         working["execution_summary"] = "No shortlist available to plan."
         return working
 
-    for _ in range(3):
-        working.update(planner_node(working))
-        working.update(skeptic_node(working))
-        working.update(risk_officer_node(working))
-        if route_risk_officer(working) == "finalize_planning":
-            break
-
+    # Deterministic planning: no planner/skeptic/risk debate. The deterministic
+    # queue in src.pipeline.queue handles applicability and ranking.
+    working.update(planner_node(working))
     working.update(finalize_planning_node(working))
     return working

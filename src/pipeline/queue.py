@@ -1,0 +1,236 @@
+"""
+src/pipeline/queue.py
+─────────────────────
+Deterministic applicability, ranking, and per-CVE shortlisting.
+
+Hard-reject mismatches in product, version range, platform, auth, network,
+endpoint, or callback scope. Rank remaining candidates by:
+
+  1. Exact applicability evidence
+  2. Ability to satisfy the benchmark proof
+  3. Complete, validated procedure
+  4. Artifact provenance and trust
+  5. Lower expected side effects
+  6. Lower expected time/tool cost
+  7. Absence of prior classified failures
+
+Retain at most five CVEs per service and two executable methods per CVE.
+Unknown version permits a safe check / version-independent candidate but never
+an exact-applicability rating.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Mapping
+
+from src.pipeline.candidates import (
+    ExploitCandidate, SUPPORTED_CAPABILITIES, SUPPORTED_KINDS,
+    is_executable,
+)
+from src.pipeline.evidence import Fingerprint, VersionConstraint, constraint_matches
+from src.pipeline.ledger import EventLedger
+from src.pipeline.manifest import Scope, ResourceLimits
+from src.pipeline.scope import ScopeDecision, ScopeValidator
+
+
+@dataclass
+class RankedCandidate:
+    candidate: ExploitCandidate
+    applicability: str                 # exact | partial | unknown | mismatch
+    capability_match: bool
+    procedure_complete: bool
+    score: float
+    rejection_reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CandidateQueue:
+    ranked: list[RankedCandidate]
+    cv_per_service: dict[str, list[str]] = field(default_factory=dict)
+    methods_per_cve: dict[str, list[str]] = field(default_factory=dict)
+
+
+def _capability_satisfies(candidate_cap: str, proof_cap: str) -> bool:
+    if candidate_cap == proof_cap:
+        return True
+    # Detection can never satisfy RCE / file_write / auth_bypass / session.
+    rank = {
+        "detection": 0, "info_read": 1, "file_write": 2,
+        "auth_bypass": 3, "code_execution": 4, "session": 5,
+    }
+    if candidate_cap == "detection" and rank.get(proof_cap, -1) > 0:
+        return False
+    return rank.get(candidate_cap, -1) >= rank.get(proof_cap, -1)
+
+
+def _procedure_complete(candidate: ExploitCandidate) -> bool:
+    if not candidate.procedure:
+        return False
+    stages = {s.stage for s in candidate.procedure}
+    if "execute" not in stages:
+        return False
+    # All steps must have at least one argv token and a positive timeout.
+    for step in candidate.procedure:
+        if not step.argv:
+            return False
+        if step.timeout_seconds <= 0:
+            return False
+    return True
+
+
+def _in_scope(candidate: ExploitCandidate, validator: ScopeValidator) -> tuple[bool, str]:
+    for step in candidate.procedure:
+        dec = validator.validate_args(list(step.argv), stage=step.stage)
+        if not dec:
+            return False, f"scope:{step.stage}:{dec.reason}"
+    return True, ""
+
+
+def _side_effect_rank(side_effect: str) -> int:
+    order = ["read_only", "info_read", "auth_bypass", "file_write",
+             "session", "remote_exploit"]
+    return order.index(side_effect) if side_effect in order else len(order)
+
+
+def _expected_cost(candidate: ExploitCandidate) -> float:
+    cost = 0.0
+    for step in candidate.procedure:
+        cost += float(step.timeout_seconds or 0)
+    if candidate.kind in {"nmap_nse", "nuclei"}:
+        cost *= 0.5
+    return cost
+
+
+def rank_candidates(
+    candidates: Iterable[ExploitCandidate],
+    *,
+    fingerprint: Fingerprint,
+    proof_capability: str = "code_execution",
+    ledger: EventLedger | None = None,
+    scope: Scope | None = None,
+    resolver=None,
+) -> list[RankedCandidate]:
+    """Deterministic ranking with hard mismatch rejection."""
+    validator = ScopeValidator(scope or Scope(), resolver=resolver)
+    out: list[RankedCandidate] = []
+    for cand in candidates:
+        reason: list[str] = []
+        # Trust gating: discovery_only and blocked candidates must never be
+        # ranked for execution; they remain visible only for diagnostics.
+        if cand.provenance.trust == "blocked":
+            reason.append("trust:blocked")
+        # Hard-reject mismatches.
+        if cand.constraint.vendor and fingerprint.vendor.parsed != cand.constraint.vendor.lower():
+            reason.append("vendor_mismatch")
+        if cand.constraint.product and fingerprint.product.parsed != cand.constraint.product.lower():
+            reason.append("product_mismatch")
+        if cand.constraint.platform and cand.constraint.platform != fingerprint.platform_hints[0] \
+                if fingerprint.platform_hints else False:
+            reason.append("platform_mismatch")
+        grade = constraint_matches(cand.constraint, fingerprint)
+        if grade == "mismatch":
+            reason.append("version_mismatch")
+        if cand.auth_required == "yes" and fingerprint.auth_hint not in {"required", "unknown"}:
+            reason.append("auth_prereq")
+
+        # Procedure completeness and scope.
+        proc_complete = _procedure_complete(cand)
+        if not proc_complete:
+            reason.append("procedure_incomplete")
+        scope_ok, scope_msg = _in_scope(cand, validator)
+        if not scope_ok:
+            reason.append(scope_msg)
+
+        capability_match = _capability_satisfies(cand.capability, proof_capability)
+        if not capability_match:
+            reason.append("capability_mismatch")
+
+        # Final applicability label.
+        applicability = grade
+        if reason and applicability == "exact":
+            applicability = "partial"
+
+        # Score.
+        score = 0.0
+        if applicability == "exact":
+            score += 100.0
+        elif applicability == "partial":
+            score += 50.0
+        elif applicability == "unknown":
+            score += 10.0
+        if capability_match:
+            score += 40.0
+        if proc_complete:
+            score += 20.0
+        score += {"trusted": 15.0, "lab_approved": 10.0,
+                   "discovery_only": -100.0, "blocked": -1000.0}.get(
+            cand.provenance.trust, 0.0)
+        score -= 5.0 * _side_effect_rank(cand.side_effect_class)
+        score -= _expected_cost(cand) * 0.01
+        # Penalize kinds that cannot satisfy a non-detection proof.
+        if not capability_match and proof_capability != "detection":
+            score -= 200.0
+
+        # Mismatch or hard-block ⇒ not executable.
+        executable = is_executable(cand, manifest_approved_lab_ids={"*"} if cand.provenance.trust == "lab_approved" else None)
+        if "vendor_mismatch" in reason or "product_mismatch" in reason \
+                or "version_mismatch" in reason or "platform_mismatch" in reason \
+                or "auth_prereq" in reason or cand.provenance.trust == "blocked":
+            executable = False
+
+        out.append(RankedCandidate(
+            candidate=cand, applicability=applicability,
+            capability_match=capability_match, procedure_complete=proc_complete,
+            score=score, rejection_reasons=[r for r in reason if not r.startswith("scope:")],
+        ))
+        if ledger is not None:
+            ledger.record(
+                phase="queue", stage="applicability",
+                cve_id=cand.cve_id, candidate_id=cand.candidate_id,
+                method=cand.kind,
+                scope_decision="allowed" if scope_ok else "blocked",
+                policy_decision="execute" if executable else "blocked",
+                detail=applicability,
+                payload={"score": score, "reasons": reason, "executable": executable,
+                         "capability_match": capability_match},
+            )
+    # Sort descending by score, then by candidate_id for stability.
+    out.sort(key=lambda rc: (-rc.score, rc.candidate.candidate_id))
+    return out
+
+
+def shortlist(
+    ranked: list[RankedCandidate],
+    *,
+    limits: ResourceLimits,
+) -> CandidateQueue:
+    """Apply max_cves_per_service and max_methods_per_cve shortlists."""
+    by_service_cve: dict[str, dict[str, list[RankedCandidate]]] = {}
+    # We don't have explicit service labels here; group by candidate source as
+    # the v1 stand-in and store per-CVE method counts.
+    for rc in ranked:
+        if not is_executable(rc.candidate, manifest_approved_lab_ids={"*"}
+                              if rc.candidate.provenance.trust == "lab_approved" else None):
+            continue
+        by_service_cve.setdefault(rc.candidate.source, {}).setdefault(rc.candidate.cve_id, []).append(rc)
+    selected: list[RankedCandidate] = []
+    cv_per_service: dict[str, list[str]] = {}
+    methods_per_cve: dict[str, list[str]] = {}
+    for service, cves in by_service_cve.items():
+        cv_per_service[service] = []
+        # Order CVEs by best score.
+        best_by_cve = sorted(cves.items(),
+                              key=lambda kv: max((r.score for r in kv[1]), default=-1e9),
+                              reverse=True)
+        for cve, methods in best_by_cve:
+            if len(cv_per_service[service]) >= limits.max_cves_per_service:
+                break
+            cv_per_service[service].append(cve)
+            # Up to 2 methods per CVE.
+            for rc in methods[:limits.max_methods_per_cve]:
+                selected.append(rc)
+                methods_per_cve.setdefault(cve, []).append(rc.candidate.kind)
+    return CandidateQueue(ranked=selected, cv_per_service=cv_per_service,
+                          methods_per_cve=methods_per_cve)

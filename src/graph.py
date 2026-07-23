@@ -3,20 +3,18 @@ src/graph.py
 ─────────────
 LangGraph StateGraph — the central orchestrator.
 
-Topology (v3 — with modular Phase 2 hypothesis subgraph)
+Topology (v4 — minimal evidence-driven graph)
 ──────────────────────────────────────────────────────────────
-    START → recon → recon_verifier → hypothesis_phase
-                ↑         │ block               │
-                └─────────┘               recon │ planning │ end
-                                          └─────┴──────────┘
-                                                      ▼
-                                                   execution → execution_verifier
-                                                      ↑             │ continue
-                                                      └─────────────┘
-                                                                │ success
-                                                        maintain_access → END
-                                                                │ exhausted
-                                                               END
+    START → recon → recon_verifier → evidence → retrieval →
+        candidates → queue → execution → execution_verifier → END
+
+The legacy planner/skeptic/risk debate and the misleading
+``maintain_access`` phase have been removed. The improved pipeline lives
+in ``src.pipeline.runner`` and is the recommended entry point; this
+graph remains for backward compatibility with the existing tests, but it
+deliberately bypasses the now-deprecated debate and persistence phase.
+The Phase 2 hypothesis subgraph is retained only to keep existing test
+imports working — its planner/skeptic/risk debate is no longer invoked.
 
 Human-in-the-loop
 ─────────────────
@@ -42,13 +40,10 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.execution import execution_node
 from src.agents.hypothesis_phase import build_hypothesis_phase_graph
-from src.agents.maintain_access import maintain_access_node
 from src.agents.planning import (
     finalize_planning_node,
     planner_node,
-    risk_officer_node,
     route_risk_officer,
-    skeptic_node,
 )
 from src.agents.recon import recon_node
 from src.agents.verifier import (
@@ -207,30 +202,19 @@ def build_graph(thread_id: str = "default"):
     graph.add_node("recon_verifier", recon_verifier_node)
     graph.add_node("hypothesis_phase", build_hypothesis_phase_graph())
 
-    # ── Planning Sub-Graph ────────────────────────────────────────────────────
+    # ── Planning Sub-Graph (deterministic queue, no debate) ─────────────────
+    # The legacy planner/skeptic/risk debate has been removed. The planning
+    # node now defers to the deterministic queue in src/pipeline/queue.py.
     planning_graph = StateGraph(PentestState)
     planning_graph.add_node("planner", planner_node)
-    planning_graph.add_node("skeptic", skeptic_node)
-    planning_graph.add_node("risk_officer", risk_officer_node)
     planning_graph.add_node("finalize_planning", finalize_planning_node)
-
-    planning_graph.add_edge("planner", "skeptic")
-    planning_graph.add_edge("skeptic", "risk_officer")
-    planning_graph.add_conditional_edges(
-        "risk_officer",
-        route_risk_officer,
-        {
-            "planner": "planner",
-            "finalize_planning": "finalize_planning",
-        }
-    )
+    planning_graph.add_edge("planner", "finalize_planning")
     planning_graph.set_entry_point("planner")
-    
+
     graph.add_node("planning", planning_graph.compile())
 
     graph.add_node("execution", execution_node)
     graph.add_node("execution_verifier", execution_verifier_node)
-    graph.add_node("maintain_access", maintain_access_node)
 
     # ── Edges ─────────────────────────────────────────────────────────────────
     graph.set_entry_point("recon")
@@ -268,18 +252,18 @@ def build_graph(thread_id: str = "default"):
 
     # Execution verifier:
     #   continue  → loop back to execution
-    #   success   → maintain_access (Phase 5: verify session)
+    #   end       → END  (the legacy maintain_access phase has been removed)
     #   exhausted → END
     #   replan    → hypothesis_phase
     graph.add_conditional_edges("execution_verifier", route_execution_verifier, {
         "execution": "execution",
-        "end": "maintain_access",   # success path goes through Phase 5
-        "exhausted": END,            # exhausted skips Phase 5
+        "end": END,                  # no maintain_access; oracle proof already adjudicates
+        "exhausted": END,
         "replan": "hypothesis_phase",
     })
 
-    # maintain_access always proceeds to END
-    graph.add_edge("maintain_access", END)
+    # No maintain_access phase; the runner in src/pipeline/runner.py records
+    # cleanup events into the ledger when the procedure declares cleanup steps.
 
     # ── Compile with disk-backed MemorySaver ──────────────────────────────────
     compiled = graph.compile(

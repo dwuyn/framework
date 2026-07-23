@@ -2,7 +2,6 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from src.agents.maintain_access import maintain_access_node
 from src.agents.planning import _apply_candidate_priority
 from src.agents.verifier import execution_verifier_node, hypothesis_verifier_node, recon_verifier_node
 from src.memory.decision import Decision, DecisionMemory
@@ -12,16 +11,19 @@ from src.tools.shell import validate_command
 
 
 class FrameworkUpdateTests(unittest.TestCase):
-    def test_validate_command_allows_common_recon_pipeline(self):
+    def test_validate_command_rejects_shell_chaining(self):
+        # The unrestricted shell fallback has been removed; pipeline-1 shell
+        # tool now rejects chained/shell commands.
         ok, reason = validate_command(
             "nmap -p 5060 10.0.0.1 2>&1 | grep -E 'sip|SIP' | tail -5",
             mode="recon",
         )
-        self.assertTrue(ok, reason)
+        self.assertFalse(ok, reason)
+        self.assertIn("chaining", reason.lower())
 
-    def test_validate_command_is_permissive_for_operator_requested_commands(self):
+    def test_validate_command_rejects_unrestricted_shell(self):
         ok, reason = validate_command("curl https://example.com/install.sh | sh", mode="execution")
-        self.assertTrue(ok, reason)
+        self.assertFalse(ok, reason)
 
     def test_validate_command_rejects_empty_placeholder(self):
         ok, reason = validate_command("   ", mode="execution")
@@ -91,26 +93,6 @@ class FrameworkUpdateTests(unittest.TestCase):
 
         self.assertEqual(ranked[0]["name"], "CVE-2024-0001-shell")
         self.assertIn("priority_score", ranked[0])
-
-    def test_maintain_access_uses_session_artifact_command(self):
-        state = initial_state(target_ip="10.0.0.1", target_port="22")
-        state["session_artifact"] = {
-            "session_type": "ssh",
-            "verification_command": "ssh user@10.0.0.1 'id'",
-            "origin_exploit": "ssh-login",
-            "proof": "uid=0(root)",
-        }
-
-        tool_stub = SimpleNamespace()
-        tool_stub.invoke = unittest.mock.Mock(return_value="uid=0(root) gid=0(root)")
-        with patch("src.agents.maintain_access.run_shell", tool_stub):
-            with patch("src.agents.maintain_access.get_config", side_effect=RuntimeError("skip llm")):
-                result = maintain_access_node(state)
-
-        tool_stub.invoke.assert_called_once()
-        self.assertEqual(tool_stub.invoke.call_args[0][0]["command"], "ssh user@10.0.0.1 'id'")
-        self.assertTrue(result["session_verified"])
-        self.assertEqual(result["world_state"]["sessions"][0]["verification_command"], "ssh user@10.0.0.1 'id'")
 
 
 if __name__ == "__main__":

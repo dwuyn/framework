@@ -2,16 +2,46 @@
 
 ## Overview
 
-**PentestAgent** is a novel LLM-driven penetration testing framework to automate intelligence gathering, vulnerability analysis, and exploitation stages, reducing manual intervention.
+**PentestAgent** is an LLM-driven penetration testing framework that automates intelligence gathering, vulnerability analysis, and exploitation on disposable research targets. The framework is **fully autonomous** and operates against owned or explicitly authorised lab environments only.
 
-The framework is modular and consists of the following components:
+The research pipeline (current default) is an evidence-driven graph:
 
-- **Reconnaissance Agent**: Gathers intelligence about the target system.
-- **Hypothesis + Planning Agents**: Build evidence-grounded CVE hypotheses, debate exploit paths via Planner→Skeptic→Risk Officer, and rank candidates using evidence-grounded scoring.
-- **Execution Agent**: Attempts to execute selected exploits in a controlled environment.
-- **Verifier + Maintain Access Agents**: Gate quality between phases and re-verify the same access path after exploitation.
+```
+recon -> evidence normalization -> CVE source collection ->
+candidate collection -> deterministic queue -> policy preflight ->
+method execution -> independent oracle -> cleanup
+```
 
-For further is information, please refer to our [paper](https://arxiv.org/abs/2411.05185).
+The legacy PoC-only graph (`baseline-poc-only-v1`) remains archived under the
+`baseline-poc-only-v1` git tag for traceability. It is not the recommended
+entry point.
+
+The framework is modular:
+
+- **Reconnaissance** collects structured observations per service.
+- **Evidence normalization** rejects protocol / date / status codes as
+  versions, separates observed from inferred CPEs, and assigns an
+  applicability grade.
+- **CVE source collection** uses independent adapters (CVE List V5, NVD,
+  CISA KEV, FIRST EPSS). A failed or rate-limited backend never fails the
+  others.
+- **Candidate collection** indexes Metasploit, Nuclei, Nmap NSE, ExploitDB,
+  trusted public PoCs, vendor recipes, and native tools. Only trusted or
+  manifest-approved lab candidates may execute.
+- **Deterministic queue** ranks candidates and enforces a hard
+  max-5-CVEs-per-service / max-2-methods-per-CVE shortlist.
+- **Policy preflight** validates every endpoint (IPv4, IPv6, hostname, URL,
+  scheme, port, redirect, callback) against the manifest scope.
+- **Method execution** renders structured argv arrays; no free-form shell.
+- **Independent oracle** consumes benchmark evidence directly; agent
+  explanations never prove success.
+
+For the original paper description, see [PentestAgent on arXiv](https://arxiv.org/abs/2411.05185).
+
+> **Lab-only policy.** This framework is for disposable research
+> environments only. Do not point it at production systems or networks you
+> do not own. No persistence, credential harvesting, lateral movement, or
+> evasion testing is included.
 
 ---
 
@@ -122,31 +152,56 @@ Scoring criteria for evaluating CVEs:
 
 ## 🚀 Running the Framework
 
-The recommended entry point is `main.py`, which orchestrates the LangGraph pipeline and prompts for approval before execution.
+### New evidence-driven pipeline (recommended)
 
-### Full Pipeline
+```python
+from src.pipeline.runner import PipelineRunner, ReconObservation
+from src.pipeline.manifest import Scope, new_manifest
+from src.pipeline.ledger import EventLedger
+from src.pipeline.budget import ResourceBudget, ResourceLimits
+from src.pipeline.oracle import TargetTruth, ProofSpec
+
+manifest = new_manifest("lab-target-1", variant="4", condition="clean",
+                          scope=Scope(allowed_networks=["10.0.0.0/24"],
+                                       allowed_ports=[80, 443, 4444],
+                                       callback_endpoints=["10.0.0.99"]))
+ledger = EventLedger(manifest.run_id)
+budget = ResourceBudget(ResourceLimits(**manifest.limits))
+manifest.oracle_spec = {"cve_id": "CVE-2021-41773",
+                          "capability": "code_execution",
+                          "truth": TargetTruth("lab-target-1",
+                                                applicable_cves=["CVE-2021-41773"],
+                                                proof_specs={"CVE-2021-41773":
+                                                                  ProofSpec(capability="code_execution",
+                                                                              accepted_evidence=["uid=0"])})}
+
+runner = PipelineRunner(manifest=manifest, ledger=ledger, budget=budget,
+                          scope=manifest.scope_from_spec())
+result = runner.run(
+    recon_obs=[ReconObservation(target_ip="10.0.0.5", port=80,
+                                  service_name="apache",
+                                  banner="Apache/2.4.49 (Unix)")],
+    candidates=[...],  # populate from src.pipeline.collectors
+)
+```
+
+### Legacy PoC-only graph
+
+The legacy workflow remains under the `baseline-poc-only-v1` git tag and is
+available via:
 
 ```
+git checkout baseline-poc-only-v1
 python main.py run --target 10.0.0.1 --attacker 10.0.0.2
 ```
 
-### Recon Only
+### Run modes
 
-```
-python main.py recon --target 10.0.0.1
-```
+The pipeline supports three explicit retrieval modes:
 
-### Planning Only
-
-```
-python main.py plan --app phpmailer --version 5.2.17
-```
-
-### Execution Only
-
-```
-python main.py execute --target 10.0.0.1 --doc-dir ./data/exp_info/CVE-2021-41773
-```
+* `live`: real HTTP / filesystem reads; raw responses are preserved.
+* `snapshot`: only reads from a fixed source/candidate snapshot directory.
+* `replay`: no retrieval, no execution; reproduces metrics from stored events.
 
 ------
 
