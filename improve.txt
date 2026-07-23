@@ -1,0 +1,337 @@
+﻿1) Bức tranh SOTA hiện tại và các điểm mù chí mạng
+Hiện nay, các hệ thống nổi bật trong auto pentest bằng LLM/agent có thể chia thành 4 nhóm thực dụng. Nhóm thứ nhất là human-in-the-loop planners, tiêu biểu là PentestGPT: nó tổ chức tiến trình bằng pentesting task tree, có module reasoning/generation/parsing, nhưng evaluation vẫn cần con người làm executor trung gian. Nhóm thứ hai là post-breach agents, tiêu biểu là AutoAttacker, tập trung vào “hands-on-keyboard” sau khi đã có foothold, chứ chưa giải bài toán end-to-end từ recon. Nhóm thứ ba là end-to-end multi-agent + RAG, tiêu biểu là PentestAgent recon agent, search agent, planning agent, execution agent, dùng RAG cho knowledge và execution history. Nhóm thứ tư là interactive CTF-oriented agents, như EnIGMA, nổi bật vì bổ sung công cụ cho terminal/program tương tác và đạt kết quả mạnh trên nhiều benchmark CTF. (USENIX)
+Trong chính study của PentestGPT, các failure mode quan trọng nhất là session context lost, false command generation, deadlock operations, và xu hướng bị hút vào task gần nhất theo kiểu depth-first, khiến agent quên các phát hiện cũ và over-focus vào một service. Nói ngắn gọn: reasoning có vẻ thông minh, nhưng orchestration dài hơi vẫn yếu.
+Bài PentestAgent chỉ ra đúng các “nút cổ chai” phải xem như baseline bắt buộc phải giải: limited pentesting knowledge, short-term memory, workflow integration, và ở failure analysis là không fingerprint được component đủ mịn, thất bại do thiếu tri thức miền, cần user interaction, hoặc hallucination ở giai đoạn exploit/debug. Bài này mạnh ở chỗ đã đi tới automation end-to-end hơn PentestGPT, dùng benchmark 67 target từ VulHub trải trên 32 CWE và thêm 11 HTB challenges, nhưng chính tác giả cũng thừa nhận độ ổn định full-stage automation vẫn chưa đủ cao.
+Điểm quan trọng nhất là: các benchmark mới gần đây đang “hạ nhiệt” sự lạc quan quá mức. AutoPenBench báo một fully autonomous agent chỉ đạt 21% success rate trên 33 tasks, trong khi assisted agent lên 64%. CVE-Bench cho thấy state-of-the-art agent chỉ exploit được tối đa 13% các real-world web CVEs. CAIBench còn chỉ ra rằng model có thể khá tốt ở security knowledge nhưng tụt mạnh trong các tình huống attack/defense nhiều bước. Và một nghiên cứu cyber-range tháng 3/2026 cho thấy ngay cả model frontier tốt hơn cũng mới trung bình đi được 9.8 bước trên một chain 32 bước ở mức budget 10M tokens, tức là long-horizon chaining vẫn là bottleneck trung tâm. (arXiv)
+Kết luận: muốn “đánh bại SOTA”, không nên tuyên bố “success rate cao hơn” một cách chung chung. nên đặt claim hẹp:
+“Tăng độ đúng của quyết định khai thác trong network pentest dưới partial observability, với chi phí token thấp hơn và tỷ lệ lỗi/hallucination thấp hơn.”
+2) Bốn hướng nghiên cứu có tiềm năng
+1: Memory-Verified Multi-Agent Pentestz
+Ý tưởng là thay vì để agent chỉ “nhớ hội thoại”, em xây 3 lớp memory:
+* World-state memory: đồ thị host–service–version–credential–session
+* Episodic memory: log các hành động, output, lỗi, kết quả
+* Decision memory: vì sao chọn CVE/exploit A thay vì B
+Sau mỗi bước, một Verifier/Critic agent sẽ kiểm tra:
+* output có nhất quán với world-state không,
+* có đang lặp lại hành động cũ không,
+* có dùng tool/cú pháp không hợp lệ không,
+* bằng chứng có đủ để nâng confidence cho CVE hypothesis chưa.
+Hướng này được chống lưng bởi cả PentestGPT lẫn PentestAgent: PentestGPT cho thấy context loss là failure mode số 1; PentestAgent cũng nhấn mạnh short-term memory và stateful working memory là vấn đề trung tâm. Các preprint mới hơn như Red-MIRROR và TermiAgent/TermiBench cũng đang dịch chuyển mạnh theo trục shared memory + reflection.
+2: Retrieval-Grounded Exploit Reasoning
+Hướng thiết thực nhất để giảm hallucination. Không để agent “bịa” exploit path từ parametric knowledge. Thay vào đó, nó phải đi qua một evidence stack:
+1. print / banner / versiservice fingeron evidence
+2. CVE candidates từ NVD/CISA KEV/vendor advisory
+3. exploit candidates từ PoC repos / framework docs / tool manuals
+4. compatibility checker: version range, preconditions, platform, auth requirement
+5. execution readiness score
+PentestAgent đã dùng RAG theo hướng attack-surface và procedure knowledge; nên mình có thể đi xa hơn bằng version normalization, exploit precondition checking, và evidence-based ranking thay vì retrieval thuần. Đây chính là điểm làm agent “ít thông minh giả, nhiều đúng thật”.
+3: Budget-Aware Planner dưới Partial Observability
+Nhiều paper tối ưu “có giải được không”, nhưng ít paper tối ưu câu hỏi quan trọng hơn:
+“giải được với bao nhiêu request, bao nhiêu token, và bao nhiêu lần thử sai?”
+Mô hình hóa action selection bằng:
+* hierarchical planning ở tầng chiến lược,
+* bandit / RL / tree search nhẹ ở tầng local choice,
+* reward gồm: milestone completion, evidence gain, token cost penalty, repeated-action penalty, invalid-command penalty.
+Điểm mới không nằm ở RL “cho oách”, mà ở reward engineering phù hợp lab pentest. Các benchmark mới đều đang nhấn mạnh chênh lệch giữa capability và cost-aware capability; nghiên cứu cyber-range 2026 cũng cho thấy hiệu năng tăng theo inference-time compute, nghĩa là budget control là biến nghiên cứu thực sự có ý nghĩa. (arXiv)
+4: Debate + Risk Officer cho network pentest
+Thiết kế 3 agent:
+* Planner: đề xuất bước kế tiếp
+* Skeptic: phản biện, tìm giả định thiếu, cảnh báo rabbit hole
+* Risk Officer: kiểm tra tính hợp lệ, mức độ tự tin, giới hạn ngân sách, và an toàn
+Cơ chế này đặc biệt hợp với network target vì môi trường có nhiều dịch vụ mồi, banner nhiễu, version mập mờ, credential assumptions. Debate không phải để viết “hay hơn”, mà để giảm:
+* false CVE match,
+* sai tool syntax,
+* exploit thử vô nghĩa,
+* lặp lại vòng scan không cần thiết.
+3) Vấn đề nghiên cứu phải được phát biểu như thế nào?
+Vấn đề cốt lõi không phải là “dùng LLM để pentest”. Vấn đề đúng hơn là:
+Làm thế nào để xây dựng một hệ thống Agentic AI có thể tự động thực hiện pentest cho network-based target theo chuỗi nhiều giai đoạn, trong điều kiện thông tin không đầy đủ, nhưng vẫn giữ được ngữ cảnh, chọn đúng hướng khai thác, giảm lỗi suy luận, và tối ưu chi phí suy luận của LLM?
+Từ đó, bài toán được tách thành 4 vấn đề con.
+Vấn đề 1: Thiếu tri thức pentest thực dụng.
+LLM biết khái niệm chung, nhưng không đủ mạnh để tự nối từ banner/service sang CVE phù hợp, rồi sang exploit đúng, rồi sang cách chạy đúng trong môi trường cụ thể. PentestAgent cũng chỉ ra rõ hai khoảng trống lớn của các hệ hiện tại là limited pentesting knowledge và insufficient automation.
+Vấn đề 2: Mất ngữ cảnh qua chuỗi pentest dài.
+Trong pentest mạng, thông tin ở pha recon phải được dùng tiếp ở pha vulnerability analysis và exploitation. Nếu agent quên service, version, credential hint, OS hint, hoặc kết quả các lần thử trước, nó sẽ lặp scan, chọn sai exploit, hoặc cấu hình exploit sai. PentestAgent nêu rất rõ lỗi short-term memory, gồm lặp tác vụ và mất context giữa các pha.
+Vấn đề 3: Thiếu cơ chế kiểm chứng quyết định.
+Agent không chỉ cần “đề xuất bước tiếp theo”, mà còn phải tự kiểm tra xem đề xuất đó có đủ bằng chứng hay chưa. Nếu không, một hallucination nhỏ ở bước chọn exploit hoặc tham số thực thi có thể làm hỏng cả chuỗi. PentestAgent cũng mô tả challenge về output quality control và lỗi hallucination trong exploitation.
+Vấn đề 4: Chưa tối ưu hiệu quả–chi phí.
+Một agent có thể thành công, nhưng nếu phải dùng quá nhiều request, quá nhiều token, quá nhiều lần thử sai, thì chưa đủ giá trị thực tiễn. Chính PentestAgent đánh giá hệ của họ theo ba RQ chính: effectiveness, completion level, và efficiency.
+4) Phương pháp đề xuất nên được mô tả như thế nào?
+Memory-Verified Retrieval-Grounded Multi-Agent Pentest Framework for Network-based Targets
+Tên này phản ánh đúng 3 ý mới cốt lõi:
+* Retrieval-Grounded: không để agent suy đoán thuần túy, mà phải dựa trên tri thức truy hồi được.
+* Memory-Verified: không chỉ nhớ, mà còn kiểm chứng trạng thái và quyết định.
+* Multi-Agent: tách vai trò để dễ kiểm soát, đánh giá, và ablation.
+Ý tưởng giải quyết tổng thể
+Phương pháp đề xuất nhằm giải quyết từng vấn đề như sau:
+Giải quyết Vấn đề 1 – thiếu tri thức pentest:
+Xây một knowledge layer gồm:
+* cơ sở dữ liệu CVE / advisory / exploit metadata,
+* kho tri thức tool usage,
+* exploit prerequisites,
+* mapping service-version → candidate vulnerabilities → candidate exploits.
+Agent không được chọn exploit chỉ vì “nghe có vẻ đúng”, mà phải đi qua chuỗi:
+service fingerprint -> version evidence -> vulnerability hypothesis -> exploit candidate -> applicability check.
+Điểm này kế thừa tinh thần của PentestAgent: search agent + planning agent + RAG cho attack knowledge và exploit knowledge.
+Giải quyết Vấn đề 2 – mất ngữ cảnh:
+Thêm một stateful memory layer gồm 3 phần:
+* World state memory: host, port, service, version, OS hint, credential hint, foothold status
+* Execution memory: đã thử gì, lỗi gì, kết quả gì
+* Decision memory: vì sao chọn CVE A thay vì CVE B
+Khác với chat history thông thường, đây là memory có cấu trúc. PentestAgent dùng environmental information DB và execution history DB; em nên đẩy mạnh hơn thành state graph để phục vụ network-based target.
+Giải quyết Vấn đề 3 – thiếu kiểm chứng:
+Thêm một Verifier/Critic module đứng giữa planner và executor.
+Mỗi quyết định phải qua 3 câu hỏi:
+1. Có đủ bằng chứng service/version chưa?
+2. Exploit này có đúng điều kiện áp dụng không?
+3. Lệnh thực thi có hợp lệ và nhất quán với state hiện tại không?
+Nếu chưa đạt, agent không được chuyển sang exploit mà phải quay lại recon/scanning bổ sung. Đây là điểm khác quan trọng để giảm hallucination.
+Giải quyết Vấn đề 4 – chưa tối ưu chi phí:
+Thêm một budget-aware planner, tức là planner không chỉ tối đa hóa xác suất thành công, mà còn tối ưu:
+* số bước,
+* số lần gọi LLM,
+* tổng token,
+* số lần thử exploit thất bại.
+Nói gọn: không chỉ pentest được, mà phải pentest hiệu quả.
+5) Kiến trúc phương pháp đề xuất nên viết thành pipeline nào?
+Pha 1: Reconnaissance
+Mục tiêu: xây dựng ảnh chụp ban đầu của target.
+Đầu vào: IP / subnet / target host
+Đầu ra: danh sách host–service–port–version–OS hint
+Thành phần:
+* Recon Agent
+* Tool wrappers
+* World State Builder
+Vai trò:
+Agent sinh kế hoạch recon, gọi tool, nhận output, chuẩn hóa output, cập nhật world-state.
+Pha này tương ứng với intelligence gathering trong PentestAgent.
+Pha 2: Vulnerability Hypothesis & Evidence Building
+Mục tiêu: sinh ra các giả thuyết lỗ hổng có căn cứ.
+Đầu vào: world-state từ recon
+Đầu ra: tập [(service, version, CVE candidate, confidence, prerequisites)]
+Thành phần:
+* Retrieval Agent
+* Hypothesis Agent
+* Evidence Normalizer
+* Critic Agent
+Vai trò:
+Tra cứu CVE/advisory/exploit repo, trích xuất tri thức, đối chiếu version applicability, loại bỏ candidate yếu.
+Pha 3: Exploit Planning
+Mục tiêu: chọn đường khai thác tối ưu.
+Đầu vào: vulnerability hypotheses
+Đầu ra: exploit plan theo thứ tự ưu tiên
+Thành phần:
+* Planner Agent
+* Budget Controller
+* Risk/Applicability Verifier
+Vai trò:
+Xếp thứ tự candidate theo:
+* độ tin cậy,
+* tác động kỳ vọng,
+* chi phí suy luận,
+* điều kiện thực thi,
+* số bằng chứng đã có.
+Pha 4: Gaining Access
+Mục tiêu: thực thi exploit và xác nhận foothold.
+Đầu vào: exploit plan
+Đầu ra: initial access thành công hoặc thất bại có giải thích
+Thành phần:
+* Execution Agent
+* Runtime Verifier
+* Reflection Agent
+Vai trò:
+Thực thi theo từng bước, đọc lỗi, sửa lỗi, ghi lại lịch sử, nhưng luôn có verifier để xác nhận thành công bằng dấu hiệu rõ ràng như session/shell/read proof. PentestAgent cũng tách execution thành preparation stage và exploitation stage, đồng thời dùng self-reflection để debug lỗi; em có thể kế thừa logic này nhưng bổ sung verifier chặt hơn.
+Pha 5: Maintaining Access
+Session Continuity Verification
+không phải persistence ngoài đời thực, mà là kiểm tra:
+* agent có giữ được session hợp lệ không,
+* có tái sử dụng được foothold đã có không,
+* có duy trì được mức truy cập trong cùng sandbox run không.
+6) Bộ tiêu chí đánh giá: phải viết theo mục tiêu nghiên cứu
+Mục tiêu nghiên cứu nào → dùng metric nào → metric đó được xác định ra sao
+Mục tiêu 1: Đánh giá mức độ tự động hóa end-to-end của hệ thống
+Câu hỏi cần trả lời là:
+Hệ thống có thật sự hoàn thành được toàn bộ chuỗi pentest trên network-based target hay không?
+Metric 1: Overall Success Rate (OSR)
+Ý nghĩa: đo mức thành công toàn trình.
+Định nghĩa:
+[
+OSR = \frac{\text{số target hoàn thành end-condition}}{\text{tổng số target}}
+]
+End-condition cần xác định rõ từ đầu:
+* với lab dạng CTF: lấy được user flag / root flag
+* với lab dịch vụ mạng: đạt được initial access hợp lệ
+* với bài có local priv-esc: lên được mức privilege mục tiêu
+Mục tiêu mà nó trả lời:
+Có vượt baseline về khả năng pentest end-to-end hay không.
+________________
+
+
+Mục tiêu 2: Đánh giá hệ thống mạnh/yếu ở pha nào
+Câu hỏi cần trả lời là:
+Nếu thất bại, nó thất bại ở recon, chọn vuln, hay thực thi exploit?
+PentestAgent cũng dùng đúng logic này khi định nghĩa completion level cho từng stage: information gathering hoàn tất khi xác định đúng target application; vulnerability analysis hoàn tất khi tìm được functional exploit; exploitation hoàn tất khi agent tự động chạy exploit thành công.
+Metric 2: Step-wise Success Rate (SSR)
+Gồm:
+* SSR_Recon
+* SSR_Vuln
+* SSR_Exploit
+* có thể thêm SSR_Maintain
+Định nghĩa chung:
+[
+SSR_{phase} = \frac{\text{số target hoàn thành phase}}{\text{số target cần đánh giá phase đó}}
+]
+Cách xác định completion cho từng phase
+Recon thành công khi nào?
+* phát hiện đúng host sống,
+* phát hiện đúng service chính,
+* suy ra đúng hoặc gần đúng version/OS hint ở mức đủ dùng cho bước tiếp.
+Vuln analysis thành công khi nào?
+* tạo ra được ít nhất một candidate vulnerability phù hợp target,
+* exploit được đề xuất là functional exploit, tức là có thể áp dụng thật chứ không chỉ đúng tên CVE.
+Exploit thành công khi nào?
+* agent tự thực hiện chuỗi hành động và có bằng chứng initial access/privilege escalation.
+Maintain thành công khi nào?
+* agent duy trì hoặc tái sử dụng được phiên hợp lệ trong cùng sandbox episode.
+Mục tiêu mà nhóm metric này trả lời:
+Đóng góp của pp đề xuất cải thiện module nào trong pipeline.
+________________
+
+
+Mục tiêu 3: Đánh giá chất lượng quyết định kỹ thuật của agent
+Câu hỏi cần trả lời là:
+Agent chọn đúng hướng tấn công hay chỉ may mắn chạy đúng một vài box?
+Metric 3: Service Identification Accuracy
+[
+Acc_{service} = \frac{\text{số service/version nhận diện đúng}}{\text{tổng service/version cần nhận diện}}
+]
+Mục đích:
+Đo chất lượng recon cho network target.
+Metric 4: Correct-CVE@k
+[
+Correct\text{-}CVE@k = \frac{\text{số target có CVE đúng xuất hiện trong top-k}}{\text{tổng số target}}
+]
+Mục đích:
+Đo chất lượng sinh giả thuyết lỗ hổng.
+Metric 5: Exploit Applicability Precision
+[
+Precision_{exploit} = \frac{\text{số exploit đề xuất thực sự áp dụng được}}{\text{tổng exploit đề xuất}}
+]
+Mục đích:
+Đo khả năng lọc exploit đúng, giảm hallucination.
+Metric 6: Attack Path Efficiency
+[
+APE = \frac{\text{số bước hữu ích}}{\text{tổng số bước thực hiện}}
+]
+Bước hữu ích là bước góp phần tăng evidence, giảm uncertainty, hoặc đạt milestone.
+Mục tiêu mà nhóm metric này trả lời:
+Phương pháp đề xuất có ra quyết định tốt hơn baseline hay không, chứ không chỉ “đôi khi thành công”.
+________________
+
+
+Mục tiêu 4: Đánh giá hiệu năng và chi phí suy luận
+Câu hỏi cần trả lời là:
+Hệ có thực tế để triển khai không, hay quá tốn request/token/thời gian?
+PentestAgent cũng xem efficiency là một RQ riêng, dùng time và API cost.
+Metric 7: Mean LLM Requests per Target
+[
+Req_{avg} = \frac{\text{tổng số LLM/API requests}}{\text{tổng số target}}
+]
+Metric 8: Total Token Consumption
+* input tokens
+* output tokens
+* total tokens
+Metric 9: Cost per Target
+[
+Cost_{avg} = \frac{\text{tổng chi phí suy luận}}{\text{tổng số target}}
+]
+Metric 10: Cost per Success
+[
+Cost_{success} = \frac{\text{tổng chi phí}}{\text{số target thành công}}
+]
+Metric 11: Time-to-Initial-Access / Time-to-End-Condition
+[
+T_{success} = t_{end} - t_{start}
+]
+Mục tiêu mà nhóm metric này trả lời:
+Phương pháp của em có đánh đổi hiệu quả và chi phí tốt hơn baseline hay không.
+________________
+
+
+Mục tiêu 5: Đánh giá độ ổn định và độ tin cậy
+Câu hỏi cần trả lời là:
+Khi thất bại, agent thất bại kiểu gì? Có lặp ngu hay không? Có tự phục hồi được không?
+Metric 12: Invalid Command Rate
+[
+ICR = \frac{\text{số lệnh sai cú pháp/sai ngữ cảnh}}{\text{tổng số lệnh}}
+]
+Metric 13: Repeated Action Rate
+[
+RAR = \frac{\text{số hành động lặp không cần thiết}}{\text{tổng số hành động}}
+]
+Metric 14: Hallucination-induced Failure Rate
+[
+HFR = \frac{\text{số phiên thất bại do giả định sai/hallucination}}{\text{tổng số phiên thất bại}}
+]
+Metric 15: Recovery Rate after Error
+[
+RR = \frac{\text{số lần phục hồi thành công sau lỗi}}{\text{tổng số lần gặp lỗi}}
+]
+Mục tiêu mà nhóm metric này trả lời:
+Đóng góp memory-verification của em có thật sự làm agent ổn định hơn không.
+7) “Xác định tiêu chí như thế nào?” — nguyên tắc vận hành hóa
+Nguyên tắc 1: Tiêu chí phải quan sát được
+Không dùng tiêu chí mơ hồ như “agent hiểu tốt hơn”.
+Phải dùng tiêu chí có bằng chứng:
+* shell xuất hiện,
+* flag đọc được,
+* service/version match đúng,
+* exploit chạy thành công,
+* số token đo được.
+Nguyên tắc 2: Tiêu chí phải gắn với từng pha
+Nếu chỉ dùng OSR, sẽ không biết agent mạnh hay yếu ở đâu.
+Vì vậy cần end-to-end metric + stage-level metric.
+Nguyên tắc 3: Tiêu chí phải gắn trực tiếp với claim nghiên cứu
+Nếu claim là:
+* tăng tự động hóa → phải có OSR, SSR
+* giảm hallucination → phải có exploit precision, invalid command rate
+* tối ưu chi phí → phải có request/token/cost/time
+* tăng robustness → phải có recovery rate, repeated action rate, performance under noisy targets
+Nguyên tắc 4: Tiêu chí phải so sánh được với baseline
+Metric phải áp được đồng nhất cho:
+* PentestGPT
+* PentestAgent-like baseline
+* ablation của phương pháp đề xuất
+________________
+
+
+8) “mục tiêu – phương pháp – metric”?
+Mục tiêu nghiên cứu 1 là nâng cao khả năng tự động hóa pentest end-to-end trên network-based target.
+Để đạt mục tiêu này, đề tài đề xuất một framework đa tác tử có bộ nhớ trạng thái, lớp truy hồi tri thức pentest, và cơ chế kiểm chứng quyết định trước khi thực thi exploit.
+Để đánh giá mục tiêu này, nghiên cứu sử dụng Overall Success Rate và Step-wise Success Rate nhằm đo mức hoàn thành toàn trình và theo từng pha.
+Mục tiêu nghiên cứu 2 là nâng cao độ đúng của quyết định phát hiện dịch vụ, suy luận lỗ hổng, và lựa chọn exploit.
+Để đạt mục tiêu này, framework sử dụng retrieval-grounded vulnerability hypothesis và exploit applicability verification.
+Để đánh giá mục tiêu này, nghiên cứu đo Service Identification Accuracy, Correct-CVE@k, và Exploit Applicability Precision.
+Mục tiêu nghiên cứu 3 là giảm chi phí suy luận và tăng hiệu quả vận hành.
+Để đạt mục tiêu này, framework sử dụng budget-aware planning và cơ chế tránh lặp hành động.
+Để đánh giá mục tiêu này, nghiên cứu đo số request trung bình, tổng token tiêu hao, chi phí trên mỗi target thành công, và thời gian đến khi đạt initial access.
+Mục tiêu nghiên cứu 4 là tăng độ ổn định của agent trong chuỗi pentest nhiều bước.
+Để đạt mục tiêu này, framework dùng execution memory, reflection, và verifier để phát hiện và sửa sai.
+Để đánh giá mục tiêu này, nghiên cứu đo invalid command rate, repeated action rate, hallucination-induced failure rate, và recovery rate after error.
+7) Kết luận ngắn gọn
+Vấn đề:
+Các agent pentest hiện nay chưa đủ mạnh ở 4 điểm: thiếu tri thức thực dụng, mất ngữ cảnh dài hạn, thiếu kiểm chứng quyết định, và chưa tối ưu chi phí.
+Phương pháp:
+Đề xuất một framework multi-agent + retrieval-grounded + memory-verified + budget-aware cho network-based target.
+Tiêu chí đánh giá:
+Không chỉ đo “có hack được không”, mà phải đo 5 lớp:
+1. end-to-end efficacy,
+2. stage-level completion,
+3. decision quality,
+4. efficiency/cost,
+5. reliability/robustness.
+Mục tiêu của từng tiêu chí:
+* efficacy để chứng minh tự động hóa,
+* stage metrics để chỉ ra hệ mạnh/yếu ở đâu,
+* quality metrics để chứng minh agent chọn đúng,
+* cost metrics để chứng minh tính thực tiễn,
+* reliability metrics để chứng minh đóng góp của memory và verification.
