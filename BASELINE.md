@@ -25,14 +25,36 @@
 
 ## Test Results
 
-| Metric | Value |
-|--------|-------|
-| Total Tests | 179 |
-| Passing | 179 |
-| Failing | 0 |
-| Errors | 0 |
+| Snapshot | Tag | Tests | Pass | Fail | Errors |
+|----------|-----|-------|------|------|--------|
+| Baseline (PoC-only) | `baseline-poc-only-v1` | 179 | 179 | 0 | 0 |
+| Evidence-driven pipeline M0–M5 | `pipeline-m0-m5-v1` | 263 | 263 | 0 | 0 |
 
-**Test Discovery:** All test modules discoverable without import errors (lazy import fix applied to `utils/llm_factory.py`)
+**Test Discovery:** All test modules discoverable without import errors (lazy import fix applied to `utils/llm_factory.py`).
+
+## Pipeline Milestones
+
+| Milestone | Description | Status |
+|-----------|-------------|--------|
+| M0 | Reproducible baseline tag + ignore rules | Done |
+| M1 | RunManifest, EventLedger, Budget, Scope, Oracle, Evaluator | Done |
+| M2 | Fingerprinting + CVE source adapters + run modes | Done |
+| M3 | `ExploitCandidate` interface + 7 collectors | Done |
+| M4 | Deterministic queue + renderers + runner; planner debate and maintain_access removed | Done |
+| M5 | Metrics from events only; benchmark manifests; statistical reporting | Done |
+
+## Graph Changes
+
+The legacy planner/skeptic/risk debate and the misleading `maintain_access`
+phase have been removed from the active graph. The new pipeline is:
+
+```
+recon → evidence normalization → CVE source collection → candidate collection →
+deterministic queue → policy preflight → method execution → independent oracle → cleanup
+```
+
+The legacy PoC-only graph remains archived under `baseline-poc-only-v1`.
+
 
 ## Framework State
 
