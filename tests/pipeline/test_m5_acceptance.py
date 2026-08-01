@@ -15,6 +15,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from src.pipeline.benchmark import BenchmarkManifest, BenchmarkTarget, aggregate_metrics, write_summary
 from src.pipeline.candidates import ExploitCandidate, ProcedureStep, Provenance
@@ -128,10 +129,11 @@ class TestLiveBackendIsolation(unittest.TestCase):
         ledger = EventLedger("run-1")
         cve = CveListV5Adapter(mode="live", ledger=ledger)
         nvd = NvdAdapter(mode="live", ledger=ledger)
-        # Neither adapter has a live implementation in unit tests; both must
-        # return empty results without raising.
-        self.assertEqual(cve.fetch("httpd", "apache", "2.4.49"), [])
-        self.assertEqual(nvd.fetch("httpd", "apache", "2.4.49"), [])
+        # Live HTTP is mocked unavailable in unit tests; adapters must return
+        # empty results without raising.
+        with patch("src.pipeline.sources.request.urlopen", side_effect=OSError("offline")):
+            self.assertEqual(cve.fetch("httpd", "apache", "2.4.49"), [])
+            self.assertEqual(nvd.fetch("httpd", "apache", "2.4.49"), [])
         # Both recorded a BACKEND_FAILED status in the ledger.
         statuses = [ev.payload.get("status") for ev in ledger.events
                     if ev.payload.get("source") in {"cve_list_v5", "nvd"}]

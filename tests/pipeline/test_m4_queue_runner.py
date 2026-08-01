@@ -64,6 +64,7 @@ class TestQueue(unittest.TestCase):
         nuc.constraint.vendor = "apache"
         nuc.constraint.product = "httpd"
         ranked = rank_candidates([msf, nuc], fingerprint=fp,
+                                   proof_capability="detection",
                                    scope=Scope(allowed_networks=["10.0.0.0/24"]))
         # Metasploit has higher applicability because it can prove code_execution.
         self.assertGreater(ranked[0].score, ranked[1].score)
@@ -77,12 +78,43 @@ class TestQueue(unittest.TestCase):
         nuc.constraint.vendor = "apache"
         nuc.constraint.product = "httpd"
         ranked = rank_candidates([msf, nuc], fingerprint=fp,
+                                   proof_capability="detection",
                                    scope=Scope(allowed_networks=["10.0.0.0/24"]))
         limits = ResourceLimits(max_cves_per_service=5, max_methods_per_cve=2,
                                   max_executed_candidates=2)
         queue = shortlist(ranked, limits=limits)
         self.assertEqual(len(queue.ranked), 2)
-        self.assertEqual(queue.methods_per_cve["CVE-2021-41773"], ["metasploit", "nuclei"])
+        self.assertCountEqual(queue.methods_per_cve["CVE-2021-41773"], ["metasploit", "nuclei"])
+
+    def test_shortlist_excludes_hard_rejects(self) -> None:
+        fp = _fp()
+        cand = _metasploit_candidate()
+        cand.constraint.vendor = "apache"
+        cand.constraint.product = "tomcat"
+        ranked = rank_candidates([cand], fingerprint=fp,
+                                  scope=Scope(allowed_networks=["10.0.0.0/24"]))
+        queue = shortlist(ranked, limits=ResourceLimits())
+        self.assertEqual(queue.ranked, [])
+
+    def test_lab_approved_requires_explicit_queue_approval(self) -> None:
+        fp = _fp()
+        cand = ExploitCandidate(
+            candidate_id="cand-lab", cve_id="CVE-2024-1", kind="poc",
+            source="lab", locator="x",
+            provenance=Provenance(trust="lab_approved"),
+            procedure=[ProcedureStep(stage="execute", argv=["true"])],
+            capability="code_execution",
+        )
+        cand.constraint.vendor = "apache"
+        cand.constraint.product = "httpd"
+        ranked = rank_candidates([cand], fingerprint=fp,
+                                  scope=Scope(allowed_networks=["10.0.0.0/24"]))
+        self.assertEqual(shortlist(ranked, limits=ResourceLimits()).ranked, [])
+        approved = rank_candidates([cand], fingerprint=fp,
+                                    scope=Scope(allowed_networks=["10.0.0.0/24"]),
+                                    manifest_approved_lab_ids={"CVE-2024-1"})
+        self.assertEqual(len(shortlist(approved, limits=ResourceLimits(),
+                                       manifest_approved_lab_ids={"CVE-2024-1"}).ranked), 1)
 
     def test_unknown_version_not_exact(self) -> None:
         # An unknown-version fingerprint must never be ranked exact.
@@ -271,6 +303,48 @@ class TestRunner(unittest.TestCase):
                                   service_name="apache", banner="Apache/2.4.49 (Unix)")]
         result = self.runner.run(recon_obs=obs, candidates=[msf])
         self.assertTrue(result.task_proof)
+
+    def test_verify_output_is_not_command_task_proof(self) -> None:
+        msf = _metasploit_candidate()
+        msf.constraint.vendor = "apache"
+        msf.constraint.product = "httpd"
+        msf.procedure = [
+            ProcedureStep(stage="execute", argv=["sh", "-c", "true"], timeout_seconds=10),
+            ProcedureStep(stage="verify", argv=["sh", "-c", "echo TASK_PROOF_MARKER"], timeout_seconds=10),
+        ]
+        truth = TargetTruth(target_id="t1", applicable_cves=["CVE-2021-41773"],
+                              proof_specs={"CVE-2021-41773":
+                                              ProofSpec(capability="code_execution",
+                                                          accepted_evidence=["TASK_PROOF_MARKER"])})
+        self.runner.manifest.oracle_spec["truth"] = truth
+        obs = [ReconObservation(target_ip="10.0.0.5", port=80,
+                                  service_name="apache", banner="Apache/2.4.49 (Unix)")]
+        result = self.runner.run(recon_obs=obs, candidates=[msf])
+        self.assertFalse(result.task_proof)
+
+    def test_runner_enforces_max_executed_candidates(self) -> None:
+        self.runner.budget.limits.max_executed_candidates = 1
+        first = _metasploit_candidate()
+        first.candidate_id = "cand-a"
+        first.constraint.vendor = "apache"
+        first.constraint.product = "httpd"
+        first.procedure = [ProcedureStep(stage="execute", argv=["sh", "-c", "echo FIRST"], timeout_seconds=10)]
+        second = _metasploit_candidate()
+        second.candidate_id = "cand-b"
+        second.constraint.vendor = "apache"
+        second.constraint.product = "httpd"
+        second.procedure = [ProcedureStep(stage="execute", argv=["sh", "-c", "echo SECOND"], timeout_seconds=10)]
+        truth = TargetTruth(target_id="t1", applicable_cves=["CVE-2021-41773"],
+                              proof_specs={"CVE-2021-41773":
+                                              ProofSpec(capability="code_execution",
+                                                          accepted_evidence=["SECOND"])})
+        self.runner.manifest.oracle_spec["truth"] = truth
+        obs = [ReconObservation(target_ip="10.0.0.5", port=80,
+                                  service_name="apache", banner="Apache/2.4.49 (Unix)")]
+        result = self.runner.run(recon_obs=obs, candidates=[first, second])
+        self.assertFalse(result.task_proof)
+        self.assertEqual(self.runner.budget.state.executed_candidates, 1)
+        self.assertTrue(any("max_executed_candidates" in ev.detail for ev in self.ledger.events))
 
 
 if __name__ == "__main__":

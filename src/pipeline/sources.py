@@ -26,7 +26,10 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Iterable, Mapping
+from urllib import error as urlerror
+from urllib import parse, request
 
 from src.pipeline.ledger import EventLedger
 
@@ -111,15 +114,60 @@ class BackendStatus:
 # ── Adapters ──────────────────────────────────────────────────────────────────
 
 
+def _hash_payload(payload: bytes | Mapping[str, Any]) -> str:
+    if isinstance(payload, bytes):
+        blob = payload
+    else:
+        blob = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def _parse_time(value: str) -> float:
+    if not value:
+        return 0.0
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _cve_ids_from(*values: str) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        for token in str(value or "").replace(",", " ").split():
+            token = token.strip().upper()
+            if token.startswith("CVE-") and token not in out:
+                out.append(token)
+    return out
+
+
+def _cpe_parts(cpe: str) -> tuple[str, str, str]:
+    parts = (cpe or "").split(":")
+    if len(parts) >= 6:
+        return parts[3].lower(), parts[4].lower(), parts[5]
+    return "", "", ""
+
+
+def _maybe_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 class BaseAdapter:
     name = "base"
 
-    def __init__(self, *, mode: str = "live", snapshot_dir: str = "", ledger: EventLedger | None = None) -> None:
+    def __init__(self, *, mode: str = "live", snapshot_dir: str = "",
+                 ledger: EventLedger | None = None, raw_dir: str = "",
+                 timeout: int = 20) -> None:
         if mode not in {"live", "snapshot", "replay"}:
             raise ValueError(f"Invalid adapter mode: {mode}")
         self.mode = mode
         self.snapshot_dir = snapshot_dir
         self.ledger = ledger
+        self.raw_dir = raw_dir
+        self.timeout = timeout
 
     def _record_event(self, *, status: str, detail: str, payload: Mapping[str, Any] | None = None) -> None:
         if self.ledger is None:
@@ -165,7 +213,38 @@ class BaseAdapter:
             self._record_event(status=BackendStatus.NO_MATCH,
                                 detail=f"{self.name} snapshot had no match",
                                 payload={"product": product, "version": version})
+        else:
+            self._record_event(status=BackendStatus.OK,
+                                detail=f"{self.name} snapshot records",
+                                payload={"count": len(out),
+                                         "cve_ids": [r.cve_id for r in out]})
         return out
+
+    def _write_raw(self, label: str, raw: bytes) -> str:
+        if not self.raw_dir:
+            return ""
+        os.makedirs(os.path.join(self.raw_dir, self.name), exist_ok=True)
+        safe = "".join(ch if ch.isalnum() or ch in ".-_" else "_" for ch in label)[:120]
+        path = os.path.join(self.raw_dir, self.name, f"{safe}-{_hash_payload(raw)[:12]}.json")
+        with open(path, "wb") as fh:
+            fh.write(raw)
+        return path
+
+    def _fetch_json(self, url: str, *, label: str) -> tuple[dict[str, Any], str, float]:
+        req = request.Request(url, headers={"User-Agent": "PentestAgent/1.0"})
+        with request.urlopen(req, timeout=self.timeout) as resp:
+            raw = resp.read()
+        self._write_raw(label, raw)
+        return json.loads(raw.decode("utf-8")), _hash_payload(raw), time.time()
+
+    def _record_records(self, *, status: str, detail: str,
+                        records: list[RawCveRecord], raw_hash: str = "") -> None:
+        self._record_event(status=status, detail=detail, payload={
+            "count": len(records),
+            "raw_hash": raw_hash,
+            "fetched_at": time.time(),
+            "cve_ids": [r.cve_id for r in records],
+        })
 
     def fetch(self, product: str, vendor: str, version: str) -> list[RawCveRecord]:
         raise NotImplementedError
@@ -183,6 +262,10 @@ class CveListV5Adapter(BaseAdapter):
 
     name = "cve_list_v5"
 
+    def __init__(self, *, allow_github_fallback: bool = True, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.allow_github_fallback = allow_github_fallback
+
     def fetch(self, product: str, vendor: str, version: str) -> list[RawCveRecord]:
         if not product or product == "unknown":
             self._record_event(status=BackendStatus.QUERY_INVALID,
@@ -190,7 +273,74 @@ class CveListV5Adapter(BaseAdapter):
             return []
         if self.mode in {"snapshot", "replay"}:
             return self._read_snapshot(product, vendor, version)
-        return self._live_unavailable()
+        records = self._read_snapshot(product, vendor, version) if self.snapshot_dir else []
+        if records:
+            return records
+        records = self._scan_local_cvelist(product, vendor, version)
+        if records:
+            self._record_records(status=BackendStatus.OK, detail="cve_list_v5 local clone records",
+                                 records=records)
+            return records
+        cve_ids = _cve_ids_from(product, vendor, version)
+        if not self.allow_github_fallback or not cve_ids:
+            return self._live_unavailable()
+        out: list[RawCveRecord] = []
+        for cve_id in cve_ids:
+            try:
+                url = f"https://raw.githubusercontent.com/CVEProject/cvelistV5/main/{_cvelist_relpath(cve_id)}"
+                data, raw_hash, fetched = self._fetch_json(url, label=cve_id)
+                rec = _normalise_cvelist_record(data, raw_hash=raw_hash, fetched=fetched,
+                                                fallback_vendor=vendor, fallback_product=product)
+                if rec:
+                    out.append(rec)
+            except urlerror.HTTPError as exc:
+                self._record_event(status=BackendStatus.BACKEND_FAILED,
+                                    detail="cve_list_v5 github fallback failed",
+                                    payload={"code": exc.code, "cve_id": cve_id})
+            except Exception as exc:  # noqa: BLE001
+                self._record_event(status=BackendStatus.BACKEND_FAILED,
+                                    detail="cve_list_v5 github fallback failed",
+                                    payload={"exception": str(exc)[:160], "cve_id": cve_id})
+        self._record_records(status=BackendStatus.OK if out else BackendStatus.NO_MATCH,
+                             detail="cve_list_v5 github fallback records", records=out)
+        return out
+
+    def _scan_local_cvelist(self, product: str, vendor: str, version: str) -> list[RawCveRecord]:
+        root = self.snapshot_dir
+        if not root:
+            return []
+        cves_root = os.path.join(root, "cves")
+        if not os.path.isdir(cves_root):
+            return []
+        product_l = product.lower()
+        vendor_l = vendor.lower()
+        out: list[RawCveRecord] = []
+        for base, _, files in os.walk(cves_root):
+            for name in files:
+                if not name.endswith(".json"):
+                    continue
+                path = os.path.join(base, name)
+                try:
+                    with open(path, "rb") as fh:
+                        raw = fh.read()
+                    if product_l.encode() not in raw.lower() and (
+                        not vendor_l or vendor_l.encode() not in raw.lower()
+                    ):
+                        continue
+                    data = json.loads(raw.decode("utf-8"))
+                except Exception:
+                    continue
+                rec = _normalise_cvelist_record(data, raw_hash=_hash_payload(raw),
+                                                fetched=time.time(),
+                                                fallback_vendor=vendor,
+                                                fallback_product=product)
+                if rec and _record_mentions(rec, product, vendor):
+                    out.append(rec)
+        if not out:
+            self._record_event(status=BackendStatus.NO_MATCH,
+                                detail="cve_list_v5 local clone had no match",
+                                payload={"product": product, "version": version})
+        return out
 
 
 class NvdAdapter(BaseAdapter):
@@ -201,6 +351,14 @@ class NvdAdapter(BaseAdapter):
 
     name = "nvd"
 
+    def __init__(self, *, cpe_name: str = "", cve_ids: Iterable[str] | None = None,
+                 last_mod_start: str = "", last_mod_end: str = "", **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.cpe_name = cpe_name
+        self.cve_ids = list(cve_ids or [])
+        self.last_mod_start = last_mod_start
+        self.last_mod_end = last_mod_end
+
     def fetch(self, product: str, vendor: str, version: str) -> list[RawCveRecord]:
         if not product or product == "unknown":
             self._record_event(status=BackendStatus.QUERY_INVALID,
@@ -208,13 +366,73 @@ class NvdAdapter(BaseAdapter):
             return []
         if self.mode in {"snapshot", "replay"}:
             return self._read_snapshot(product, vendor, version)
-        return self._live_unavailable()
+        try:
+            records: list[RawCveRecord] = []
+            raw_hashes: list[str] = []
+            cve_ids = self.cve_ids or _cve_ids_from(product, vendor, version)
+            if cve_ids:
+                for cve_id in cve_ids:
+                    data, raw_hash, fetched = self._fetch_json(
+                        "https://services.nvd.nist.gov/rest/json/cves/2.0?"
+                        + parse.urlencode({"cveId": cve_id}),
+                        label=cve_id,
+                    )
+                    raw_hashes.append(raw_hash)
+                    records.extend(_normalise_nvd_response(data, raw_hash=raw_hash,
+                                                           fetched=fetched,
+                                                           fallback_vendor=vendor,
+                                                           fallback_product=product))
+            else:
+                params = self._params(product, vendor, version)
+                data, raw_hash, fetched = self._fetch_json(
+                    "https://services.nvd.nist.gov/rest/json/cves/2.0?"
+                    + parse.urlencode(params),
+                    label=f"{vendor}-{product}-{version}",
+                )
+                raw_hashes.append(raw_hash)
+                records.extend(_normalise_nvd_response(data, raw_hash=raw_hash,
+                                                       fetched=fetched,
+                                                       fallback_vendor=vendor,
+                                                       fallback_product=product))
+            records = [r for r in records if _record_mentions(r, product, vendor)]
+            self._record_records(status=BackendStatus.OK if records else BackendStatus.NO_MATCH,
+                                 detail="nvd live records", records=records,
+                                 raw_hash=",".join(raw_hashes))
+            return records
+        except urlerror.HTTPError as exc:
+            self._record_event(status=BackendStatus.BACKEND_FAILED,
+                                detail="nvd live fetch failed",
+                                payload={"code": exc.code,
+                                         "rate_limited": exc.code == 429})
+            return []
+        except Exception as exc:  # noqa: BLE001
+            self._record_event(status=BackendStatus.BACKEND_FAILED,
+                                detail="nvd live fetch failed",
+                                payload={"exception": str(exc)[:160]})
+            return []
+
+    def _params(self, product: str, vendor: str, version: str) -> dict[str, str]:
+        params: dict[str, str] = {}
+        cpe = self.cpe_name or _nvd_cpe(vendor, product, version)
+        if cpe:
+            params["cpeName"] = cpe
+        else:
+            params["keywordSearch"] = " ".join(p for p in (vendor, product, version) if p)
+        if self.last_mod_start:
+            params["lastModStartDate"] = self.last_mod_start
+        if self.last_mod_end:
+            params["lastModEndDate"] = self.last_mod_end
+        return params
 
 
 class VulnxAdapter(BaseAdapter):
     """Optional ``vulnx`` aggregator adapter (never the sole live source)."""
 
     name = "vulnx"
+
+    def __init__(self, *, base_url: str = "", **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.base_url = base_url
 
     def fetch(self, product: str, vendor: str, version: str) -> list[RawCveRecord]:
         if not product or product == "unknown":
@@ -223,7 +441,191 @@ class VulnxAdapter(BaseAdapter):
             return []
         if self.mode in {"snapshot", "replay"}:
             return self._read_snapshot(product, vendor, version)
-        return self._live_unavailable()
+        if not self.base_url:
+            return self._live_unavailable()
+        try:
+            url = self.base_url.rstrip("/") + "/?" + parse.urlencode({
+                "product": product, "vendor": vendor, "version": version,
+            })
+            data, raw_hash, fetched = self._fetch_json(url, label=f"{vendor}-{product}-{version}")
+            records = _normalise_vulnx_response(data, raw_hash=raw_hash, fetched=fetched,
+                                                fallback_vendor=vendor,
+                                                fallback_product=product)
+            self._record_records(status=BackendStatus.OK if records else BackendStatus.NO_MATCH,
+                                 detail="vulnx live records", records=records,
+                                 raw_hash=raw_hash)
+            return records
+        except urlerror.HTTPError as exc:
+            self._record_event(status=BackendStatus.BACKEND_FAILED,
+                                detail="vulnx live fetch failed",
+                                payload={"code": exc.code,
+                                         "rate_limited": exc.code == 429})
+            return []
+        except Exception as exc:  # noqa: BLE001
+            self._record_event(status=BackendStatus.BACKEND_FAILED,
+                                detail="vulnx live fetch failed",
+                                payload={"exception": str(exc)[:160]})
+            return []
+
+
+# ── Normalisers ──────────────────────────────────────────────────────────────
+
+
+def _nvd_cpe(vendor: str, product: str, version: str) -> str:
+    if not vendor or not product or "unknown" in {vendor, product}:
+        return ""
+    v = version if version and version != "unknown" else "*"
+    return f"cpe:2.3:a:{vendor}:{product}:{v}:*:*:*:*:*:*:*"
+
+
+def _normalise_nvd_response(data: Mapping[str, Any], *, raw_hash: str,
+                            fetched: float, fallback_vendor: str,
+                            fallback_product: str) -> list[RawCveRecord]:
+    out: list[RawCveRecord] = []
+    for item in data.get("vulnerabilities", []) if isinstance(data, Mapping) else []:
+        cve = item.get("cve", {}) if isinstance(item, Mapping) else {}
+        cve_id = str(cve.get("id", "") or "").upper()
+        if not cve_id:
+            continue
+        descriptions = cve.get("descriptions", []) or []
+        description = ""
+        for entry in descriptions:
+            if entry.get("lang") == "en":
+                description = entry.get("value", "")
+                break
+        references = [
+            ref.get("url", "") for ref in (cve.get("references", {}) or {}).get("referenceData", [])
+            if ref.get("url")
+        ]
+        cpes: list[str] = []
+        version_start = version_end = ""
+        start_inc = end_inc = True
+        for cfg in cve.get("configurations", []) or []:
+            for node in cfg.get("nodes", []) or []:
+                for match in node.get("cpeMatch", []) or []:
+                    criteria = match.get("criteria", "")
+                    if criteria:
+                        cpes.append(criteria)
+                    version_start = match.get("versionStartIncluding") or match.get("versionStartExcluding") or version_start
+                    version_end = match.get("versionEndIncluding") or match.get("versionEndExcluding") or version_end
+                    start_inc = "versionStartExcluding" not in match
+                    end_inc = "versionEndExcluding" not in match
+        vendor, product, _ = _cpe_parts(cpes[0] if cpes else "")
+        cvss_score, cvss_vector = _nvd_cvss(cve.get("metrics", {}) or {})
+        out.append(RawCveRecord(
+            source="nvd", cve_id=cve_id, raw=dict(item), raw_hash=raw_hash,
+            retrieved_at=fetched, vendor=vendor or fallback_vendor.lower(),
+            product=product or fallback_product.lower(),
+            version_start=version_start, version_end=version_end,
+            version_start_inclusive=start_inc, version_end_inclusive=end_inc,
+            cvss_score=cvss_score, cvss_vector=cvss_vector,
+            cpe_candidates=list(dict.fromkeys(cpes)), references=references,
+            description=description,
+            published_at=_parse_time(cve.get("published", "")),
+        ))
+    return out
+
+
+def _nvd_cvss(metrics: Mapping[str, Any]) -> tuple[float, str]:
+    for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+        entries = metrics.get(key, []) or []
+        if not entries:
+            continue
+        cvss = entries[0].get("cvssData", {}) or {}
+        return _maybe_float(cvss.get("baseScore")), str(cvss.get("vectorString", "") or "")
+    return 0.0, ""
+
+
+def _cvelist_relpath(cve_id: str) -> str:
+    parts = cve_id.upper().split("-")
+    year = parts[1]
+    number = parts[2]
+    group = f"{number[:-3] or '0'}xxx"
+    return f"cves/{year}/{group}/{cve_id.upper()}.json"
+
+
+def _normalise_cvelist_record(data: Mapping[str, Any], *, raw_hash: str,
+                              fetched: float, fallback_vendor: str,
+                              fallback_product: str) -> RawCveRecord | None:
+    meta = data.get("cveMetadata", {}) if isinstance(data, Mapping) else {}
+    cve_id = str(meta.get("cveId", "") or "").upper()
+    if not cve_id:
+        return None
+    cna = (data.get("containers", {}) or {}).get("cna", {}) or {}
+    affected = cna.get("affected", []) or []
+    vendor = fallback_vendor.lower()
+    product = fallback_product.lower()
+    version_start = version_end = ""
+    start_inc = end_inc = True
+    if affected:
+        first = affected[0] or {}
+        vendor = str(first.get("vendor") or vendor).lower()
+        product = str(first.get("product") or product).lower()
+        for version in first.get("versions", []) or []:
+            if version.get("status") == "affected":
+                version_start = str(version.get("version", "") or version_start)
+                version_end = str(version.get("lessThan") or version.get("lessThanOrEqual") or version_end)
+                end_inc = "lessThanOrEqual" in version
+                break
+    descriptions = cna.get("descriptions", []) or []
+    description = ""
+    for entry in descriptions:
+        if entry.get("lang") == "en":
+            description = entry.get("value", "")
+            break
+    refs = [ref.get("url", "") for ref in cna.get("references", []) or [] if ref.get("url")]
+    cvss_score = 0.0
+    cvss_vector = ""
+    for metric in cna.get("metrics", []) or []:
+        for key in ("cvssV4_0", "cvssV3_1", "cvssV3_0", "cvssV2_0"):
+            if key in metric:
+                cvss_score = _maybe_float(metric[key].get("baseScore"))
+                cvss_vector = str(metric[key].get("vectorString", "") or "")
+                break
+        if cvss_score:
+            break
+    return RawCveRecord(
+        source="cve_list_v5", cve_id=cve_id, raw=dict(data), raw_hash=raw_hash,
+        retrieved_at=fetched, vendor=vendor, product=product,
+        version_start=version_start, version_end=version_end,
+        version_start_inclusive=start_inc, version_end_inclusive=end_inc,
+        cvss_score=cvss_score, cvss_vector=cvss_vector,
+        references=refs, description=description,
+        published_at=_parse_time(meta.get("datePublished", "")),
+    )
+
+
+def _normalise_vulnx_response(data: Mapping[str, Any], *, raw_hash: str,
+                              fetched: float, fallback_vendor: str,
+                              fallback_product: str) -> list[RawCveRecord]:
+    entries = data.get("cves", data.get("results", [])) if isinstance(data, Mapping) else []
+    out: list[RawCveRecord] = []
+    for entry in entries or []:
+        cve_id = str(entry.get("cve_id") or entry.get("cve") or "").upper()
+        if not cve_id:
+            continue
+        out.append(RawCveRecord(
+            source="vulnx", cve_id=cve_id, raw=dict(entry), raw_hash=raw_hash,
+            retrieved_at=fetched,
+            vendor=str(entry.get("vendor") or fallback_vendor).lower(),
+            product=str(entry.get("product") or fallback_product).lower(),
+            cvss_score=_maybe_float(entry.get("cvss_score") or entry.get("cvss")),
+            references=list(entry.get("references", []) or []),
+            description=str(entry.get("description", "") or ""),
+            published_at=_parse_time(str(entry.get("published_at", "") or "")),
+        ))
+    return out
+
+
+def _record_mentions(rec: RawCveRecord, product: str, vendor: str) -> bool:
+    product = product.lower()
+    vendor = vendor.lower()
+    if product.startswith("cve-") and rec.cve_id.lower() == product:
+        return True
+    if rec.product and rec.product == product:
+        return True
+    haystack = " ".join([rec.description, " ".join(rec.references), json.dumps(rec.raw, default=str)]).lower()
+    return product in haystack and (not vendor or vendor in haystack or not rec.vendor)
 
 
 # ── KEV / EPSS enrichment ─────────────────────────────────────────────────────

@@ -6,3 +6,4 @@
 # architecture
 - For the PentestAgent research contribution framing, use `Memory-Verified Retrieval-Grounded Multi-Agent Pentest Framework`; do not claim budget-aware planner or reward-engineering as contributions. Confidence: 0.80
 - Keep `economic_mode` as a non-research engineering toggle for cheaper snippet/scoring; do not describe it as planner intelligence in docs or architecture. Confidence: 0.75
+- Add an LLM-generated exploit fallback when all ranked candidates fail, rather than terminating silently. Confidence: 0.75

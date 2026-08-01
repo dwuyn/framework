@@ -23,6 +23,23 @@ from src.pipeline.evaluator import ResultRow
 from src.pipeline.ledger import ALLOWED_OUTCOMES, EventLedger
 from src.pipeline.oracle import ProofArtifact, ProofSpec, TargetTruth
 
+
+VARIANT_SETTINGS = {
+    "1": {"automatic_exploit_compilation": False, "automatic_metasploit_discovery": False,
+          "allow_llm_fallback": False},
+    "2": {"automatic_exploit_compilation": False, "automatic_metasploit_discovery": False,
+          "allow_llm_fallback": False},
+    "3": {"automatic_exploit_compilation": True, "automatic_metasploit_discovery": True,
+          "allow_llm_fallback": False},
+    "4": {"automatic_exploit_compilation": True, "automatic_metasploit_discovery": True,
+          "allow_llm_fallback": True},
+}
+
+
+def variant_settings(variant: str) -> dict[str, bool]:
+    """Controls for the four preregistered paired evaluation variants."""
+    return dict(VARIANT_SETTINGS.get(str(variant), VARIANT_SETTINGS["2"]))
+
 # ── Benchmark manifests ──────────────────────────────────────────────────────
 
 
@@ -177,6 +194,17 @@ def metrics_from_ledger(ledger: EventLedger, *, truth: TargetTruth) -> dict[str,
     vulnerability_confirmed = bool(confirmed)
     primary_success = task_proof and (not truth.is_patched_control)
     success_at_1 = task_proof and not failures
+    methods = [ev.method for ev in events if ev.method]
+    unique_methods = set(methods)
+    compiled = [ev for ev in events if ev.phase == "candidates" and ev.detail == "compiled"]
+    source_counts: dict[str, int] = {}
+    for event in compiled:
+        source = str(event.payload.get("source_kind") or event.method or "unknown")
+        source_counts[source] = source_counts.get(source, 0) + 1
+    failure_counts: dict[str, int] = {}
+    for event in events:
+        if event.failure_class:
+            failure_counts[event.failure_class] = failure_counts.get(event.failure_class, 0) + 1
 
     return {
         "task_proof_obtained": task_proof,
@@ -185,7 +213,20 @@ def metrics_from_ledger(ledger: EventLedger, *, truth: TargetTruth) -> dict[str,
         "success_at_1": success_at_1,
         "executed_commands": len(executed),
         "invalid_command_rate": (len(invalid_cmds) / len(executed)) if executed else 0.0,
+        "validated_vulnerability_discovery": vulnerability_confirmed or task_proof,
+        "method_diversity": len(unique_methods),
+        "repeated_method_rate": (1.0 - (len(unique_methods) / len(methods))) if methods else 0.0,
         "alternate_method_rescue": rescue,
+        "fallback_rescue_rate": 1.0 if rescue else 0.0,
+        "compiled_method_count": len(compiled),
+        "compiled_method_count_by_source": source_counts,
+        "failure_count_by_class": failure_counts,
+        "preflight_rejection_rate": (
+            sum(1 for event in events if event.failure_class in {"syntax_invalid", "option_invalid", "dependency_missing"})
+            / len(compiled)
+        ) if compiled else 0.0,
+        "oracle_confirmed_proof": task_proof,
+        "false_positive_on_patched_control": truth.is_patched_control and task_proof,
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "cost": round(cost, 6),
@@ -229,8 +270,7 @@ def aggregate_metrics(rows: list[ResultRow]) -> dict[str, Any]:
     false_positives = sum(1 for r in controls if r.outcome == "task_proof_obtained")
 
     avg_cost = (sum(r.cost for r in rows) / len(rows)) if rows else 0.0
-    successful = [r for r in vulnerable if r.outcome == "task_proof_obtained"]
-    cost_per_success = (sum(r.cost for r in successful) / len(successful)) if successful else 0.0
+    cost_per_success = (sum(r.cost for r in rows) / vulnerable_success_any) if vulnerable_success_any else 0.0
 
     wilson_total = _wilson_interval(vulnerable_success_any, vulnerable_total)
 

@@ -1,7 +1,7 @@
 """
 src/pipeline/candidates.py
 ──────────────────────────
-Generalised candidate interface with seven first-class kinds.
+Generalised candidate interface with eight first-class kinds.
 
 Each candidate has identity, immutable provenance, applicability, structured
 procedure, capability, safety, and supporting evidence. ``candidate_id`` is
@@ -27,15 +27,20 @@ from src.pipeline.evidence import Fingerprint, VersionConstraint
 
 SUPPORTED_KINDS = (
     "poc", "exploitdb", "metasploit", "nuclei", "nmap_nse",
-    "vendor_recipe", "native_tool",
+    "vendor_recipe", "native_tool", "guided_procedure",
 )
 
-SUPPORTED_TRUST = ("trusted", "lab_approved", "discovery_only", "blocked")
+SUPPORTED_TRUST = ("trusted", "lab_approved", "discovery_only", "llm_provisional", "blocked")
 
 SUPPORTED_CAPABILITIES = (
     "detection", "info_read", "file_write", "auth_bypass",
     "code_execution", "session",
 )
+
+# ``setup`` remains readable for snapshots produced before the exploit-skill
+# compiler.  New compiled candidates use the five explicit lifecycle stages.
+LIFECYCLE_STAGES = ("prepare", "check", "execute", "verify", "cleanup")
+LEGACY_STAGE_ALIASES = {"setup": "prepare"}
 
 PLACEHOLDER_RE = re.compile(
     r"(\$\{[A-Za-z_]\w*\})"
@@ -139,6 +144,15 @@ class ExploitCandidate:
     cpe_evidence: str = ""
 
     artifact_hash: str = ""
+    # Exploit-skill contract.  These fields intentionally live on the existing
+    # candidate instead of introducing a competing skill/candidate model.
+    runtime_kind: str = "stateless_process"  # stateless_process|metasploit_rpc|isolated_container
+    bindings: dict[str, dict[str, Any]] = field(default_factory=dict)
+    requirements: dict[str, list[str]] = field(default_factory=dict)
+    expected_evidence: list[str] = field(default_factory=list)
+    failure_predicates: list[str] = field(default_factory=list)
+    produces_session: bool = False
+    repair_lineage: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -164,6 +178,13 @@ class ExploitCandidate:
             "version_evidence": self.version_evidence,
             "cpe_evidence": self.cpe_evidence,
             "artifact_hash": self.artifact_hash,
+            "runtime_kind": self.runtime_kind,
+            "bindings": dict(self.bindings),
+            "requirements": {k: list(v) for k, v in self.requirements.items()},
+            "expected_evidence": list(self.expected_evidence),
+            "failure_predicates": list(self.failure_predicates),
+            "produces_session": bool(self.produces_session),
+            "repair_lineage": dict(self.repair_lineage),
             "extra": dict(self.extra),
         }
 
@@ -191,6 +212,13 @@ class ExploitCandidate:
             version_evidence=data.get("version_evidence", ""),
             cpe_evidence=data.get("cpe_evidence", ""),
             artifact_hash=data.get("artifact_hash", ""),
+            runtime_kind=data.get("runtime_kind", "stateless_process"),
+            bindings=dict(data.get("bindings", {}) or {}),
+            requirements={str(k): list(v or []) for k, v in (data.get("requirements", {}) or {}).items()},
+            expected_evidence=list(data.get("expected_evidence", []) or []),
+            failure_predicates=list(data.get("failure_predicates", []) or []),
+            produces_session=bool(data.get("produces_session", False)),
+            repair_lineage=dict(data.get("repair_lineage", {}) or {}),
             extra=dict(data.get("extra", {}) or {}),
         )
 
@@ -263,11 +291,15 @@ def evaluate_trust(candidate: ExploitCandidate, *,
     """Resolve a candidate's final trust state from provenance.
 
     Only ``trusted`` and ``lab_approved`` (with explicit manifest approval) may
-    execute. GitHub stars / repo popularity are *never* a trust signal.
+    execute. ``llm_provisional`` is the lowest tier for LLM-generated
+    procedures — executable only after explicit verifier approval.
+    GitHub stars / repo popularity are *never* a trust signal.
     """
     base = candidate.provenance.trust
     if base == "blocked":
         return "blocked"
+    if base == "llm_provisional":
+        return "llm_provisional"
     if base == "trusted":
         return "trusted"
     if base == "lab_approved":
@@ -356,9 +388,17 @@ def legacy_poc_to_exploit(legacy: LegacyPocCandidate | Any,
 
 def is_executable(candidate: ExploitCandidate, *,
                    manifest_approved_lab_ids: Iterable[str] | None = None,
+                   verifier_approved: bool = False,
                    ) -> bool:
-    """A candidate is executable iff trust resolves to trusted|lab_approved."""
+    """A candidate is executable iff trust resolves to trusted|lab_approved.
+
+    ``llm_provisional`` candidates are executable only when
+    ``verifier_approved`` is True — the verifier must explicitly endorse
+    the procedure before it may run.
+    """
     state = evaluate_trust(candidate, manifest_approved_lab_ids=manifest_approved_lab_ids)
+    if state == "llm_provisional":
+        return verifier_approved
     return state in {"trusted", "lab_approved"}
 
 

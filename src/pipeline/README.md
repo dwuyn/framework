@@ -1,8 +1,10 @@
 # Pipeline
 
-The improved evidence-driven research pipeline described in the implementation
-handoff. The legacy PoC-only workflow remains archived under the
-`baseline-poc-only-v1` git tag for traceability.
+The active evidence-driven research pipeline. The default LangGraph workflow is
+`recon -> pipeline_prepare -> pipeline_retrieve -> pipeline_queue ->
+pipeline_execute -> pipeline_oracle`. The legacy PoC-only workflow remains
+available only as the frozen variant 1 baseline under the
+`baseline-poc-only-v1` git tag.
 
 ## Modules
 
@@ -53,6 +55,18 @@ Tests live under `tests/pipeline/` and follow the milestone naming:
 | Attempts per candidate    | 3           |
 
 Provider, model, and temperature are frozen for primary comparisons.
+
+## Variants
+
+1. Frozen legacy PoC-only graph.
+2. Active graph plus official fresh CVE sources.
+3. Active graph plus heterogeneous methods on a frozen snapshot.
+4. Full active graph with live, snapshot, and replay modes.
+
+Literature results are contextual comparison only; the benchmark reports
+source freshness latency, validated-vulnerability discovery, method diversity,
+repeated-method rate, fallback rescue rate, oracle-confirmed proof, and false
+positives on patched controls.
 
 ## Outcome taxonomy
 

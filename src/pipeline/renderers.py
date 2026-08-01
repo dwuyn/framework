@@ -103,6 +103,10 @@ def _rewrite_framework_placeholders(argv: list[str], *,
             out.append(os.path.join(nuclei_output_dir or working_dir,
                                      f"{candidate.cve_id}.json"))
             continue
+        # guided_procedure: <FRAMEWORK_COMMAND> is a sentinel that gets
+        # stripped — the actual command is in the remaining argv tokens.
+        if tok == "<FRAMEWORK_COMMAND>" and candidate.kind == "guided_procedure":
+            continue
         out.append(tok)
     return out
 

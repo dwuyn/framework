@@ -158,12 +158,14 @@ def collect_exploitdb(spec: ExploitDbSpec) -> ExploitCandidate:
         argv = ["sh", spec.local_path]
     return ExploitCandidate(
         candidate_id=derive_candidate_id(kind="exploitdb", cve_id=spec.cve_id,
-                                            locator=spec.local_path, provenance=prov),
+                                            locator=f"edb:{spec.edb_id}", provenance=prov),
         cve_id=spec.cve_id, kind="exploitdb", source="exploitdb",
-        locator=spec.local_path, provenance=prov,
+        # The EDB id, not an installation-specific path, is the stable locator.
+        locator=f"edb:{spec.edb_id}", provenance=prov,
         procedure=[ProcedureStep(stage="execute", argv=argv, timeout_seconds=60)],
         capability=spec.capability, side_effect_class="remote_exploit",
-        artifact_hash=sha,
+        artifact_hash=sha, working_dir=os.path.dirname(spec.local_path),
+        extra={"artifact_path": spec.local_path, "language": spec.language},
     )
 
 
@@ -450,6 +452,40 @@ def collect_for_cve(cve_id: str, *, specs: Iterable[Any]) -> list[ExploitCandida
             out.append(collect_vendor_recipe(spec))
         elif kind == "native_tool":
             out.append(collect_native_tool(spec))
+        elif kind == "guided_procedure":
+            # guided_procedure candidates are created by the PlannerAgent,
+            # not collected from specs.  Skip here.
+            continue
+    return out
+
+
+def collect_from_records(
+    records: Iterable[Any],
+    *,
+    specs: Iterable[Any] = (),
+    candidates: Iterable[ExploitCandidate] = (),
+    max_cves: int = 5,
+) -> list[ExploitCandidate]:
+    """Collect configured method candidates for the first retrieved CVEs."""
+    cve_ids: list[str] = []
+    for rec in records:
+        cve_id = str(getattr(rec, "cve_id", "") or "").upper()
+        if cve_id and cve_id not in cve_ids:
+            cve_ids.append(cve_id)
+        if len(cve_ids) >= max_cves:
+            break
+    out: list[ExploitCandidate] = []
+    seen: set[str] = set()
+    existing = list(candidates or [])
+    for cve_id in cve_ids:
+        for cand in [c for c in existing if c.cve_id.upper() == cve_id]:
+            if cand.candidate_id not in seen:
+                out.append(cand)
+                seen.add(cand.candidate_id)
+        for cand in collect_for_cve(cve_id, specs=specs):
+            if cand.candidate_id not in seen:
+                out.append(cand)
+                seen.add(cand.candidate_id)
     return out
 
 
@@ -469,4 +505,6 @@ def _kind_of(spec: Any) -> str:
         return "vendor_recipe"
     if "nativetoolspec" in name:
         return "native_tool"
+    if "guidedprocedurespec" in name:
+        return "guided_procedure"
     return "unknown"

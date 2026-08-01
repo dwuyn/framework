@@ -43,8 +43,22 @@ FAILURE_CLASSES = frozenset({
     "command_invalid",
     "oracle_reject",
     "cleanup_failed",
+    "budget_exceeded",
     "backend_failed",
     "unknown",
+    # Exploit-skill compiler/runtime taxonomy.  Legacy values above remain
+    # readable so frozen v1-v6 ledgers replay unchanged.
+    "artifact_missing",
+    "dependency_missing",
+    "syntax_invalid",
+    "option_invalid",
+    "unsupported_target",
+    "negative_check",
+    "listener_failed",
+    "job_failed",
+    "session_not_created",
+    "runtime_error",
+    "proof_rejected",
 })
 
 # Stages tracked separately per the handoff.
@@ -190,6 +204,22 @@ class EventLedger:
                 if not line:
                     continue
                 ledger._events.append(Event.from_dict(json.loads(line)))
+        return ledger
+
+    @classmethod
+    def resume(cls, path: str, run_id: str = "") -> "EventLedger":
+        """Open an existing JSONL ledger for append without truncating it."""
+        ledger = cls(run_id=run_id or "replay", path=None)
+        if os.path.exists(path):
+            with open(path) as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    ledger._events.append(Event.from_dict(json.loads(line)))
+        ledger._path = path
+        ledger._counter = len(ledger._events)
+        os.makedirs(os.path.dirname(path), exist_ok=True) if os.path.dirname(path) else None
         return ledger
 
     # ── Repeated-action detection ─────────────────────────────────────────────

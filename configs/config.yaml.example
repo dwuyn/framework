@@ -45,6 +45,29 @@ models:
     temperature: 0
     timeout: 300
 
+  qwen3_coder_30b:
+    provider: openai
+    model: Qwen3-Coder-30B-A3B-Instruct
+    base_url: ${QWEN_BASE_URL}
+    api_key: ${QWEN_API_KEY}
+    temperature: 0
+    timeout: 300
+
+  gpt_oss_20b:
+    provider: openai
+    model: gpt-oss-20b
+    base_url: ${GPT_OSS_BASE_URL}
+    api_key: ${GPT_OSS_API_KEY}
+    temperature: 0
+    timeout: 300
+
+  gemini_3_5_flash:
+    provider: gemini
+    model: gemini-3.5-flash
+    temperature: 0
+    timeout: 300
+    api_key: ${GOOGLE_API_KEY}
+
 # CVE scoring weight configuration
 cve_scoring:
   weights:
@@ -123,6 +146,12 @@ cve_scoring:
 
 # Runtime configuration
 runtime:
+  agent_roles:
+    planner: {model: qwen3_coder_30b}
+    restore_planner: {model: qwen3_coder_30b}
+    critic: {model: qwen3_coder_30b}
+    verifier: {model: qwen3_coder_30b}
+    executor: {model: qwen3_coder_30b}
   recon:
     current_topic: "pentest"
     target_ip: "REPLACE_WITH_TARGET_IP"
@@ -192,3 +221,11 @@ runtime:
     install_timeout: 180
     allow_workspace_installs: True
     llm_fallback_attempts: 3
+
+  exploit_compiler:
+    # Enable only for evaluation variants 3 and 4.  Variant 2 remains the
+    # current manual-catalog baseline.
+    automatic_known_sources: false
+    automatic_metasploit: false
+    attacker_image: "pentest-agent-attacker:latest"
+    lab_network: ""

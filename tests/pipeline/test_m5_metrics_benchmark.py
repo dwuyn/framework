@@ -116,6 +116,7 @@ class TestReporting(unittest.TestCase):
         self.assertEqual(summary["discordant_pairs"], 2)
         self.assertEqual(summary["discordant_full_minus_poc"], 2)
         self.assertEqual(summary["false_positive_count"], 1)
+        self.assertEqual(summary["cost_per_success"], 0.025)
         # Wilson interval is well-defined.
         lo, hi = summary["wilson_95_success"]
         self.assertGreaterEqual(lo, 0.0)

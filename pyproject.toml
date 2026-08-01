@@ -51,6 +51,7 @@ dependencies = [
     "llama-index-readers-web==0.3.0",
     "llamaindex-py-client==0.1.19",
     "spacy==3.8.2",
+    "msgpack>=1.1,<2",
 ]
 
 [tool.poetry]

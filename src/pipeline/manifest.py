@@ -23,6 +23,9 @@ from typing import Any, Mapping
 
 SCHEMA_VERSION = "1.0.0"
 
+# Frozen baseline tag for the pre-v6 PoC-only pipeline.
+BASELINE_TAG = "baseline-poc-only-v1"
+
 # Fields whose values are redacted when hashing a configuration mapping so that
 # secrets never enter a manifest hash or published artifact.
 _SECRET_KEY_TOKENS = (

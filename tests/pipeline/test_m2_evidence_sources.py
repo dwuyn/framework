@@ -9,6 +9,8 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from src.pipeline.evidence import (
     IdentityField, Fingerprint, ServiceObservation,
@@ -225,6 +227,96 @@ class TestSourceAdapters(unittest.TestCase):
         for adapter_cls in (CveListV5Adapter, NvdAdapter, VulnxAdapter):
             self.assertFalse(hasattr(adapter_cls, "max_year"),
                               f"{adapter_cls.__name__} still exposes a year cap")
+
+    def test_nvd_live_normalises_mocked_api_response(self) -> None:
+        payload = {
+            "vulnerabilities": [{
+                "cve": {
+                    "id": "CVE-2021-41773",
+                    "published": "2021-10-05T12:00:00.000Z",
+                    "descriptions": [{"lang": "en", "value": "Apache httpd path traversal"}],
+                    "references": {"referenceData": [{"url": "https://example.test/advisory"}]},
+                    "metrics": {"cvssMetricV31": [{"cvssData": {
+                        "baseScore": 7.5,
+                        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+                    }}]},
+                    "configurations": [{
+                        "nodes": [{"cpeMatch": [{
+                            "criteria": "cpe:2.3:a:apache:httpd:2.4.49:*:*:*:*:*:*:*",
+                            "versionStartIncluding": "2.4.49",
+                            "versionEndExcluding": "2.4.51",
+                        }]}],
+                    }],
+                },
+            }],
+        }
+
+        class Resp:
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def read(self):
+                return json.dumps(payload).encode()
+
+        with patch("src.pipeline.sources.request.urlopen", return_value=Resp()) as urlopen:
+            adapter = NvdAdapter(mode="live", ledger=self.ledger,
+                                 last_mod_start="2026-01-01T00:00:00.000Z",
+                                 last_mod_end="2026-01-02T00:00:00.000Z")
+            records = adapter.fetch("httpd", "apache", "2.4.49")
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].cve_id, "CVE-2021-41773")
+        self.assertEqual(records[0].product, "httpd")
+        self.assertEqual(records[0].version_end, "2.4.51")
+        self.assertTrue(records[0].raw_hash)
+        self.assertIn("cpeName=", urlopen.call_args.args[0].full_url)
+        self.assertTrue(any(ev.payload.get("status") == BackendStatus.OK for ev in self.ledger.events))
+
+    def test_cvelist_live_reads_local_clone_before_github(self) -> None:
+        cve_path = os.path.join(self.tmp, "cves", "2021", "41xxx")
+        os.makedirs(cve_path)
+        with open(os.path.join(cve_path, "CVE-2021-41773.json"), "w") as fh:
+            json.dump({
+                "cveMetadata": {
+                    "cveId": "CVE-2021-41773",
+                    "datePublished": "2021-10-05T12:00:00.000Z",
+                },
+                "containers": {"cna": {
+                    "affected": [{"vendor": "apache", "product": "httpd",
+                                  "versions": [{"status": "affected", "version": "2.4.49",
+                                                "lessThan": "2.4.51"}]}],
+                    "descriptions": [{"lang": "en", "value": "Apache httpd traversal"}],
+                    "references": [{"url": "https://httpd.apache.org/security/vulnerabilities_24.html"}],
+                }},
+            }, fh)
+        with patch("src.pipeline.sources.request.urlopen") as urlopen:
+            records = CveListV5Adapter(mode="live", snapshot_dir=self.tmp,
+                                       ledger=self.ledger).fetch("httpd", "apache", "2.4.49")
+        urlopen.assert_not_called()
+        self.assertEqual([r.cve_id for r in records], ["CVE-2021-41773"])
+        self.assertEqual(records[0].source, "cve_list_v5")
+
+    def test_vulnx_rate_limit_is_isolated(self) -> None:
+        err = HTTPError("https://vulnx.test", 429, "rate limited", hdrs=None, fp=None)
+        with patch("src.pipeline.sources.request.urlopen", side_effect=err):
+            registry = SourceRegistry([
+                VulnxAdapter(mode="live", base_url="https://vulnx.test", ledger=self.ledger),
+            ], ledger=self.ledger)
+            self.assertEqual(registry.collect_cves("httpd", "apache", "2.4.49"), [])
+        self.assertTrue(any(ev.payload.get("rate_limited") for ev in self.ledger.events))
+
+    def test_replay_never_invokes_network(self) -> None:
+        snap = os.path.join(self.tmp, "snap")
+        write_snapshot(snap, [
+            RawCveRecord(source="nvd", cve_id="CVE-2024-1", raw={"x": 1},
+                          raw_hash="abc", retrieved_at=0.0,
+                          vendor="apache", product="httpd"),
+        ])
+        with patch("src.pipeline.sources.request.urlopen") as urlopen:
+            records = NvdAdapter(mode="replay", snapshot_dir=snap).fetch("httpd", "apache", "")
+        urlopen.assert_not_called()
+        self.assertEqual(len(records), 1)
 
 
 if __name__ == "__main__":

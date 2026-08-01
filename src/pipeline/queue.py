@@ -84,6 +84,8 @@ def _in_scope(candidate: ExploitCandidate, validator: ScopeValidator) -> tuple[b
     for step in candidate.procedure:
         dec = validator.validate_args(list(step.argv), stage=step.stage)
         if not dec:
+            if dec.unresolved_placeholders and not dec.blocked_endpoints:
+                continue
             return False, f"scope:{step.stage}:{dec.reason}"
     return True, ""
 
@@ -95,12 +97,32 @@ def _side_effect_rank(side_effect: str) -> int:
 
 
 def _expected_cost(candidate: ExploitCandidate) -> float:
+    if "expected_runtime" in candidate.extra:
+        try:
+            return float(candidate.extra.get("expected_runtime") or 0.0)
+        except (TypeError, ValueError):
+            pass
     cost = 0.0
     for step in candidate.procedure:
         cost += float(step.timeout_seconds or 0)
     if candidate.kind in {"nmap_nse", "nuclei"}:
         cost *= 0.5
     return cost
+
+
+def _difficulty_score(candidate: ExploitCandidate) -> float:
+    score = 0.0
+    try:
+        score += 10.0 * float(candidate.extra.get("evidence_confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        score += 10.0 * float(candidate.extra.get("procedure_readiness", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        pass
+    if candidate.extra.get("prior_failure"):
+        score -= 25.0
+    return score
 
 
 def rank_candidates(
@@ -110,6 +132,7 @@ def rank_candidates(
     proof_capability: str = "code_execution",
     ledger: EventLedger | None = None,
     scope: Scope | None = None,
+    manifest_approved_lab_ids: Iterable[str] | None = None,
     resolver=None,
 ) -> list[RankedCandidate]:
     """Deterministic ranking with hard mismatch rejection."""
@@ -126,8 +149,10 @@ def rank_candidates(
             reason.append("vendor_mismatch")
         if cand.constraint.product and fingerprint.product.parsed != cand.constraint.product.lower():
             reason.append("product_mismatch")
-        if cand.constraint.platform and cand.constraint.platform != fingerprint.platform_hints[0] \
-                if fingerprint.platform_hints else False:
+        if cand.platform and (
+            not fingerprint.platform_hints
+            or cand.platform != fingerprint.platform_hints[0]
+        ):
             reason.append("platform_mismatch")
         grade = constraint_matches(cand.constraint, fingerprint)
         if grade == "mismatch":
@@ -167,6 +192,7 @@ def rank_candidates(
         score += {"trusted": 15.0, "lab_approved": 10.0,
                    "discovery_only": -100.0, "blocked": -1000.0}.get(
             cand.provenance.trust, 0.0)
+        score += _difficulty_score(cand)
         score -= 5.0 * _side_effect_rank(cand.side_effect_class)
         score -= _expected_cost(cand) * 0.01
         # Penalize kinds that cannot satisfy a non-detection proof.
@@ -174,22 +200,38 @@ def rank_candidates(
             score -= 200.0
 
         # Mismatch or hard-block ⇒ not executable.
-        executable = is_executable(cand, manifest_approved_lab_ids={"*"} if cand.provenance.trust == "lab_approved" else None)
+        executable = is_executable(cand, manifest_approved_lab_ids=manifest_approved_lab_ids)
         if "vendor_mismatch" in reason or "product_mismatch" in reason \
                 or "version_mismatch" in reason or "platform_mismatch" in reason \
-                or "auth_prereq" in reason or cand.provenance.trust == "blocked":
+                or "auth_prereq" in reason or "capability_mismatch" in reason \
+                or "procedure_incomplete" in reason or scope_msg \
+                or cand.provenance.trust == "blocked":
             executable = False
 
+        shortlist_reasons = [r for r in reason if not r.startswith("scope:")]
+        if scope_msg:
+            shortlist_reasons.append("scope_violation")
         out.append(RankedCandidate(
             candidate=cand, applicability=applicability,
             capability_match=capability_match, procedure_complete=proc_complete,
-            score=score, rejection_reasons=[r for r in reason if not r.startswith("scope:")],
+            score=score, rejection_reasons=shortlist_reasons,
         ))
         if ledger is not None:
+            outcome = ""
+            failure_class = ""
+            if not executable:
+                if scope_msg:
+                    outcome, failure_class = "blocked_by_policy", "scope_violation"
+                elif any(r in reason for r in ("capability_mismatch", "procedure_incomplete")):
+                    outcome, failure_class = "not_executable", "procedure_incomplete"
+                elif reason or cand.provenance.trust == "blocked":
+                    outcome, failure_class = "blocked_by_policy", "policy_block"
             ledger.record(
                 phase="queue", stage="applicability",
                 cve_id=cand.cve_id, candidate_id=cand.candidate_id,
                 method=cand.kind,
+                outcome=outcome,
+                failure_class=failure_class,
                 scope_decision="allowed" if scope_ok else "blocked",
                 policy_decision="execute" if executable else "blocked",
                 detail=applicability,
@@ -205,14 +247,18 @@ def shortlist(
     ranked: list[RankedCandidate],
     *,
     limits: ResourceLimits,
+    manifest_approved_lab_ids: Iterable[str] | None = None,
 ) -> CandidateQueue:
     """Apply max_cves_per_service and max_methods_per_cve shortlists."""
     by_service_cve: dict[str, dict[str, list[RankedCandidate]]] = {}
     # We don't have explicit service labels here; group by candidate source as
     # the v1 stand-in and store per-CVE method counts.
     for rc in ranked:
-        if not is_executable(rc.candidate, manifest_approved_lab_ids={"*"}
-                              if rc.candidate.provenance.trust == "lab_approved" else None):
+        if not is_executable(rc.candidate, manifest_approved_lab_ids=manifest_approved_lab_ids):
+            continue
+        if rc.rejection_reasons or not rc.capability_match or not rc.procedure_complete:
+            continue
+        if rc.applicability == "mismatch":
             continue
         by_service_cve.setdefault(rc.candidate.source, {}).setdefault(rc.candidate.cve_id, []).append(rc)
     selected: list[RankedCandidate] = []

@@ -101,6 +101,29 @@ class AppConfig:
         # Falls back to recon model if verifier section not in config
         return self._data["runtime"].get("verifier", {"model": self.recon["model"]})
 
+    def role_model(self, role: str, override: str = "") -> str:
+        """Return the selected model for one active-pipeline role."""
+        if override:
+            return override
+        roles = self._data.get("runtime", {}).get("agent_roles", {})
+        configured = roles.get(role, {}) if isinstance(roles, dict) else {}
+        if isinstance(configured, str):
+            return configured
+        if isinstance(configured, dict) and configured.get("model"):
+            return str(configured["model"])
+        fallback = {
+            "planner": self.planning.get("model", self.recon["model"]),
+            "restore_planner": self.planning.get("model", self.recon["model"]),
+            "critic": self.verifier.get("model", self.recon["model"]),
+            "verifier": self.verifier.get("model", self.recon["model"]),
+            "executor": self.execution.get("model", self.recon["model"]),
+        }
+        return str(fallback.get(role, self.recon["model"]))
+
+    def get_role_llm(self, role: str, override: str = ""):
+        """Instantiate the configured LLM for an active-pipeline role."""
+        return self.get_llm(self.role_model(role, override))
+
     @property
     def cve_scoring(self) -> Dict[str, Any]:
         return self._data["cve_scoring"]

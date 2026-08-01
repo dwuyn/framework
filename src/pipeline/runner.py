@@ -81,6 +81,7 @@ class ExecutionResult:
     stderr: str
     duration_ms: float
     content_hash: str = ""
+    stage: str = ""
 
     @property
     def output(self) -> str:
@@ -122,6 +123,7 @@ class PipelineRunner:
             os.makedirs(self.msf_cfgroot, exist_ok=True)
             os.makedirs(self.nuclei_output_dir, exist_ok=True)
         self._proofs: list[ProofArtifact] = []
+        self.last_results: list[ExecutionResult] = []
 
     # ── Phases ─────────────────────────────────────────────────────────────────
     def recon(self) -> list[ReconObservation]:
@@ -164,13 +166,15 @@ class PipelineRunner:
                      candidates: list[ExploitCandidate]) -> CandidateQueue:
         ranked = rank_candidates(candidates, fingerprint=fp,
                                   proof_capability=self.manifest.oracle_spec.get("capability", "code_execution"),
-                                  ledger=self.ledger, scope=self.scope)
-        return shortlist(ranked, limits=ResourceLimits(**self.manifest.limits))
+                                  ledger=self.ledger, scope=self.scope,
+                                  manifest_approved_lab_ids=self._approved_lab_ids())
+        return shortlist(ranked, limits=ResourceLimits(**self.manifest.limits),
+                         manifest_approved_lab_ids=self._approved_lab_ids())
 
     # ── Execution ──────────────────────────────────────────────────────────────
     def _execute_or_cleanup(self, *, candidate: ExploitCandidate,
                               values: Mapping[str, str], stage_filter: set[str],
-                              mode: str) -> list[ExecutionResult]:
+                              mode: str, step_indexes: set[int] | None = None) -> list[ExecutionResult]:
         results: list[ExecutionResult] = []
         try:
             steps = render_procedure(candidate, values=values,
@@ -187,8 +191,10 @@ class PipelineRunner:
                 detail=str(exc),
             )
             return results
-        for step in steps:
+        for index, step in enumerate(steps):
             if step.stage not in stage_filter:
+                continue
+            if step_indexes is not None and index not in step_indexes:
                 continue
             self.budget.record_tool_call()
             dec = self.validator.validate_args(step.argv, stage=step.stage)
@@ -222,6 +228,7 @@ class PipelineRunner:
                 res = hook(step, self)
             else:
                 res = self._default_execute(step, candidate)
+            res.stage = step.stage
             results.append(res)
             if mode == "execute" and res.stdout:
                 self._record_proof(res, candidate, step.stage)
@@ -238,6 +245,10 @@ class PipelineRunner:
                                 f"{candidate.candidate_id}-{stage}.txt"),
         )
         self._proofs.append(proof)
+        if proof.path:
+            os.makedirs(os.path.dirname(proof.path), exist_ok=True)
+            with open(proof.path, "w", encoding="utf-8") as handle:
+                handle.write(proof.content)
         self.ledger.record(
             phase="oracle", stage="task_proof" if stage == "execute" else "vulnerability_confirmation",
             candidate_id=candidate.candidate_id, method=candidate.kind,
@@ -247,6 +258,21 @@ class PipelineRunner:
         )
 
     def _default_execute(self, step: RenderedStep, candidate: ExploitCandidate) -> ExecutionResult:
+        if candidate.runtime_kind == "isolated_container":
+            # Generated/copied artifacts never fall through to host subprocess.
+            # A benchmark must name its disposable attacker image and lab net.
+            from src.pipeline.runtime import IsolatedContainerRuntime
+
+            runtime_cfg = (self.manifest.oracle_spec or {}).get("runtime", {})
+            network = str(runtime_cfg.get("lab_network") or "")
+            image = str(runtime_cfg.get("attacker_image") or "")
+            if not network or not image:
+                return ExecutionResult(returncode=1, stdout="", stderr="isolated runtime is not configured",
+                                       duration_ms=0.0)
+            return IsolatedContainerRuntime(image=image, network=network,
+                                            run_dir=self.working_dir or self.manifest.run_dir,
+                                            scope=self.scope).run(
+                                                step.argv, timeout=step.timeout_seconds).result
         try:
             env = dict(os.environ)
             if step.env:
@@ -274,6 +300,48 @@ class PipelineRunner:
         except Exception as exc:                          # noqa: BLE001
             return ExecutionResult(returncode=1, stdout="", stderr=f"[render-error] {exc}",
                                      duration_ms=0.0)
+
+    def execute_metasploit_lifecycle(self, candidate: ExploitCandidate, fp: Fingerprint):
+        """Run check → execute → session verification → cleanup through RPC.
+
+        This is intentionally separate from legacy resource-script candidates;
+        only candidates compiled with ``runtime_kind=metasploit_rpc`` reach it.
+        """
+        from src.pipeline.metasploit_rpc import MetasploitRpcService
+        from src.pipeline.runtime import MetasploitRuntime, RuntimeResult
+
+        if candidate.requires_callback and not self.scope.callback_endpoints:
+            return RuntimeResult(ExecutionResult(1, "", "callback endpoint required", 0), "option_invalid")
+        options = dict(candidate.extra.get("options", {}) or {})
+        bindings = candidate.bindings or {"RHOSTS": {}, "RPORT": {}}
+        for key, value in {"RHOST": fp.target_ip, "RHOSTS": fp.target_ip, "RPORT": str(fp.port)}.items():
+            if key in bindings:
+                options[key] = value
+        if self.scope.callback_endpoints and "LHOST" in bindings:
+            options["LHOST"] = self.scope.callback_endpoints[0]
+        service = MetasploitRpcService(self.working_dir or self.manifest.run_dir)
+        session = None
+        try:
+            runtime = MetasploitRuntime(service.start(), target=fp.target_ip, candidate=candidate)
+            if candidate.extra.get("check_supported", True):
+                checked = runtime.check(options)
+                if checked.failure_class:
+                    return checked
+            executed = runtime.execute(options)
+            session = executed.session
+            if session:
+                session.last_verified_at = time.time()
+                session.verification_evidence = "session.list"
+                executed.evidence_kind = "session_verified"
+            return executed
+        except Exception as exc:  # RPC failures are classified, never retried blindly.
+            return RuntimeResult(ExecutionResult(1, "", str(exc), 0), "runtime_error")
+        finally:
+            try:
+                if 'runtime' in locals():
+                    runtime.cleanup(session)
+            finally:
+                service.stop()
 
     # ── Top-level ──────────────────────────────────────────────────────────────
     def run(self, *, recon_obs: list[ReconObservation] | None = None,
@@ -332,10 +400,18 @@ class PipelineRunner:
                             detail="no oracle-accepted proof")
         return OracleResult(outcome="execution_failed", reason="no proof accepted")
 
-    def _execute_one(self, rc: RankedCandidate, fp: Fingerprint) -> list[ProofArtifact]:
+    def _execute_one(self, rc: RankedCandidate, fp: Fingerprint, *,
+                      verifier_approved_ids: set[str] | None = None,
+                      step_indexes: set[int] | None = None,
+                      count_attempt: bool = True,
+                      ) -> list[ProofArtifact]:
         cand = rc.candidate
-        if not is_executable(cand, manifest_approved_lab_ids={"*"}
-                              if cand.provenance.trust == "lab_approved" else None):
+        # guided_procedure (llm_provisional) candidates are executable only
+        # after the verifier explicitly approves them.
+        is_verifier_approved = bool(verifier_approved_ids and
+                                     cand.candidate_id in verifier_approved_ids)
+        if not is_executable(cand, manifest_approved_lab_ids=self._approved_lab_ids(),
+                              verifier_approved=is_verifier_approved):
             self.ledger.record(phase="execution", stage="policy_decision",
                                 candidate_id=cand.candidate_id, cve_id=cand.cve_id,
                                 policy_decision="blocked",
@@ -351,10 +427,27 @@ class PipelineRunner:
                                 detail="missing capability/procedure",
                                 payload={"reasons": rc.rejection_reasons})
             return []
+        if count_attempt:
+            try:
+                self.budget.record_candidate()
+                self.budget.record_attempt(cand.candidate_id)
+            except BudgetExceeded as exc:
+                self.ledger.record(phase="execution", stage="execution_failure",
+                                    candidate_id=cand.candidate_id, cve_id=cand.cve_id,
+                                    outcome="execution_failed",
+                                    failure_class="budget_exceeded",
+                                    detail=str(exc))
+                return []
+            self.ledger.record(phase="execution", stage="policy_decision",
+                               candidate_id=cand.candidate_id, cve_id=cand.cve_id,
+                               method=cand.kind, detail="candidate_attempted")
         values = _values_from_fingerprint(fp)
         results = self._execute_or_cleanup(
             candidate=cand, values=values,
-            stage_filter={"execute", "verify"}, mode="execute")
+            stage_filter=({"setup", "prepare", "check", "execute", "verify", "cleanup"}
+                          if step_indexes is not None else {"execute", "verify"}),
+            mode="execute", step_indexes=step_indexes)
+        self.last_results = results
         # If all executed steps produced no output, record not_applicable.
         if not any(r.stdout for r in results):
             self.ledger.record(phase="execution", stage="execution_failure",
@@ -363,7 +456,7 @@ class PipelineRunner:
                                 failure_class="procedure_incomplete",
                                 detail="no output")
         return [ProofArtifact(kind="command_output", content=r.stdout, path="")
-                for r in results if r.stdout]
+                for r in results if r.stdout and r.stage == "execute"]
 
     def _cleanup_one(self, rc: RankedCandidate, fp: Fingerprint) -> None:
         cand = rc.candidate
@@ -375,6 +468,13 @@ class PipelineRunner:
             self.ledger.record(phase="cleanup", stage="cleanup",
                                 candidate_id=cand.candidate_id, cve_id=cand.cve_id,
                                 outcome="task_proof_obtained", detail="cleanup-best-effort")
+
+    def _approved_lab_ids(self) -> set[str]:
+        spec = self.manifest.oracle_spec or {}
+        approved = spec.get("approved_lab_cves", spec.get("approved_lab_ids", []))
+        if isinstance(approved, str):
+            approved = [approved]
+        return {str(cve).upper() for cve in (approved or [])}
 
 
 def stage_filter_for_outcome(stage: str, mode: str) -> str:

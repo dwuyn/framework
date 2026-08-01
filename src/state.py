@@ -103,6 +103,41 @@ class PentestState(TypedDict, total=False):
     dataset_case_id: str        # dataset case identifier
     benchmark_cve_cache_path: str  # path to curated CVE cache (runtime override)
 
+    # ── Active M0-M5 pipeline state ─────────────────────────────────────────
+    pipeline_manifest: dict
+    pipeline_ledger_path: str
+    pipeline_result: dict
+    retrieval_mode: str          # "live" | "snapshot" | "replay"
+    source_snapshot_dir: str
+    exploit_candidates: list     # list[dict] — serialized ExploitCandidate
+    oracle_truth: dict           # evaluator input; cleared at pipeline entry
+    evaluator_truth_path: str    # private run artifact; agent roles never read it
+    public_task: dict
+    model_profile: str
+    automatic_exploit_compilation: bool
+    automatic_metasploit_discovery: bool
+    allow_llm_fallback: bool
+    lifecycle_progress: dict
+    session_artifacts: list
+
+    # ── LLM Agent Pipeline State (v6 evidence-gated) ─────────────────────────
+    planner_proposals: list      # list[dict] — serialized PlannerProposal
+    critic_verdicts: list        # list[dict] — serialized CriticVerdict
+    verifier_decisions: list     # list[dict] — serialized VerifierDecision
+    guided_procedures: list      # list[dict] — serialized guided_procedure ExploitCandidates
+    catalog_exhausted: bool      # True when all catalog kinds exhausted without task_proof
+    planner_loop_count: int      # increments each planner→critic→verifier→execute cycle
+    planner_loop_max: int        # hard cap (default 5)
+    current_verifier_action: str # "collect_evidence" | "replan" | "execute" | "stop"
+    last_executed_candidate_id: str
+    last_execution_proof: dict   # ProofArtifact dict
+    proof_artifacts: list        # append-only ProofArtifact dicts
+    last_execution_result: dict
+    execution_intent: dict
+    active_plan: dict
+    role_usage: list
+    pending_evidence_request: dict
+
     # ── Recon budget controls ────────────────────────────────────────────────
     recon_followup_step_budget: int
     recon_command_dedupe_window: int
@@ -218,6 +253,39 @@ def initial_state(
         dataset_mode="",
         dataset_case_id="",
         benchmark_cve_cache_path="",
+        # Active M0-M5 pipeline
+        pipeline_manifest={},
+        pipeline_ledger_path="",
+        pipeline_result={},
+        retrieval_mode="snapshot",
+        source_snapshot_dir="",
+        exploit_candidates=[],
+        oracle_truth={},
+        evaluator_truth_path="",
+        public_task={},
+        model_profile="",
+        automatic_exploit_compilation=False,
+        automatic_metasploit_discovery=False,
+        allow_llm_fallback=True,
+        lifecycle_progress={},
+        session_artifacts=[],
+        # LLM Agent Pipeline (v6 evidence-gated)
+        planner_proposals=[],
+        critic_verdicts=[],
+        verifier_decisions=[],
+        guided_procedures=[],
+        catalog_exhausted=False,
+        planner_loop_count=0,
+        planner_loop_max=5,
+        current_verifier_action="",
+        last_executed_candidate_id="",
+        last_execution_proof={},
+        proof_artifacts=[],
+        last_execution_result={},
+        execution_intent={},
+        active_plan={},
+        role_usage=[],
+        pending_evidence_request={},
         # Recon budget controls
         recon_followup_step_budget=3,
         recon_command_dedupe_window=10,

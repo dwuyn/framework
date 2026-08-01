@@ -7,14 +7,15 @@
 The research pipeline (current default) is an evidence-driven graph:
 
 ```
-recon -> evidence normalization -> CVE source collection ->
-candidate collection -> deterministic queue -> policy preflight ->
-method execution -> independent oracle -> cleanup
+recon -> frozen retrieval/catalog -> planner -> critic -> verifier ->
+executor -> deterministic runner -> verifier/recovery -> independent oracle
 ```
 
-The legacy PoC-only graph (`baseline-poc-only-v1`) remains archived under the
-`baseline-poc-only-v1` git tag for traceability. It is not the recommended
-entry point.
+The active LangGraph default now runs this pipeline directly:
+`recon -> pipeline_prepare -> pipeline_retrieve -> pipeline_queue ->
+pipeline_planner -> pipeline_critic -> pipeline_verifier -> pipeline_execute`.
+The legacy PoC-only graph is kept only
+for variant 1 baseline runs under the `baseline-poc-only-v1` git tag.
 
 The framework is modular:
 
@@ -33,6 +34,9 @@ The framework is modular:
 - **Policy preflight** validates every endpoint (IPv4, IPv6, hostname, URL,
   scheme, port, redirect, callback) against the manifest scope.
 - **Method execution** renders structured argv arrays; no free-form shell.
+- **Multi-agent gate** makes Planner, Restore Planner, Critic, Verifier, and
+  Executor model-backed roles; deterministic scope, budget, and proof checks
+  remain authoritative.
 - **Independent oracle** consumes benchmark evidence directly; agent
   explanations never prove success.
 
@@ -176,7 +180,7 @@ manifest.oracle_spec = {"cve_id": "CVE-2021-41773",
                                                                               accepted_evidence=["uid=0"])})}
 
 runner = PipelineRunner(manifest=manifest, ledger=ledger, budget=budget,
-                          scope=manifest.scope_from_spec())
+                          scope=Scope.from_dict(manifest.scope))
 result = runner.run(
     recon_obs=[ReconObservation(target_ip="10.0.0.5", port=80,
                                   service_name="apache",
@@ -185,10 +189,26 @@ result = runner.run(
 )
 ```
 
-### Legacy PoC-only graph
+### Public benchmark bridge
 
-The legacy workflow remains under the `baseline-poc-only-v1` git tag and is
-available via:
+The external `../Data` harness supplies only `public_task.yml`. Run the
+current framework through the generic bridge; the harness owns proof upload
+and evaluator completion:
+
+```bash
+python -m src.pipeline.data_bridge \
+  --public-task ../Data/.../public_task.yml --run-dir ./data/bridge-run \
+  --model-profile qwen3_coder_30b
+```
+
+Use `--variant baseline` for the frozen PoC-only comparison. Configure the
+Qwen, GPT-OSS, and optional Gemini profiles in `configs/config.yaml` from the
+tracked `configs/config.yaml.example` template.
+
+### Legacy PoC-only baseline
+
+The legacy workflow is not wired into the default graph. Use it only for
+variant 1 PoC-only baseline runs:
 
 ```
 git checkout baseline-poc-only-v1
@@ -202,6 +222,17 @@ The pipeline supports three explicit retrieval modes:
 * `live`: real HTTP / filesystem reads; raw responses are preserved.
 * `snapshot`: only reads from a fixed source/candidate snapshot directory.
 * `replay`: no retrieval, no execution; reproduces metrics from stored events.
+
+### Evaluation variants
+
+1. Frozen legacy PoC-only graph baseline.
+2. Active graph with official fresh CVE sources.
+3. Active graph with heterogeneous methods on a frozen snapshot.
+4. Full active graph with live, snapshot, and replay modes.
+
+Reports include source freshness latency, validated-vulnerability discovery,
+method diversity, repeated-method rate, fallback rescue rate,
+oracle-confirmed proof, and false positives on patched controls.
 
 ------
 
