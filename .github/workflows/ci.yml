@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feature/veriplanpt]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pytest pytest-cov ruff
+          pip install langgraph pydantic pydantic-settings langchain-core langchain-community
+          pip install pyyaml packaging httpx tqdm msgpack gitpython
+
+      - name: Lint (ruff)
+        run: ruff check src/ tests/ --ignore E501
+        continue-on-error: true
+
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/ \
+            --tb=short \
+            --cov=src \
+            --cov-report=term-missing:skip-covered \
+            -q
+
+      - name: Schema validation — dataset.lock.json
+        run: |
+          python - <<'EOF'
+          import json, sys
+          with open('dataset.lock.json') as f:
+              d = json.load(f)
+          required = ['schema_version','snapshot_cutoff','train_cases','test_cases','total_cases','budget_tiers','model_profiles']
+          missing = [k for k in required if k not in d]
+          if missing:
+              print(f'FAIL: missing keys: {missing}', file=sys.stderr)
+              sys.exit(1)
+          print('dataset.lock.json OK')
+          EOF
+
+      - name: BudgetTier smoke test
+        run: |
+          python - <<'EOF'
+          from src.pipeline.budget import BudgetTier, ResourceBudget
+          for tier in BudgetTier:
+              lim = tier.to_limits()
+              b = ResourceBudget(lim)
+              assert b.remaining_seconds() > 0
+          print('BudgetTier OK')
+          EOF
+
+      - name: Planning smoke test
+        run: |
+          python - <<'EOF'
+          from src.planning import DifficultyEstimator, BudgetPolicy
+          e = DifficultyEstimator()
+          v = e.estimate(remaining_steps=30, max_steps=60, mean_evidence_confidence=0.6,
+                         token_fraction_used=0.3, historical_success_rate=0.5)
+          assert 0 <= v.difficulty_score <= 1
+          p = BudgetPolicy()
+          a = p.score_action('c1','svc','CVE-2021-X','metasploit',
+                             p_success=0.7, expected_evidence_gain=0.5,
+                             normalized_cost=0.3, risk=0.2, difficulty=v)
+          assert a.policy_score != 0
+          print('Planning OK:', round(v.difficulty_score, 3), round(a.policy_score, 3))
+          EOF
+
+  live-vertex:
+    name: Live Vertex Matrix (manual only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder — see docs/vertex_run.md
+        run: echo "Live Vertex matrix must be triggered manually with cost guard."

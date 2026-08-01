@@ -220,7 +220,7 @@ def compute_metrics(
         + metrics.total_output_tokens + metrics.total_thinking_tokens
     )
     # Wall time from first/last event timestamps.
-    timestamps = [e.ts for e in events if e.ts]
+    timestamps = [e.started_at for e in events if e.started_at]
     if len(timestamps) >= 2:
         metrics.wall_seconds = max(timestamps) - min(timestamps)
     if metrics.total_tokens > 0:
@@ -228,7 +228,7 @@ def compute_metrics(
 
     # ── Reliability ───────────────────────────────────────────────────────────
     total_actions = len([e for e in events if e.phase in ("execution", "recon")])
-    invalid = sum(1 for e in events if e.failure_class == "invalid_command")
+    invalid = sum(1 for e in events if e.failure_class in ("command_invalid", "invalid_command"))
     repeated = sum(1 for e in events if e.failure_class == "repeated_action")
     recovered = sum(1 for e in events if e.detail and "recovery" in str(e.detail).lower())
     failures = sum(1 for e in events if e.outcome == "execution_failed")
@@ -244,7 +244,7 @@ def compute_metrics(
     for e in events:
         fc = str(e.failure_class or "")
         detail = str(e.detail or "").lower()
-        if fc == "invalid_command" or "nonexistent" in detail or "unknown option" in detail:
+        if fc in ("command_invalid", "invalid_command") or "nonexistent" in detail or "unknown option" in detail:
             h.nonexistent_command += 1
         if fc == "fabricated_cve" or "not in snapshot" in detail:
             h.fabricated_cve += 1

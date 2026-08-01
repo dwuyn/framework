@@ -17,6 +17,7 @@ The Verifier reads these to decide if we have enough evidence to proceed.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -33,12 +34,26 @@ class ServiceInfo:
     confidence: float = 0.3                   # 0.0-1.0
     evidence: list[str] = field(default_factory=list)
     cpe: str = ""                             # CPE string if available
+    
+    activated_at: float = 0.0
+    deactivated_at: float = 0.0
+    ttl_seconds: float = 3600.0
+    provenance_sources: list[str] = field(default_factory=list)
 
     def bump_confidence(self, delta: float, new_evidence: str) -> None:
         """Increase confidence and append supporting evidence."""
         self.confidence = min(1.0, self.confidence + delta)
         if new_evidence:
             self.evidence.append(new_evidence)
+
+    def is_active(self, now: float | None = None) -> bool:
+        if now is None:
+            now = time.time()
+        if self.deactivated_at > 0:
+            return False
+        if self.activated_at > 0 and (now - self.activated_at) > self.ttl_seconds:
+            return False
+        return True
 
 
 @dataclass
@@ -90,6 +105,17 @@ class HostInfo:
 
             existing.evidence.extend(svc.evidence)
             existing.accessibility = svc.accessibility
+            
+            for src in svc.provenance_sources:
+                if src not in existing.provenance_sources:
+                    existing.provenance_sources.append(src)
+            
+            if svc.activated_at > 0:
+                existing.activated_at = svc.activated_at
+            if svc.deactivated_at > 0:
+                existing.deactivated_at = svc.deactivated_at
+            if svc.ttl_seconds != 3600.0:
+                existing.ttl_seconds = svc.ttl_seconds
 
 
 @dataclass
@@ -158,6 +184,79 @@ class WorldState:
         result = []
         for host in self.hosts.values():
             result.extend(s for s in host.services if s.version)
+        return result
+
+    def get_active_services(self, threshold: float = 0.0, now: float | None = None) -> list[ServiceInfo]:
+        if now is None:
+            now = time.time()
+        result = []
+        for host in self.hosts.values():
+            for svc in host.services:
+                if svc.is_active(now) and svc.confidence >= threshold:
+                    result.append(svc)
+        return result
+
+    def detect_conflicts(self) -> list[dict]:
+        import re
+        version_re = re.compile(r"\b\d+\.\d+(?:\.\d+)*\b")
+        conflicts = []
+        for ip, host in self.hosts.items():
+            port_svcs: dict[int, list[ServiceInfo]] = {}
+            for svc in host.services:
+                port_svcs.setdefault(svc.port, []).append(svc)
+
+            for port, svcs in port_svcs.items():
+                versions = set()
+                sources = set()
+                for svc in svcs:
+                    if svc.version and svc.version != "unknown":
+                        versions.add(svc.version)
+                    for src in svc.provenance_sources:
+                        sources.add(src)
+                    for ev in svc.evidence:
+                        for match in version_re.findall(str(ev)):
+                            versions.add(match)
+                if len(versions) > 1:
+                    conflicts.append({
+                        "ip": ip,
+                        "port": port,
+                        "conflicting_versions": sorted(list(versions)),
+                        "sources": sorted(list(sources))
+                    })
+        return conflicts
+
+    def to_context_dict(self, service_key: str | None = None) -> dict:
+        now = time.time()
+        result = {"hosts": {}}
+        if service_key:
+            parts = service_key.split(":", 2)
+            if len(parts) == 3:
+                target_ip, target_port_str, target_product = parts
+                try:
+                    target_port = int(target_port_str)
+                except ValueError:
+                    return result
+                
+                host = self.hosts.get(target_ip)
+                if host:
+                    for svc in host.services:
+                        if svc.port == target_port and svc.name == target_product:
+                            result["hosts"][target_ip] = {
+                                "ip": host.ip,
+                                "os_hint": host.os_hint,
+                                "services": [asdict(svc)]
+                            }
+                            break
+            return result
+
+        for ip, host in self.hosts.items():
+            active_svcs = [svc for svc in host.services if svc.is_active(now)]
+            if active_svcs:
+                result["hosts"][ip] = {
+                    "ip": host.ip,
+                    "os_hint": host.os_hint,
+                    "services": [asdict(svc) for svc in active_svcs]
+                }
         return result
 
     # ── Serialization ─────────────────────────────────────────────────────

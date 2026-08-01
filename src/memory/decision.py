@@ -30,6 +30,14 @@ class Decision:
     evidence_refs: list[int] = field(default_factory=list)  # episodic step indices
     confidence: float = 0.0                    # 0.0-1.0
     outcome: str = "pending"                   # "pending" | "validated" | "invalidated"
+    
+    action: str = ""
+    evidence_ids: list[str] = field(default_factory=list)
+    difficulty_vector: dict = field(default_factory=dict)
+    expected_utility: float = 0.0
+    budget_before: dict = field(default_factory=dict)
+    budget_after: dict = field(default_factory=dict)
+    verifier_verdict: str = "pending"
 
 
 class DecisionMemory:
@@ -80,6 +88,9 @@ class DecisionMemory:
 
     def invalidated_count(self) -> int:
         return sum(1 for d in self._decisions if d.outcome == "invalidated")
+
+    def get_pending(self) -> list[Decision]:
+        return [d for d in self._decisions if d.verifier_verdict == "pending"]
 
     # ── Serialization ─────────────────────────────────────────────────────
 

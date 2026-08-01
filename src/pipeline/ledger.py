@@ -60,6 +60,9 @@ FAILURE_CLASSES = frozenset({
     "session_not_created",
     "runtime_error",
     "proof_rejected",
+    "fabricated_cve",
+    "wrong_applicability",
+    "false_success",
 })
 
 # Stages tracked separately per the handoff.
