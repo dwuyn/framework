@@ -130,6 +130,16 @@ class Fingerprint:
             return "partial"
         return "unknown"
 
+    @property
+    def service_key(self) -> str:
+        """Stable key for this fingerprint: target_ip:port:product.
+
+        Used by B2 multi-fingerprint planner to persist the active service
+        across graph nodes without serializing the full Fingerprint object.
+        """
+        product = self.product.parsed or "unknown"
+        return f"{self.target_ip}:{self.port}:{product}"
+
     def cpe_primary(self) -> str:
         return self.observed_cpe or (self.inferred_cpe_candidates[0] if self.inferred_cpe_candidates else "")
 
@@ -148,6 +158,7 @@ class Fingerprint:
             "evidence": list(self.evidence),
             "evidence_sources": list(self.evidence_sources),
             "applicability_grade": self.applicability_grade(),
+            "service_key": self.service_key,
         }
 
 

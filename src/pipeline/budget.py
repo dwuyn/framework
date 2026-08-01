@@ -3,16 +3,21 @@ src/pipeline/budget.py
 ──────────────────────
 Resource-budget enforcement.
 
-Implements the fixed execution configuration as hard gates:
-    20 minutes per target, 50 tool calls, 40 executed commands,
-    5 CVEs per service, 2 methods per CVE, 3 executed candidates,
-    3 bounded attempts per candidate.
+Implements three preregistered BudgetTiers as hard gates:
+
+    Low    — 100k tokens,  20 LLM calls,  25 tool calls, 20 commands, 10 min
+    Medium — 300k tokens,  40 LLM calls,  50 tool calls, 40 commands, 20 min
+    High   — 750k tokens,  80 LLM calls, 100 tool calls, 80 commands, 30 min
+
+Token cap counts all input + cached_input + output + thinking tokens 1:1.
+USD is logged separately from billing.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from src.pipeline.manifest import ResourceLimits
@@ -28,6 +33,55 @@ class BudgetExceeded(Exception):
         super().__init__(f"Budget '{limit}' exceeded: {used}/{maximum}")
 
 
+class BudgetTier(str, Enum):
+    """Preregistered experiment budget tiers.
+
+    All three tiers are fixed and must not be changed after the train pilot.
+    """
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+    def to_limits(self) -> ResourceLimits:
+        """Return the ResourceLimits for this tier."""
+        _map: dict[str, dict[str, int]] = {
+            "low":    {"max_runtime_seconds": 600,  "max_tool_calls": 25,  "max_executed_commands": 20,
+                       "max_cves_per_service": 3, "max_methods_per_cve": 2,
+                       "max_executed_candidates": 2, "max_attempts_per_candidate": 2,
+                       "max_total_tokens": 100_000, "max_llm_calls": 20},
+            "medium": {"max_runtime_seconds": 1200, "max_tool_calls": 50,  "max_executed_commands": 40,
+                       "max_cves_per_service": 5, "max_methods_per_cve": 2,
+                       "max_executed_candidates": 3, "max_attempts_per_candidate": 3,
+                       "max_total_tokens": 300_000, "max_llm_calls": 40},
+            "high":   {"max_runtime_seconds": 1800, "max_tool_calls": 100, "max_executed_commands": 80,
+                       "max_cves_per_service": 7, "max_methods_per_cve": 3,
+                       "max_executed_candidates": 5, "max_attempts_per_candidate": 3,
+                       "max_total_tokens": 750_000, "max_llm_calls": 80},
+        }
+        cfg = _map[self.value]
+        limits = ResourceLimits(
+            max_runtime_seconds=cfg["max_runtime_seconds"],
+            max_tool_calls=cfg["max_tool_calls"],
+            max_executed_commands=cfg["max_executed_commands"],
+            max_cves_per_service=cfg["max_cves_per_service"],
+            max_methods_per_cve=cfg["max_methods_per_cve"],
+            max_executed_candidates=cfg["max_executed_candidates"],
+            max_attempts_per_candidate=cfg["max_attempts_per_candidate"],
+        )
+        # Attach tier-specific caps as extra attrs (ResourceLimits uses dataclass)
+        limits.max_total_tokens = cfg["max_total_tokens"]  # type: ignore[attr-defined]
+        limits.max_llm_calls = cfg["max_llm_calls"]  # type: ignore[attr-defined]
+        return limits
+
+    @classmethod
+    def from_str(cls, value: str) -> "BudgetTier":
+        """Parse tier from string; default to MEDIUM if unrecognised."""
+        try:
+            return cls(value.lower())
+        except ValueError:
+            return cls.MEDIUM
+
+
 @dataclass
 class BudgetState:
     started_at: float = 0.0
@@ -37,6 +91,19 @@ class BudgetState:
     methods_per_cve: dict[str, int] = field(default_factory=dict)
     executed_candidates: int = 0
     attempts_per_candidate: dict[str, int] = field(default_factory=dict)
+    # Token and LLM call tracking (added for VeriPlanPT)
+    total_input_tokens: int = 0
+    total_cached_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_thinking_tokens: int = 0
+    llm_calls: int = 0
+    total_usd: float = 0.0
+
+    @property
+    def total_tokens(self) -> int:
+        """Sum of all token types counted 1:1 against the budget cap."""
+        return (self.total_input_tokens + self.total_cached_input_tokens
+                + self.total_output_tokens + self.total_thinking_tokens)
 
 
 class ResourceBudget:
@@ -58,6 +125,29 @@ class ResourceBudget:
         if remaining <= 0:
             elapsed = (now if now is not None else time.time()) - self.state.started_at
             raise BudgetExceeded("max_runtime_seconds", round(elapsed, 1), self.limits.max_runtime_seconds)
+
+    # ── Token budget ──────────────────────────────────────────────────────────
+    def record_llm_usage(
+        self,
+        input_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        output_tokens: int = 0,
+        thinking_tokens: int = 0,
+        usd: float = 0.0,
+    ) -> None:
+        """Record token usage from one LLM call and check caps."""
+        self.state.total_input_tokens += input_tokens
+        self.state.total_cached_input_tokens += cached_input_tokens
+        self.state.total_output_tokens += output_tokens
+        self.state.total_thinking_tokens += thinking_tokens
+        self.state.total_usd += usd
+        self.state.llm_calls += 1
+        max_tokens = getattr(self.limits, "max_total_tokens", 0)
+        if max_tokens and self.state.total_tokens > max_tokens:
+            raise BudgetExceeded("max_total_tokens", self.state.total_tokens, max_tokens)
+        max_calls = getattr(self.limits, "max_llm_calls", 0)
+        if max_calls and self.state.llm_calls > max_calls:
+            raise BudgetExceeded("max_llm_calls", self.state.llm_calls, max_calls)
 
     # ── Tool calls / commands ─────────────────────────────────────────────────
     def record_tool_call(self) -> None:
@@ -112,16 +202,47 @@ class ResourceBudget:
         self.check_attempt(candidate_id)
         self.state.attempts_per_candidate[candidate_id] = self.state.attempts_per_candidate.get(candidate_id, 0) + 1
 
+    def state_to_dict(self) -> dict[str, Any]:
+        """Serialize BudgetState for storage in PentestState."""
+        s = self.state
+        return {
+            "started_at": s.started_at,
+            "tool_calls": s.tool_calls,
+            "executed_commands": s.executed_commands,
+            "cves_per_service": dict(s.cves_per_service),
+            "methods_per_cve": dict(s.methods_per_cve),
+            "executed_candidates": s.executed_candidates,
+            "attempts_per_candidate": dict(s.attempts_per_candidate),
+            "total_input_tokens": s.total_input_tokens,
+            "total_cached_input_tokens": s.total_cached_input_tokens,
+            "total_output_tokens": s.total_output_tokens,
+            "total_thinking_tokens": s.total_thinking_tokens,
+            "llm_calls": s.llm_calls,
+            "total_usd": s.total_usd,
+        }
+
+    @classmethod
+    def restore(cls, limits: ResourceLimits, state_dict: dict[str, Any]) -> "ResourceBudget":
+        """Restore a ResourceBudget from a serialized state dict."""
+        budget = cls(limits)
+        s = budget.state
+        s.started_at = float(state_dict.get("started_at", 0.0))
+        s.tool_calls = int(state_dict.get("tool_calls", 0))
+        s.executed_commands = int(state_dict.get("executed_commands", 0))
+        s.cves_per_service = dict(state_dict.get("cves_per_service", {}))
+        s.methods_per_cve = dict(state_dict.get("methods_per_cve", {}))
+        s.executed_candidates = int(state_dict.get("executed_candidates", 0))
+        s.attempts_per_candidate = dict(state_dict.get("attempts_per_candidate", {}))
+        s.total_input_tokens = int(state_dict.get("total_input_tokens", 0))
+        s.total_cached_input_tokens = int(state_dict.get("total_cached_input_tokens", 0))
+        s.total_output_tokens = int(state_dict.get("total_output_tokens", 0))
+        s.total_thinking_tokens = int(state_dict.get("total_thinking_tokens", 0))
+        s.llm_calls = int(state_dict.get("llm_calls", 0))
+        s.total_usd = float(state_dict.get("total_usd", 0.0))
+        return budget
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "limits": self.limits.to_dict(),
-            "state": {
-                "started_at": self.state.started_at,
-                "tool_calls": self.state.tool_calls,
-                "executed_commands": self.state.executed_commands,
-                "cves_per_service": dict(self.state.cves_per_service),
-                "methods_per_cve": dict(self.state.methods_per_cve),
-                "executed_candidates": self.state.executed_candidates,
-                "attempts_per_candidate": dict(self.state.attempts_per_candidate),
-            },
+            "state": self.state_to_dict(),
         }

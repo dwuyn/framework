@@ -27,6 +27,7 @@ ALLOWED_OUTCOMES = frozenset({
     "not_applicable",
     "not_executable",
     "blocked_by_policy",
+    "no_truth",          # B6: run completed but no evaluator truth was supplied
 })
 
 # Normalized failure classes assigned when an outcome is a failure.

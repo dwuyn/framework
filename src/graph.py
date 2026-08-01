@@ -49,7 +49,7 @@ from src.agents.critic import CriticAgent, CriticVerdict
 from src.agents.verifier_pipeline import PipelineVerifierAgent, VerifierDecision
 from src.agents.executor import ExecutorAgent
 from src.config import get_config
-from src.pipeline.budget import ResourceBudget
+from src.pipeline.budget import BudgetExceeded, BudgetTier, ResourceBudget
 from src.pipeline.candidates import ExploitCandidate, ProcedureStep, SUPPORTED_KINDS
 from src.pipeline.collectors import (
     ExploitDbSpec,
@@ -384,10 +384,38 @@ def _role_llm(state: PentestState, role: str):
         return None
 
 
-def _role_usage(state: PentestState, role: str, llm) -> list[dict]:
-    usage = list(state.get("role_usage") or [])
-    usage.append({"role": role, "model_loaded": llm is not None})
-    return usage
+def _role_usage(state: PentestState, role: str, llm, usage: dict | None = None) -> list[dict]:
+    """Append one telemetry record for an LLM call.
+
+    *usage* may carry the token breakdown returned by the LLM response:
+        input_tokens, cached_input_tokens, output_tokens, thinking_tokens,
+        latency_ms, model_revision, usd_cost.
+    These are forwarded to the BudgetState so the singleton budget is updated.
+    """
+    records = list(state.get("role_usage") or [])
+    record: dict = {"role": role, "model_loaded": llm is not None}
+    if usage:
+        record.update(usage)
+    records.append(record)
+
+    # Update singleton budget with token usage (B1/B7).
+    if usage and (usage.get("input_tokens") or usage.get("output_tokens")):
+        budget_state_dict = dict(state.get("budget_state") or {})
+        tier = BudgetTier.from_str(str(state.get("budget_tier") or "medium"))
+        budget = ResourceBudget.restore(tier.to_limits(), budget_state_dict) if budget_state_dict else ResourceBudget(tier.to_limits())
+        try:
+            budget.record_llm_usage(
+                input_tokens=int(usage.get("input_tokens", 0)),
+                cached_input_tokens=int(usage.get("cached_input_tokens", 0)),
+                output_tokens=int(usage.get("output_tokens", 0)),
+                thinking_tokens=int(usage.get("thinking_tokens", 0)),
+                usd=float(usage.get("usd_cost", 0.0)),
+            )
+        except BudgetExceeded:
+            pass  # budget exceeded is checked separately per node
+        # Persist updated budget state back into records for return merge
+        record["_budget_state"] = budget.state_to_dict()
+    return records
 
 
 def _save_manifest(manifest: RunManifest) -> None:
@@ -549,6 +577,41 @@ def _candidate_specs_from_state(state: PentestState) -> list:
     return specs
 
 
+def _infer_capability(item: dict, state: PentestState | None = None) -> str:
+    """B5: Infer the capability required for a candidate from the public task objective.
+
+    Priority: explicit item field > oracle_spec.capability > objective keyword heuristic > default.
+    """
+    # 1. Explicit field on the spec item wins.
+    if item.get("capability"):
+        return str(item["capability"])
+    # 2. oracle_spec.capability from the manifest/state.
+    if state:
+        oracle_cap = str((state.get("pipeline_manifest") or {}).get("oracle_spec", {}).get("capability") or "")
+        if oracle_cap:
+            return oracle_cap
+        objective = str((state.get("public_task") or {}).get("objective") or "").lower()
+    else:
+        objective = ""
+    # 3. Heuristic from objective text.
+    if any(kw in objective for kw in ("rce", "remote code", "shell", "exec", "command injection")):
+        return "code_execution"
+    if any(kw in objective for kw in ("read file", "lfi", "path traversal", "directory traversal", "arbitrary file")):
+        return "arbitrary_file_read"
+    if any(kw in objective for kw in ("auth bypass", "authentication bypass", "login bypass", "bypass")):
+        return "authentication_bypass"
+    if any(kw in objective for kw in ("sqli", "sql injection", "database")):
+        return "sql_injection"
+    if any(kw in objective for kw in ("ssrf",)):
+        return "ssrf"
+    if any(kw in objective for kw in ("xss", "cross-site scripting")):
+        return "xss"
+    if any(kw in objective for kw in ("detect", "identify", "scan", "enumerate")):
+        return "detection"
+    # 4. Default: code_execution (most severe, conservative for pentest context).
+    return "code_execution"
+
+
 def _spec_from_dict(item: dict):
     kind = str(item.get("kind") or item.get("type") or "").lower()
     try:
@@ -654,6 +717,21 @@ def pipeline_prepare_node(state: PentestState) -> dict:
 def pipeline_retrieve_node(state: PentestState) -> dict:
     manifest = _manifest_from_state(state)
     ledger = _open_ledger(state, manifest)
+    # B4: fail-fast when snapshot dir is missing or empty
+    mode = str(state.get("retrieval_mode") or "snapshot")
+    if mode == "snapshot":
+        snap = str(state.get("source_snapshot_dir") or state.get("benchmark_cve_cache_path") or "")
+        if not snap or not os.path.isdir(snap) or not any(os.scandir(snap)):
+            ledger.record(phase="retrieve", stage="applicability", outcome="execution_failed",
+                          failure_class="dataset_missing",
+                          detail=f"snapshot dir missing or empty: {snap!r}")
+            result = dict(state.get("pipeline_result", {}) or {})
+            result.update({"source_record_count": 0, "retrieval_fail_reason": "dataset_missing"})
+            return {
+                "current_phase": "pipeline_retrieve",
+                "pipeline_result": result,
+                "retrieval_status": "dataset_missing",
+            }
     runner = _runner(state, manifest, ledger)
     observations = _observations_from_state(state)
     fingerprints = runner.evidence(observations)
@@ -787,8 +865,12 @@ def pipeline_execute_node(state: PentestState) -> dict:
     if not target:
         return {"current_phase": "pipeline_execute"}
 
+    # B2: Use active_fp_key written by planner, not always fps[0].
     fps = runner.evidence(_observations_from_state(state))
-    fp = fps[0] if fps else None
+    active_key = str(state.get("active_fp_key") or "")
+    fp = next((f for f in fps if getattr(f, "service_key", "") == active_key), None) if active_key else None
+    if fp is None:
+        fp = fps[0] if fps else None
     if not fp:
         result = dict(state.get("pipeline_result", {}) or {})
         return {"current_phase": "pipeline_execute", "pipeline_result": result}
@@ -819,9 +901,14 @@ def pipeline_execute_node(state: PentestState) -> dict:
         runner.last_results = [rpc_result.result]
         if rpc_result.session:
             session_artifacts.append(rpc_result.session.to_dict())
-        # RPC owns its atomic lifecycle so a session cannot be orphaned across
-        # graph process boundaries.
-        completed.update(range(len(target.procedure)))
+        # B3: Only mark ALL steps done if the RPC succeeded (session established).
+        # If it failed, mark only the step that was attempted so the verifier
+        # can decide whether to retry or rotate.
+        if rpc_result.session:
+            completed.update(range(len(target.procedure)))
+        else:
+            # Mark step 0 as attempted (the launch step) but not terminal.
+            completed.add(0)
     else:
         runner._execute_one(rc, fp, verifier_approved_ids={target.candidate_id}, step_indexes={intent.step_index},
                             count_attempt=not completed)
@@ -864,12 +951,31 @@ def pipeline_planner_node(state: PentestState) -> dict:
     manifest = _manifest_from_state(state)
     ledger = _open_ledger(state, manifest)
     candidates = _candidate_objs(state.get("exploit_candidates", []))
+    # B2: Select the best-ranked fingerprint for this planner round, not always fps[0].
+    # The active_fp_key persists in state so critic/verifier/execute use the same service.
     observations = _observations_from_state(state)
     runner = _runner(state, manifest, ledger)
     fps = runner.evidence(observations)
-    fp = fps[0] if fps else None
-    if not fp:
+    if not fps:
         return {"current_phase": "pipeline_planner"}
+
+    # Prefer previously selected fp if still in the list, otherwise pick highest-ranked
+    active_key = str(state.get("active_fp_key") or "")
+    fp = next((f for f in fps if f.service_key == active_key), None) if active_key else None
+    if fp is None:
+        # Rank fps by number of remaining un-attempted candidates
+        attempted = {e.candidate_id for e in ledger.events if e.candidate_id and e.detail == "candidate_attempted"}
+        queue = runner.build_queue(fp=fps[0], candidates=candidates)
+        best_count = -1
+        for candidate_fp in fps:
+            q = runner.build_queue(fp=candidate_fp, candidates=candidates)
+            remaining = sum(1 for rc in q.ranked if rc.candidate.candidate_id not in attempted and rc.candidate.kind != "guided_procedure")
+            if remaining > best_count:
+                best_count = remaining
+                fp = candidate_fp
+    if fp is None:
+        fp = fps[0]
+    active_key = getattr(fp, "service_key", "")
     attempted = {e.candidate_id for e in ledger.events if e.candidate_id and e.detail == "candidate_attempted"}
     queue = runner.build_queue(fp=fp, candidates=candidates)
     eligible = [rc.candidate for rc in queue.ranked if rc.candidate.candidate_id not in attempted]
@@ -910,6 +1016,7 @@ def pipeline_planner_node(state: PentestState) -> dict:
         "guided_procedures": guided,
         "exploit_candidates": [c.to_dict() for c in all_candidates],
         "active_plan": proposal.to_dict() if proposal else {},
+        "active_fp_key": active_key,
         "role_usage": _role_usage(state, "restore_planner" if state.get("last_execution_result") else "planner", llm),
     }
 
@@ -1055,7 +1162,8 @@ def pipeline_oracle_node(state: PentestState) -> dict:
     ledger = _open_ledger(state, manifest)
     truth = _evaluator_truth(state, manifest)
     proofs = _proof_objs((state.get("pipeline_result", {}) or {}).get("proofs_path") or _proofs_path(manifest))
-    result = OracleResult(outcome="execution_failed", reason="no truth supplied")
+    # B6: Distinguish missing truth from actual execution failure.
+    result = OracleResult(outcome="no_truth", reason="no evaluator truth supplied for this run")
     if truth is not None:
         oracle = BenchmarkOracle()
         cves = [manifest.oracle_spec.get("cve_id", "")] if manifest.oracle_spec.get("cve_id") else truth.applicable_cves

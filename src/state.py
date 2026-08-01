@@ -120,6 +120,16 @@ class PentestState(TypedDict, total=False):
     lifecycle_progress: dict
     session_artifacts: list
 
+    # ── Budget tier and singleton budget state (B1/B8) ───────────────────────
+    # BudgetTier string: "low" | "medium" | "high"
+    budget_tier: str
+    # Serialized BudgetState dict — singleton persisted across all graph nodes
+    budget_state: dict
+
+    # ── Active fingerprint key (B2 multi-service targeting) ──────────────────
+    # Identifies which host:port:service fingerprint is currently being planned
+    active_fp_key: str
+
     # ── LLM Agent Pipeline State (v6 evidence-gated) ─────────────────────────
     planner_proposals: list      # list[dict] — serialized PlannerProposal
     critic_verdicts: list        # list[dict] — serialized CriticVerdict
@@ -144,10 +154,14 @@ class PentestState(TypedDict, total=False):
     live_retrieval_retry_max: int
 
     # ── Metrics accumulation ──────────────────────────────────────────────────
-    total_tokens: int              # total_tokens_in + total_tokens_out
-    total_tokens_in: int           # LLM prompt tokens
-    total_tokens_out: int          # LLM completion tokens
-    total_llm_requests: int
+    # Detailed token breakdown (mirrors BudgetState fields)
+    total_input_tokens: int        # LLM prompt/input tokens
+    total_cached_input_tokens: int # Cached/prefix input tokens (billed at reduced rate)
+    total_output_tokens: int       # LLM completion/output tokens
+    total_thinking_tokens: int     # Thinking/reasoning tokens
+    total_tokens: int              # Sum of all four above (1:1 budget cap)
+    total_llm_requests: int        # Alias for llm_calls in BudgetState
+    total_usd: float               # Accumulated USD cost from billing
     total_invalid_commands: int
     total_repeated_actions: int
     retry_spent: int
@@ -269,6 +283,11 @@ def initial_state(
         allow_llm_fallback=True,
         lifecycle_progress={},
         session_artifacts=[],
+        # Budget tier and singleton state (B1/B8)
+        budget_tier="medium",
+        budget_state={},
+        # Active fingerprint key (B2)
+        active_fp_key="",
         # LLM Agent Pipeline (v6 evidence-gated)
         planner_proposals=[],
         critic_verdicts=[],
@@ -290,11 +309,14 @@ def initial_state(
         recon_followup_step_budget=3,
         recon_command_dedupe_window=10,
         live_retrieval_retry_max=1,
-        # Metrics
+        # Metrics — detailed token breakdown
+        total_input_tokens=0,
+        total_cached_input_tokens=0,
+        total_output_tokens=0,
+        total_thinking_tokens=0,
         total_tokens=0,
-        total_tokens_in=0,
-        total_tokens_out=0,
         total_llm_requests=0,
+        total_usd=0.0,
         total_invalid_commands=0,
         total_repeated_actions=0,
         retry_spent=0,

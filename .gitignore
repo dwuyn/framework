@@ -53,6 +53,9 @@ data/
 logs/
 planning_output/
 
+# Dataset lab payloads — never commit
+data_test/
+
 # Scan output files
 *.gnmap
 *.nmap
