@@ -13,14 +13,23 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 from src.pipeline.evidence import (
-    IdentityField, Fingerprint, ServiceObservation,
-    constraint_matches, cpe_in_scope, fingerprint_service,
-    normalize_version_bounds, parse_banner_identity,
+    ServiceObservation,
+    constraint_matches,
+    cpe_in_scope,
+    fingerprint_service,
+    normalize_version_bounds,
+    parse_banner_identity,
 )
 from src.pipeline.ledger import EventLedger
 from src.pipeline.sources import (
-    BackendStatus, CveListV5Adapter, EpssAdapter, KEVAdapter, NvdAdapter,
-    PrioritySignal, RawCveRecord, SourceRegistry, VulnxAdapter,
+    BackendStatus,
+    CveListV5Adapter,
+    EpssAdapter,
+    KEVAdapter,
+    NvdAdapter,
+    RawCveRecord,
+    SourceRegistry,
+    VulnxAdapter,
     write_snapshot,
 )
 

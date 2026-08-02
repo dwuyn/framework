@@ -9,7 +9,6 @@ from typing import Any
 from src.config import get_config
 from src.memory.decision import DecisionMemory
 from src.memory.episodic import EpisodicMemory
-
 from src.retrieval import (
     ApplicabilityAssessment,
     AuthoritativeRecord,
@@ -21,13 +20,13 @@ from src.retrieval import (
 from src.state import PentestState, runtime_exceeded
 from src.utils.structured_logger import get_structured_logger
 
-from .shared import derive_hypotheses, emit_budget_event, log_stage, record_hypothesis_decision
+from .shared import derive_hypotheses, log_stage, record_hypothesis_decision
 
 slog = get_structured_logger()
 
 
 def hypothesis_agent_node(state: PentestState) -> dict[str, Any]:
-    cfg = get_config()
+    get_config()
     em = EpisodicMemory.from_list(state.get("episodic_memory", []))
     dm = DecisionMemory.from_list(state.get("decision_memory", []))
     bundle = RetrievalBundle.from_dict(state.get("retrieval_bundle", {}) or {})

@@ -13,13 +13,17 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from src.config import get_config
 from src.memory.decision import DecisionMemory
 from src.memory.episodic import EpisodicMemory
-
 from src.retrieval import RetrievalBundle
 from src.state import PentestState, runtime_exceeded
 from src.utils.json_parser import require_json
 from src.utils.structured_logger import extract_token_usage, get_structured_logger
 
-from .shared import emit_budget_event, hypothesis_runtime_cfg, log_stage, persist_bundle_artifacts, shortlist_candidate_ids
+from .shared import (
+    hypothesis_runtime_cfg,
+    log_stage,
+    persist_bundle_artifacts,
+    shortlist_candidate_ids,
+)
 
 slog = get_structured_logger()
 
@@ -250,7 +254,7 @@ def _deterministic_fast_path(state: PentestState, bundle: RetrievalBundle) -> di
 
     classified = _classify_shortlist(bundle)
     strong = classified["strong"]
-    weak = classified["weak"]
+    classified["weak"]
     version_unknown = classified["version_unknown"]
 
     if shortlist and len(shortlist) == 1 and not strong:
@@ -638,7 +642,7 @@ def _apply_critic_report(
 
 
 def critic_agent_node(state: PentestState) -> dict[str, Any]:
-    cfg = get_config()
+    get_config()
     runtime_cfg = hypothesis_runtime_cfg(state)
     max_rework_rounds = int(runtime_cfg["critic"]["max_rework_rounds"] or 0)
     bundle = RetrievalBundle.from_dict(state.get("retrieval_bundle", {}) or {})

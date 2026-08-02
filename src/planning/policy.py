@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from src.planning.difficulty import DifficultyVector
@@ -184,6 +184,14 @@ class BudgetPolicy:
         count = self._consecutive_failures.get(service_key, 0) + 1
         self._consecutive_failures[service_key] = count
         return count >= self.ROTATION_THRESHOLD
+
+    def state_to_dict(self) -> dict[str, Any]:
+        return {"consecutive_failures": dict(self._consecutive_failures)}
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        self._consecutive_failures = {
+            str(key): int(value) for key, value in dict(state.get("consecutive_failures") or {}).items()
+        }
 
     def is_service_budget_allowed(
         self,

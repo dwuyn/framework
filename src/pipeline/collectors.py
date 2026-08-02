@@ -32,8 +32,10 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from src.pipeline.candidates import (
-    ExploitCandidate, Provenance, ProcedureStep, derive_candidate_id,
-    hash_artifact,
+    ExploitCandidate,
+    ProcedureStep,
+    Provenance,
+    derive_candidate_id,
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import json
 import os
 import re
 from collections import defaultdict
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from src.retrieval.models import AuthoritativeRecord, ProductFingerprint

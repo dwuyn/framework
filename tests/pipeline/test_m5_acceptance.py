@@ -10,27 +10,29 @@ Acceptance tests for the handoff completion gates.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from src.pipeline.benchmark import BenchmarkManifest, BenchmarkTarget, aggregate_metrics, write_summary
-from src.pipeline.candidates import ExploitCandidate, ProcedureStep, Provenance
+from src.pipeline.candidates import ExploitCandidate, ProcedureStep
 from src.pipeline.collectors import MetasploitSpec, collect_metasploit
-from src.pipeline.evaluator import Evaluator, ResultRow
+from src.pipeline.evaluator import Evaluator
 from src.pipeline.evidence import (
-    ServiceObservation, fingerprint_service,
+    ServiceObservation,
+    fingerprint_service,
 )
 from src.pipeline.ledger import EventLedger
 from src.pipeline.manifest import Scope, new_manifest
-from src.pipeline.oracle import BenchmarkOracle, ProofArtifact, ProofSpec, TargetTruth
-from src.pipeline.renderers import render_procedure
+from src.pipeline.oracle import ProofArtifact, ProofSpec, TargetTruth
 from src.pipeline.runner import PipelineRunner, ReconObservation
 from src.pipeline.sources import (
-    CveListV5Adapter, NvdAdapter, VulnxAdapter, write_snapshot, RawCveRecord,
+    CveListV5Adapter,
+    NvdAdapter,
+    RawCveRecord,
+    VulnxAdapter,
+    write_snapshot,
 )
 
 
@@ -154,8 +156,7 @@ class TestResultRowCoverage(unittest.TestCase):
                        candidate_id="cand-x", cve_id="CVE-2021-41773",
                        outcome="task_proof_obtained",
                        payload={"executed_command": True})
-        from src.pipeline.evaluator import Evaluator
-        from src.pipeline.budget import ResourceBudget, ResourceLimits
+        from src.pipeline.budget import ResourceLimits
         manifest.run_dir = "/tmp/r"
         manifest.artifact_hashes = {"cand-x": "abc"}
         manifest.source_snapshot_ids = ["snap1"]

@@ -28,6 +28,7 @@ ALLOWED_OUTCOMES = frozenset({
     "not_executable",
     "blocked_by_policy",
     "no_truth",          # B6: run completed but no evaluator truth was supplied
+    "infrastructure_failure",
 })
 
 # Normalized failure classes assigned when an outcome is a failure.
@@ -46,6 +47,8 @@ FAILURE_CLASSES = frozenset({
     "cleanup_failed",
     "budget_exceeded",
     "backend_failed",
+    "dataset_missing",
+    "infrastructure_failure",
     "unknown",
     # Exploit-skill compiler/runtime taxonomy.  Legacy values above remain
     # readable so frozen v1-v6 ledgers replay unchanged.

@@ -17,7 +17,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from src.config import get_config
 from src.execution.classify import classify_output
 from src.execution.placeholders import resolve_placeholder_values
-from src.execution.preflight import PreflightResult, prepare_candidate, _prefix_workdir, _contains_foreign_ip
+from src.execution.preflight import (
+    PreflightResult,
+    _contains_foreign_ip,
+    _prefix_workdir,
+    prepare_candidate,
+)
 from src.execution.tracker import (
     advance_candidate,
     append_attempt,
@@ -31,9 +36,8 @@ from src.execution.tracker import (
     workspace_dir_for_candidate,
     write_execution_artifacts,
 )
-from src.memory.episodic import EpisodicMemory, Episode
+from src.memory.episodic import Episode, EpisodicMemory
 from src.memory.world_state import WorldState
-
 from src.state import PentestState, runtime_exceeded
 from src.tools.shell import run_shell
 from src.utils.json_parser import extract_json

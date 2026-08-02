@@ -12,16 +12,24 @@ import tempfile
 import unittest
 
 from src.pipeline.budget import BudgetExceeded, ResourceBudget, ResourceLimits
-from src.pipeline.evaluator import Evaluator, ResultRow
-from src.pipeline.ledger import EventLedger, Event, ALLOWED_OUTCOMES
+from src.pipeline.evaluator import Evaluator
+from src.pipeline.ledger import EventLedger
 from src.pipeline.manifest import (
-    RunContext, Scope, ResourceLimits as RL, config_hash, load_manifest,
-    new_manifest, redact_secrets,
+    RunContext,
+    Scope,
+    config_hash,
+    load_manifest,
+    new_manifest,
+    redact_secrets,
 )
 from src.pipeline.oracle import (
-    BenchmarkOracle, ProofArtifact, ProofSpec, TargetTruth, TextualMarkerChecker,
+    BenchmarkOracle,
+    ProofArtifact,
+    ProofSpec,
+    TargetTruth,
+    TextualMarkerChecker,
 )
-from src.pipeline.scope import ScopeValidator, ScopeDecision
+from src.pipeline.scope import ScopeValidator
 
 
 class TestManifest(unittest.TestCase):

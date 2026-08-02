@@ -12,17 +12,22 @@ import unittest
 from src.pipeline.budget import ResourceBudget, ResourceLimits
 from src.pipeline.candidates import ExploitCandidate, ProcedureStep, Provenance
 from src.pipeline.collectors import (
-    MetasploitSpec, NmapNseSpec, NucleiSpec, collect_metasploit,
-    collect_nmap_nse, collect_nuclei, render_metasploit_resource_script,
+    MetasploitSpec,
+    NucleiSpec,
+    collect_metasploit,
+    collect_nuclei,
 )
-from src.pipeline.evidence import Fingerprint, IdentityField, ServiceObservation, fingerprint_service
+from src.pipeline.evidence import (
+    Fingerprint,
+    ServiceObservation,
+    fingerprint_service,
+)
 from src.pipeline.ledger import EventLedger
-from src.pipeline.manifest import ResourceLimits as RL, Scope, new_manifest
-from src.pipeline.oracle import ProofArtifact, ProofSpec, TargetTruth
+from src.pipeline.manifest import Scope, new_manifest
+from src.pipeline.oracle import ProofSpec, TargetTruth
 from src.pipeline.queue import rank_candidates, shortlist
 from src.pipeline.renderers import RenderError, render_procedure
-from src.pipeline.runner import PipelineRunner, ReconObservation, RunnerHooks
-from src.pipeline.scope import ScopeValidator
+from src.pipeline.runner import PipelineRunner, ReconObservation
 
 
 def _fp() -> Fingerprint:
@@ -206,7 +211,7 @@ class TestRunner(unittest.TestCase):
         self.assertFalse(hasattr(self.runner, "llm_generate_command"))
 
     def test_runs_full_pipeline_and_writes_ledger(self) -> None:
-        fp = _fp()
+        _fp()
         msf = _metasploit_candidate()
         msf.constraint.vendor = "apache"
         msf.constraint.product = "httpd"

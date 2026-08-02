@@ -22,10 +22,10 @@ Policy
 from __future__ import annotations
 
 import logging
+import os
 import re
-import time
-from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from dataclasses import dataclass
+from typing import Any, Mapping
 
 from src.pipeline.candidates import (
     ExploitCandidate,
@@ -34,9 +34,9 @@ from src.pipeline.candidates import (
     derive_candidate_id,
     hash_artifact,
 )
-from src.pipeline.evidence import Fingerprint, VersionConstraint
+from src.pipeline.evidence import Fingerprint
 from src.pipeline.ledger import EventLedger
-from src.pipeline.manifest import ResourceLimits, Scope
+from src.pipeline.manifest import Scope
 from src.pipeline.runner import ReconObservation
 
 logger = logging.getLogger(__name__)
@@ -336,7 +336,6 @@ class PlannerAgent:
         it only detects the vulnerability presence and does not attempt
         exploitation.
         """
-        target = fingerprint.target_ip
         port = fingerprint.port or 80
         product = fingerprint.product.parsed
 

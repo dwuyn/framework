@@ -5,9 +5,8 @@ terminal reason instead of recursion overflow.
 """
 
 import unittest
-from unittest.mock import patch, MagicMock
 
-from src.agents.hypothesis_phase.critic_agent import _deterministic_fast_path, _apply_critic_report
+from src.agents.hypothesis_phase.critic_agent import _apply_critic_report, _deterministic_fast_path
 from src.retrieval.models import RetrievalBundle
 from src.state import initial_state
 

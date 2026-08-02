@@ -1,8 +1,10 @@
-# PentestAgent
+# VeriPlanPT
 
 ## Overview
 
-**PentestAgent** is an LLM-driven penetration testing framework that automates intelligence gathering, vulnerability analysis, and exploitation on disposable research targets. The framework is **fully autonomous** and operates against owned or explicitly authorised lab environments only.
+**VeriPlanPT** is an evidence-gated, budget-aware autonomous penetration-testing
+research framework for disposable lab targets. It operates only against owned
+or explicitly authorised benchmark environments.
 
 The research pipeline (current default) is an evidence-driven graph:
 
@@ -40,7 +42,9 @@ The framework is modular:
 - **Independent oracle** consumes benchmark evidence directly; agent
   explanations never prove success.
 
-For the original paper description, see [PentestAgent on arXiv](https://arxiv.org/abs/2411.05185).
+This repository is being prepared for the VeriPlanPT benchmark protocol. The
+original PentestAgent implementation remains useful only as a historical
+baseline reference.
 
 > **Lab-only policy.** This framework is for disposable research
 > environments only. Do not point it at production systems or networks you
@@ -83,25 +87,34 @@ Several environment variables need to be filled in. If you are not familiar with
 
 Python version: **3.12**
 
-Use a virtual environment:
+Poetry is the dependency source of truth:
 
 ```
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+poetry install --with dev
+poetry check
+poetry run pytest -q
+poetry run ruff check src tests
+poetry run pip check
 ```
 
-or with Conda:
+`requirements.txt` is a generated Docker input only; do not edit it manually.
+
+### 4. Dataset repository
+
+The framework expects the dataset to live outside this repository:
 
 ```
-conda create -n pentest python=3.12
-conda activate pentest
-python -m pip install -r requirements.txt
+export VERIPLANPT_DATASET_ROOT=../veriplanpt-dataset
 ```
+
+The local sibling repository is scaffolded at `../veriplanpt-dataset`. It must
+be populated with the 40 train cases, 27 test cases, hidden/public manifest
+split, replacement labs, validators, Docker smoke tests, and final
+`dataset.lock.json` before a real test matrix is allowed.
 
 ------
 
-### 4. Install CVEMAP
+### 5. Install CVEMAP
 
 [CVEMAP](https://github.com/projectdiscovery/cvemap) is needed to fetch CVE-related information. Follow their [installation](https://github.com/projectdiscovery/cvemap?tab=readme-ov-file#installation) instructions.
 
@@ -191,19 +204,59 @@ result = runner.run(
 
 ### Public benchmark bridge
 
-The external `../Data` harness supplies only `public_task.yml`. Run the
-current framework through the generic bridge; the harness owns proof upload
-and evaluator completion:
+The external harness supplies only `public_task.yml`. PublicTask v2 contains
+opaque case ID, track, objective, target, scope, and optional guided `hints`.
+It rejects CVE IDs, versions, hidden aliases, and decoy metadata.
+
+The bridge uses a pinned model-profile JSON/YAML contract. The profile must map
+one of the three logical labels to a real Vertex resource/revision and non-zero
+input/cached/output/thinking prices. Vertex live canary is intentionally skipped
+when requested, but placeholder profiles still fail local validation.
 
 ```bash
-python -m src.pipeline.data_bridge \
-  --public-task ../Data/.../public_task.yml --run-dir ./data/bridge-run \
-  --model-profile qwen3_coder_30b
+poetry run python -m src.pipeline.data_bridge \
+  --public-task ../veriplanpt-dataset/cases/vp-test-0001/public_task.yml \
+  --run-dir ./data/bridge-run \
+  --model-profile ./configs/model-profile.gemini-3.5-flash.json \
+  --budget-tier medium \
+  --repetition 1 \
+  --track blind \
+  --condition main
 ```
 
-Use `--variant baseline` for the frozen PoC-only comparison. Configure the
-Qwen, GPT-OSS, and optional Gemini profiles in `configs/config.yaml` from the
-tracked `configs/config.yaml.example` template.
+The canonical output is `run_artifact.json` (`RunArtifact v2`). The
+`framework_result.json` file is only a compatibility view generated from that
+artifact.
+
+### Policy, matrix, and metric tooling
+
+- `src.pipeline.llm_budget.BudgetedLLM` is the LLM-call budget authority and
+  emits normalized `llm_usage` / `budget_exceeded` events.
+- `src.scoring.paper_metrics.compute_paper_metrics` implements the paper metric
+  event schema: OSR, SSR, Correct-CVE@k, exploit precision, command/repetition
+  rates, recovery, HFR, cost/token usage, fixed-control FP, and robustness
+  degradation.
+- `src.planning.policy_lock` implements deterministic 5-fold policy-lock
+  helpers with seed `20260801`.
+- `src.pipeline.matrix.generate_matrix` generates the fixed 3,807-cell test
+  matrix and stable run IDs.
+- `src.pipeline.dataset_lock.validate_dataset_lock` rejects placeholder dataset
+  locks, CVE-leaking public case lists, missing model revisions, and wrong
+  replacement-case versions.
+
+### Baselines
+
+PentestGPT, PentestAgent, VulnBot, and HackSynth wrappers must emit the same
+`RunArtifact v2` contract. PentestGPT is treated as an automated deterministic
+executor wrapper in the protocol. The current repository does not mutate the
+baseline working trees; use detached worktrees/build contexts when adding the
+wrappers.
+
+### Freeze rule
+
+After dataset/policy/matrix freeze, do not tune framework code, policy,
+dataset, or evaluator based on test results. The full paid 3,807-run benchmark
+requires a separate cost approval request.
 
 ### Legacy PoC-only baseline
 

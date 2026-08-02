@@ -5,18 +5,40 @@ trust policy, and legacy reader compatibility.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import tempfile
 import unittest
 
 from src.pipeline.candidates import (
-    ExploitCandidate, LegacyPocCandidate, ProcedureStep, Provenance,
-    VersionConstraint, derive_candidate_id, evaluate_trust, hash_artifact,
-    is_executable, legacy_poc_to_exploit, load_candidate, save_candidate,
+    ExploitCandidate,
+    LegacyPocCandidate,
+    ProcedureStep,
+    Provenance,
+    derive_candidate_id,
+    evaluate_trust,
+    is_executable,
+    legacy_poc_to_exploit,
+    load_candidate,
+    save_candidate,
     substitute_placeholders,
 )
+from src.pipeline.collectors import (
+    ExploitDbSpec,
+    MetasploitSpec,
+    NativeToolSpec,
+    NmapNseSpec,
+    NucleiSpec,
+    PublicPocSpec,
+    VendorRecipeSpec,
+    collect_for_cve,
+    collect_metasploit,
+    collect_native_tool,
+    collect_nmap_nse,
+    collect_nuclei,
+    collect_vendor_recipe,
+)
+from src.pipeline.evidence import Fingerprint, ServiceObservation, fingerprint_service
 
 
 def _hash_of(path: str) -> str:
@@ -26,13 +48,6 @@ def _hash_of(path: str) -> str:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
-from src.pipeline.collectors import (
-    ExploitDbSpec, MetasploitSpec, NativeToolSpec, NmapNseSpec, NucleiSpec,
-    PublicPocSpec, VendorRecipeSpec, collect_for_cve, collect_metasploit,
-    collect_native_tool, collect_nmap_nse, collect_nuclei, collect_public_poc,
-    collect_vendor_recipe, render_metasploit_resource_script,
-)
-from src.pipeline.evidence import Fingerprint, IdentityField, ServiceObservation, fingerprint_service
 
 
 class TestCandidateInterface(unittest.TestCase):

@@ -16,9 +16,8 @@ The Verifier reads these to decide if we have enough evidence to proceed.
 
 from __future__ import annotations
 
-import json
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 
@@ -34,7 +33,7 @@ class ServiceInfo:
     confidence: float = 0.3                   # 0.0-1.0
     evidence: list[str] = field(default_factory=list)
     cpe: str = ""                             # CPE string if available
-    
+
     activated_at: float = 0.0
     deactivated_at: float = 0.0
     ttl_seconds: float = 3600.0
@@ -105,11 +104,11 @@ class HostInfo:
 
             existing.evidence.extend(svc.evidence)
             existing.accessibility = svc.accessibility
-            
+
             for src in svc.provenance_sources:
                 if src not in existing.provenance_sources:
                     existing.provenance_sources.append(src)
-            
+
             if svc.activated_at > 0:
                 existing.activated_at = svc.activated_at
             if svc.deactivated_at > 0:
@@ -229,14 +228,15 @@ class WorldState:
         now = time.time()
         result = {"hosts": {}}
         if service_key:
-            parts = service_key.split(":", 2)
-            if len(parts) == 3:
-                target_ip, target_port_str, target_product = parts
+            parts = service_key.split(":")
+            if len(parts) in {3, 4}:
+                target_ip, target_port_str = parts[:2]
+                target_product = parts[-1]
                 try:
                     target_port = int(target_port_str)
                 except ValueError:
                     return result
-                
+
                 host = self.hosts.get(target_ip)
                 if host:
                     for svc in host.services:

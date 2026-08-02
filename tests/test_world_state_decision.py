@@ -7,10 +7,9 @@ Unit tests for VeriPlanPT Phase D1 (WorldStateGraph) and Phase D2 (DecisionRecor
 from __future__ import annotations
 
 import time
-import pytest
 
-from src.memory.world_state import WorldState, HostInfo, ServiceInfo, Credential, Session
-from src.memory.decision import DecisionMemory, Decision
+from src.memory.decision import Decision, DecisionMemory
+from src.memory.world_state import ServiceInfo, WorldState
 
 
 class TestWorldStateD1:

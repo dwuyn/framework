@@ -17,8 +17,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field, asdict
-from typing import Optional
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass
@@ -40,7 +39,7 @@ class Episode:
 class EpisodicMemory:
     """
     Append-only structured action log.
-    
+
     Every tool call, LLM inference, and verifier check is recorded here
     with outcome and cost. The memory supports fast dedup detection and
     can generate compact context summaries for LLM prompt injection.
@@ -103,10 +102,10 @@ class EpisodicMemory:
         """
         Generate a compact text summary of recent actions for LLM context injection.
         This replaces raw message history with structured, compressed context.
-        
+
         Format:
           [step] phase: command → outcome (tokens)
-          
+
         Only includes the last max_entries episodes + a stats header.
         """
         total = len(self._episodes)

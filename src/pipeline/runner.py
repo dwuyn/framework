@@ -20,29 +20,42 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Mapping
+from dataclasses import dataclass
+from typing import Callable, Mapping
 
 from src.pipeline.budget import BudgetExceeded, ResourceBudget
-from src.pipeline.candidates import ExploitCandidate, is_executable, substitute_placeholders
+from src.pipeline.candidates import ExploitCandidate, is_executable
 from src.pipeline.evidence import (
-    Fingerprint, ServiceObservation, fingerprint_service,
+    Fingerprint,
+    ServiceObservation,
+    fingerprint_service,
 )
-from src.pipeline.ledger import Event, EventLedger
+from src.pipeline.ledger import EventLedger
 from src.pipeline.manifest import (
-    ResourceLimits, RunManifest, Scope, new_manifest,
+    ResourceLimits,
+    RunManifest,
+    Scope,
 )
 from src.pipeline.oracle import (
-    BenchmarkOracle, Oracle, OracleResult, ProofArtifact,
+    BenchmarkOracle,
+    Oracle,
+    OracleResult,
+    ProofArtifact,
 )
 from src.pipeline.queue import (
-    CandidateQueue, RankedCandidate, rank_candidates, shortlist,
+    CandidateQueue,
+    RankedCandidate,
+    rank_candidates,
+    shortlist,
 )
 from src.pipeline.renderers import RenderedStep, RenderError, render_procedure
-from src.pipeline.scope import ScopeDecision, ScopeValidator
+from src.pipeline.scope import ScopeValidator
 from src.pipeline.sources import (
-    BaseAdapter, CveListV5Adapter, NvdAdapter, VulnxAdapter,
-    SourceRegistry, RawCveRecord,
+    CveListV5Adapter,
+    NvdAdapter,
+    RawCveRecord,
+    SourceRegistry,
+    VulnxAdapter,
 )
 
 # ── Hooks for testing/dry-run ─────────────────────────────────────────────────
@@ -196,7 +209,13 @@ class PipelineRunner:
                 continue
             if step_indexes is not None and index not in step_indexes:
                 continue
-            self.budget.record_tool_call()
+            try:
+                self.budget.record_tool_call()
+            except BudgetExceeded:
+                self.ledger.record(phase="execution", stage="execution_failure",
+                                   candidate_id=candidate.candidate_id,
+                                   outcome="execution_failed", failure_class="budget_exceeded")
+                return results
             dec = self.validator.validate_args(step.argv, stage=step.stage)
             if not dec:
                 self.ledger.record(
@@ -333,6 +352,20 @@ class PipelineRunner:
                 session.last_verified_at = time.time()
                 session.verification_evidence = "session.list"
                 executed.evidence_kind = "session_verified"
+                self.ledger.record(
+                    phase="maintain",
+                    stage="session_continuity",
+                    candidate_id=candidate.candidate_id,
+                    method=candidate.kind,
+                    cve_id=candidate.cve_id,
+                    detail="metasploit session verified after exploit",
+                    payload={
+                        "event_type": "session_continuity",
+                        "session_id": session.session_id,
+                        "verified": True,
+                        "verification_command": "session.list",
+                    },
+                )
             return executed
         except Exception as exc:  # RPC failures are classified, never retried blindly.
             return RuntimeResult(ExecutionResult(1, "", str(exc), 0), "runtime_error")

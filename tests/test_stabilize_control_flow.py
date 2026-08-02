@@ -4,27 +4,27 @@ Tests for stabilized recon-to-hypothesis control flow.
 
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import HumanMessage
 
-from src.agents.hypothesis_phase.critic_agent import _deterministic_fast_path, _apply_critic_report, _next_non_exhausted_service
+from src.agents.hypothesis_phase.critic_agent import (
+    _apply_critic_report,
+    _deterministic_fast_path,
+    _next_non_exhausted_service,
+)
 from src.agents.hypothesis_phase.retrieval_agent import retrieval_agent_node
 from src.agents.recon import (
     _LOW_SIGNAL_SERVICES,
-    _parse_nmap_services,
     _dedup_recent_commands,
+    _parse_nmap_services,
     _targeted_recon_messages,
 )
-from src.agents.verifier import recon_verifier_node, hypothesis_verifier_node, MAX_VERIFIER_BLOCKS
-from src.memory.decision import DecisionMemory
-from src.memory.episodic import EpisodicMemory, Episode
+from src.agents.verifier import MAX_VERIFIER_BLOCKS, hypothesis_verifier_node, recon_verifier_node
+from src.memory.episodic import Episode, EpisodicMemory
 from src.memory.world_state import HostInfo, ServiceInfo, WorldState
 from src.retrieval.authoritative import _load_curated_benchmark_cve_cache
 from src.retrieval.models import (
-    AuthoritativeRecord,
-    PocCandidate,
-    ProcedureSnippet,
     ProductFingerprint,
     RetrievalBundle,
 )
@@ -772,8 +772,8 @@ class TestUnifiedGenericLabels(unittest.TestCase):
         self.assertIn("http proxy", LOW_SIGNAL_LABELS)
 
     def test_recon_uses_shared_set(self):
-        from src.agents.recon import _GENERIC_LABELS
         from src.agents.hypothesis_phase.shared import LOW_SIGNAL_LABELS
+        from src.agents.recon import _GENERIC_LABELS
         self.assertEqual(_GENERIC_LABELS, LOW_SIGNAL_LABELS)
 
     def test_http_proxy_resolves_to_httpd_keyword(self):

@@ -14,7 +14,7 @@ LLM reasoning, evidence references, and eventual outcome.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 
@@ -30,7 +30,7 @@ class Decision:
     evidence_refs: list[int] = field(default_factory=list)  # episodic step indices
     confidence: float = 0.0                    # 0.0-1.0
     outcome: str = "pending"                   # "pending" | "validated" | "invalidated"
-    
+
     action: str = ""
     evidence_ids: list[str] = field(default_factory=list)
     difficulty_vector: dict = field(default_factory=dict)

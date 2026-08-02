@@ -26,7 +26,6 @@ from src.pipeline.oracle import (
     TargetTruth,
 )
 
-
 # A variant runner executes the pipeline for one target and returns the proof
 # artifacts it produced. It is expected to populate the ledger with structured
 # events. It must not decide success itself.

@@ -24,8 +24,6 @@ from src.agents.recon import _build_target_services, _targeted_recon_messages
 from src.memory.world_state import HostInfo, ServiceInfo, WorldState
 from src.retrieval.models import (
     AuthoritativeRecord,
-    PocCandidate,
-    ProcedureSnippet,
     ProductFingerprint,
     RetrievalBundle,
 )
@@ -134,8 +132,9 @@ class TestReconCompletionPhase2TargetInit(unittest.TestCase):
 
     def test_phase2_target_fields_set_from_primary(self):
         """Verify the recon completion update dict has correct phase2_target_* fields."""
-        from src.agents.recon import recon_node
         from unittest.mock import MagicMock
+
+        from src.agents.recon import recon_node
 
         with patch("src.agents.recon.get_config") as mock_cfg:
             mock_llm = MagicMock()
@@ -424,7 +423,7 @@ class TestTargetedReconScoping(unittest.TestCase):
         state["phase2_route"] = "recon"
         state["phase2_target_port"] = 8080
         state["phase2_target_service_key"] = service_target_key("10.105.196.239", 8080, "httpd")
-        from src.memory.episodic import EpisodicMemory, Episode
+        from src.memory.episodic import Episode, EpisodicMemory
         em = EpisodicMemory()
         em.log(Episode(step=1, timestamp=0.0, phase="recon", action_type="tool_call",
                         command="nmap -sV -p 5060 10.105.196.239"))

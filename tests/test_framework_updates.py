@@ -1,9 +1,11 @@
 import unittest
-from unittest.mock import patch
-from types import SimpleNamespace
 
 from src.agents.planning import _apply_candidate_priority
-from src.agents.verifier import execution_verifier_node, hypothesis_verifier_node, recon_verifier_node
+from src.agents.verifier import (
+    execution_verifier_node,
+    hypothesis_verifier_node,
+    recon_verifier_node,
+)
 from src.memory.decision import Decision, DecisionMemory
 from src.memory.episodic import Episode, EpisodicMemory
 from src.state import initial_state

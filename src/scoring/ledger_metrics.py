@@ -21,12 +21,10 @@ Secondary metrics:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from src.pipeline.ledger import EventLedger, ALLOWED_OUTCOMES
-
+from src.pipeline.ledger import EventLedger
 
 # ── Data containers ─────────────────────────────────────────────────────────
 
@@ -173,7 +171,7 @@ def compute_metrics(
         metrics.osr = 0.0  # FP does not count as success
 
     # ── SSR ────────────────────────────────────────────────────────────────────
-    phases = {e.phase for e in events if e.phase}
+    {e.phase for e in events if e.phase}
     recon_events = [e for e in events if e.phase == "recon"]
     vuln_events = [e for e in events if e.phase in ("retrieve", "candidates", "queue")]
     exploit_events = [e for e in events if e.phase == "execution"]

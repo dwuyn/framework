@@ -15,11 +15,13 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from src.agents.hypothesis_phase.shared import (
+    keyword_from_fingerprints as _shared_keyword_from_fingerprints,
+)
 from src.config import get_config
 from src.memory.decision import Decision, DecisionMemory
 from src.memory.episodic import Episode, EpisodicMemory
 from src.memory.world_state import WorldState
-
 from src.retrieval import (
     RetrievalBundle,
     apply_cpe_updates,
@@ -39,7 +41,6 @@ from src.retrieval.models import (
 )
 from src.state import PentestState, runtime_exceeded, service_target_key
 from src.utils.structured_logger import get_structured_logger
-from src.agents.hypothesis_phase.shared import keyword_from_fingerprints as _shared_keyword_from_fingerprints
 
 logger = logging.getLogger(__name__)
 slog = get_structured_logger()

@@ -8,19 +8,16 @@ verifier routing, and backward compatibility with the v5 graph.
 import os
 import sys
 import unittest
-from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.pipeline.candidates import (
-    ExploitCandidate, ProcedureStep, Provenance, SUPPORTED_KINDS,
+    SUPPORTED_KINDS,
+    ExploitCandidate,
+    ProcedureStep,
+    Provenance,
     derive_candidate_id,
 )
-from src.pipeline.queue import CandidateQueue, RankedCandidate
-from src.agents.planner import PlannerProposal
-from src.agents.critic import CriticVerdict
-from src.agents.verifier_pipeline import VerifierDecision
-
 
 # ── Graph topology tests ─────────────────────────────────────────────────────
 
@@ -51,7 +48,7 @@ class TestGraphV6Topology(unittest.TestCase):
         self.assertEqual(config["recursion_limit"], 100)
 
     def test_build_graph_calls_v6(self):
-        from src.graph import build_graph, _build_v6_graph
+        from src.graph import build_graph
         # build_graph should be _build_v6_graph.
         graph1, _ = build_graph("test-default")
         self.assertIsNotNone(graph1)

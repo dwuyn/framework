@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field

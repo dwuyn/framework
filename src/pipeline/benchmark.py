@@ -15,14 +15,12 @@ import csv
 import json
 import math
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from src.pipeline.evaluator import ResultRow
 from src.pipeline.ledger import ALLOWED_OUTCOMES, EventLedger
-from src.pipeline.oracle import ProofArtifact, ProofSpec, TargetTruth
-
+from src.pipeline.oracle import ProofSpec, TargetTruth
 
 VARIANT_SETTINGS = {
     "1": {"automatic_exploit_compilation": False, "automatic_metasploit_discovery": False,

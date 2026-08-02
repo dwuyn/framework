@@ -15,7 +15,12 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Protocol
 
 from src.pipeline.candidates import ExploitCandidate, derive_candidate_id
-from src.pipeline.collectors import ExploitDbSpec, MetasploitSpec, collect_exploitdb, collect_metasploit
+from src.pipeline.collectors import (
+    ExploitDbSpec,
+    MetasploitSpec,
+    collect_exploitdb,
+    collect_metasploit,
+)
 
 
 def _language(path: str) -> str:

@@ -14,16 +14,16 @@ Every verdict must cite specific state keys and evidence IDs.
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from src.pipeline.candidates import ExploitCandidate, is_executable
+from src.pipeline.candidates import ExploitCandidate
 from src.pipeline.evidence import Fingerprint
 from src.pipeline.ledger import EventLedger
-from src.pipeline.oracle import OracleResult, ProofArtifact
-from src.pipeline.queue import CandidateQueue, RankedCandidate
+from src.pipeline.oracle import ProofArtifact
+from src.pipeline.queue import CandidateQueue
 from src.pipeline.runner import ExecutionResult
 
 logger = logging.getLogger(__name__)

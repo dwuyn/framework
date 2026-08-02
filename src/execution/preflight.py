@@ -134,7 +134,7 @@ def _derive_setup_commands(
         return [], "Workspace installs are disabled."
 
     venv_dir = os.path.join(workspace_dir, ".venv")
-    venv_python = os.path.join(venv_dir, "bin", "python")
+    os.path.join(venv_dir, "bin", "python")
     venv_pip = os.path.join(venv_dir, "bin", "pip")
     commands: list[str] = []
     venv_bootstrap_added = False

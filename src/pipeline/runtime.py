@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import os
 import secrets
 import subprocess
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from src.pipeline.candidates import ExploitCandidate

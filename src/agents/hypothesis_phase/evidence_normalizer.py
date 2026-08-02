@@ -23,7 +23,7 @@ from src.retrieval import (
 from src.state import PentestState, runtime_exceeded
 from src.utils.structured_logger import get_structured_logger
 
-from .shared import emit_budget_event, hypothesis_runtime_cfg, log_stage, persist_bundle_artifacts
+from .shared import hypothesis_runtime_cfg, log_stage, persist_bundle_artifacts
 
 slog = get_structured_logger()
 
@@ -126,7 +126,7 @@ def _normalize_evidence(
 
 
 def evidence_normalizer_node(state: PentestState) -> dict[str, Any]:
-    cfg = get_config()
+    get_config()
     runtime_cfg = hypothesis_runtime_cfg(state)
     retrieval_cfg = runtime_cfg["retrieval"]
     ws = WorldState.from_dict(state.get("world_state", {}))

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Optional
+from typing import Optional
 
 
 def extract_json(text: str) -> Optional[dict | list]:

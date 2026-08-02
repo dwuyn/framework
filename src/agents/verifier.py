@@ -20,7 +20,6 @@ Each verifier:
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from typing import Any, Dict
@@ -215,7 +214,6 @@ def recon_verifier_node(state: PentestState) -> Dict[str, Any]:
         }
 
     # ── LLM consistency check (only when programmatic check passes) ───────────
-    llm_verdict = "proceed"
     llm_reason = reason
     llm_issues: list = []
 
@@ -252,7 +250,6 @@ def recon_verifier_node(state: PentestState) -> Dict[str, Any]:
             if parsed.get("consistency") == "conflict":
                 llm_issues = parsed.get("issues", [])
                 llm_reason = f"LLM detected conflicts: {'; '.join(llm_issues[:3])}"
-                llm_verdict = "proceed"  # still proceed — conflicts are informational
                 logger.warning("Recon verifier (LLM): conflicts detected — %s", llm_reason)
             else:
                 llm_reason = parsed.get("reason", reason)
@@ -310,7 +307,7 @@ def hypothesis_verifier_node(state: PentestState) -> Dict[str, Any]:
     this adapter maps that result into the older proceed/need_more_recon semantics.
     Otherwise it falls back to the previous deterministic verifier behavior.
     """
-    cfg = get_config()
+    get_config()
     hypotheses = state.get("vuln_hypotheses", [])
     retrieval_bundle = state.get("retrieval_bundle", {}) or {}
     vlog = list(state.get("verification_log", []))
@@ -633,7 +630,7 @@ def execution_verifier_node(state: PentestState) -> Dict[str, Any]:
     2. Repetition: same exploit attempt with same params?
     3. Exhaustion: have we tried all exploits in the plan?
     """
-    cfg = get_config()
+    get_config()
     em = EpisodicMemory.from_list(state.get("episodic_memory", []))
     vlog = list(state.get("verification_log", []))
     exec_step = state.get("execution_step_count", 0)

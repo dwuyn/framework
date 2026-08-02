@@ -5,16 +5,19 @@ Golden tests for M5: metrics from events only, benchmark manifests, reporting.
 from __future__ import annotations
 
 import csv
-import json
 import os
 import shutil
 import tempfile
 import unittest
 
 from src.pipeline.benchmark import (
-    BenchmarkManifest, BenchmarkTarget, aggregate_metrics,
-    metrics_from_ledger, write_per_target_table, write_summary,
+    BenchmarkManifest,
+    BenchmarkTarget,
     _wilson_interval,
+    aggregate_metrics,
+    metrics_from_ledger,
+    write_per_target_table,
+    write_summary,
 )
 from src.pipeline.evaluator import ResultRow
 from src.pipeline.ledger import EventLedger

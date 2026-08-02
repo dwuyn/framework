@@ -6,19 +6,18 @@ foreign IP rejection, malformed fragment detection, and fallback workdir.
 import os
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
-from src.execution.placeholders import render_template, extract_placeholder_names
+from src.agents.execution import execution_node
+from src.execution.placeholders import extract_placeholder_names, render_template
 from src.execution.preflight import (
-    _is_malformed_fragment,
-    _has_unmatched_quotes,
     _contains_foreign_ip,
     _filter_commands,
+    _is_malformed_fragment,
     _prefix_workdir,
     prepare_candidate,
 )
-from src.agents.execution import execution_node
 from src.memory.world_state import WorldState
 from src.state import initial_state
 

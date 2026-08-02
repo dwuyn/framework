@@ -22,7 +22,6 @@ from urllib.parse import urlparse
 
 from src.pipeline.manifest import Scope
 
-
 # ── Regexes ───────────────────────────────────────────────────────────────────
 _IPV4_RE = re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3})\b")
 _IPV6_RE = re.compile(r"(?:\[([0-9a-fA-F:]+)\])|(?<![0-9a-fA-F:])([0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){2,7})(?![0-9a-fA-F:])")
@@ -154,7 +153,7 @@ class ScopeValidator:
         port = parsed.port
         scheme = parsed.scheme.lower()
         # Strip IPv6 brackets already handled by urlparse.
-        kind = "ipv6" if ":" in host and host.count(":") >= 2 else ("ipv4" if self._is_ipv4(host) else "hostname")
+        "ipv6" if ":" in host and host.count(":") >= 2 else ("ipv4" if self._is_ipv4(host) else "hostname")
         return Endpoint(raw=url, kind="url", host=host, port=port, scheme=scheme)
 
     @staticmethod

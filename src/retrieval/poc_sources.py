@@ -142,14 +142,14 @@ def collect_poc_candidates(
         exploitdb_dir = os.path.join(cve_dir, "ExploitDB")
         google_dir = os.path.join(cve_dir, "Google")
         os.makedirs(cve_dir, exist_ok=True)
-        
+
         candidates = []
         try:
             candidates = _exploitdb_candidates(record.cve_id, exploitdb_dir, cfg)
         except Exception as exc:
             if errors is not None:
                 errors.append(f"ExploitDB search for '{record.cve_id}' failed: {exc}")
-        
+
         try:
             github_res = _github_candidates(record.cve_id, github_dir, cfg)
             candidates.extend(github_res)
@@ -164,7 +164,7 @@ def collect_poc_candidates(
             except Exception as exc:
                 if errors is not None:
                     errors.append(f"Google search fallback for '{record.cve_id}' failed: {exc}")
-        
+
         all_candidates.extend(candidates)
     return all_candidates
 

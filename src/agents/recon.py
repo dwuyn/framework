@@ -25,10 +25,9 @@ from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-from src.agents.verifier import _check_recon_sufficiency
 from src.agents.hypothesis_phase.shared import LOW_SIGNAL_LABELS
 from src.config import get_config
-from src.memory.episodic import EpisodicMemory, Episode
+from src.memory.episodic import Episode, EpisodicMemory
 from src.memory.world_state import ServiceInfo, WorldState
 from src.state import PentestState, runtime_exceeded, service_target_key
 from src.tools.shell import run_shell
@@ -452,7 +451,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     llm_with_tools = llm.bind_tools(tools)
 
     step = state.get("recon_step_count", 0)
-    max_steps = state.get("recon_max_steps", 12)
+    state.get("recon_max_steps", 12)
     target_ip = state["target_ip"]
 
     # Accumulator baseline

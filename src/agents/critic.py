@@ -14,14 +14,12 @@ The critic checks:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from dataclasses import dataclass
+from typing import Any, Mapping
 
 from src.pipeline.candidates import (
     ExploitCandidate,
-    PLACEHOLDER_RE,
     substitute_placeholders,
-    SUPPORTED_KINDS,
 )
 from src.pipeline.evidence import Fingerprint, constraint_matches
 from src.pipeline.ledger import EventLedger

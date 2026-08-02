@@ -43,14 +43,15 @@ import time
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from src.agents.recon import recon_node
-from src.agents.planner import PlannerAgent, PlannerProposal, validate_guided_procedure
-from src.agents.critic import CriticAgent, CriticVerdict
-from src.agents.verifier_pipeline import PipelineVerifierAgent, VerifierDecision
+from src.agents.critic import CriticAgent
 from src.agents.executor import ExecutorAgent
+from src.agents.planner import PlannerAgent, PlannerProposal
+from src.agents.recon import recon_node
+from src.agents.verifier_pipeline import PipelineVerifierAgent, VerifierDecision
 from src.config import get_config
+from src.memory.decision import Decision, DecisionMemory
 from src.pipeline.budget import BudgetExceeded, BudgetTier, ResourceBudget
-from src.pipeline.candidates import ExploitCandidate, ProcedureStep, SUPPORTED_KINDS
+from src.pipeline.candidates import ExploitCandidate, ProcedureStep
 from src.pipeline.collectors import (
     ExploitDbSpec,
     MetasploitSpec,
@@ -64,7 +65,6 @@ from src.pipeline.collectors import (
     index_nse_scripts,
 )
 from src.pipeline.compiler import ExploitCompiler
-from src.pipeline.metasploit_rpc import MetasploitRpcService
 from src.pipeline.ledger import EventLedger
 from src.pipeline.manifest import (
     ResourceLimits,
@@ -72,9 +72,10 @@ from src.pipeline.manifest import (
     Scope,
     new_manifest,
 )
+from src.pipeline.metasploit_rpc import MetasploitRpcService
 from src.pipeline.oracle import BenchmarkOracle, OracleResult, ProofArtifact, TargetTruth
-from src.pipeline.runner import PipelineRunner, ReconObservation
-from src.pipeline.queue import CandidateQueue, RankedCandidate
+from src.pipeline.queue import CandidateQueue
+from src.pipeline.runner import ExecutionResult, PipelineRunner, ReconObservation
 from src.pipeline.sources import (
     CveListV5Adapter,
     NvdAdapter,
@@ -82,6 +83,8 @@ from src.pipeline.sources import (
     SourceRegistry,
     VulnxAdapter,
 )
+from src.planning.difficulty import DifficultyEstimator
+from src.planning.policy import BudgetPolicy
 from src.state import PentestState
 
 logger = logging.getLogger(__name__)
@@ -121,14 +124,14 @@ class _DiskBackedSaver(MemorySaver):
             try:
                 with open(path, "rb") as f:
                     data = pickle.load(f)
-                
+
                 if "storage" in data:
                     _from_dict(data["storage"], self.storage)
                 if "writes" in data:
                     _from_dict(data["writes"], self.writes)
                 if "blobs" in data and hasattr(self, "blobs"):
                     _from_dict(data["blobs"], self.blobs)
-                    
+
                 logger.info("Restored checkpoint from %s", path)
             except Exception as exc:
                 logger.warning("Could not load checkpoint %s: %s", path, exc)
@@ -226,6 +229,15 @@ def _route_queue_to_planner(state: PentestState) -> str:
     if state.get("current_phase") == "done":
         return "end"
     return "pipeline_planner"
+
+
+def _route_retrieve(state: PentestState) -> str:
+    """Infrastructure retrieval failures terminate through finalize."""
+    if state.get("retrieval_status") == "dataset_missing":
+        return "pipeline_finalize"
+    if state.get("current_phase") == "done":
+        return "end"
+    return "pipeline_queue"
 
 
 def _route_planner(state: PentestState) -> str:
@@ -380,6 +392,8 @@ def _role_llm(state: PentestState, role: str):
     try:
         return get_config().get_role_llm(role, str(state.get("model_profile") or ""))
     except Exception as exc:
+        if state.get("model_profile"):
+            raise RuntimeError(f"Configured model profile cannot be loaded for {role}: {exc}") from exc
         logger.warning("%s model unavailable: %s", role, exc)
         return None
 
@@ -413,8 +427,18 @@ def _role_usage(state: PentestState, role: str, llm, usage: dict | None = None) 
             )
         except BudgetExceeded:
             pass  # budget exceeded is checked separately per node
-        # Persist updated budget state back into records for return merge
-        record["_budget_state"] = budget.state_to_dict()
+        # Nodes only return partial state updates, so persist the singleton
+        # immediately as well as exposing it in telemetry for audit/replay.
+        serialized = budget.state_to_dict()
+        state["budget_state"] = serialized
+        state["total_input_tokens"] = budget.state.total_input_tokens
+        state["total_cached_input_tokens"] = budget.state.total_cached_input_tokens
+        state["total_output_tokens"] = budget.state.total_output_tokens
+        state["total_thinking_tokens"] = budget.state.total_thinking_tokens
+        state["total_tokens"] = budget.state.total_tokens
+        state["total_llm_requests"] = budget.state.llm_calls
+        state["total_usd"] = budget.state.total_usd
+        record["budget_state"] = serialized
     return records
 
 
@@ -452,10 +476,11 @@ def _source_registry(state: PentestState, manifest: RunManifest, ledger: EventLe
 def _runner(state: PentestState, manifest: RunManifest, ledger: EventLedger) -> PipelineRunner:
     limits = ResourceLimits(**manifest.limits)
     scope = Scope.from_dict(manifest.scope)
+    serialized_budget = dict(state.get("budget_state") or {})
     return PipelineRunner(
         manifest=manifest,
         ledger=ledger,
-        budget=ResourceBudget(limits),
+        budget=ResourceBudget.restore(limits, serialized_budget) if serialized_budget else ResourceBudget(limits),
         scope=scope,
         sources=_source_registry(state, manifest, ledger),
     )
@@ -896,6 +921,7 @@ def pipeline_execute_node(state: PentestState) -> dict:
     if intent.step_index < 0:
         return {"current_phase": "pipeline_execute", "role_usage": _role_usage(state, "executor", llm)}
     session_artifacts = list(state.get("session_artifacts") or [])
+    attempt_succeeded = False
     if target.runtime_kind == "metasploit_rpc":
         rpc_result = runner.execute_metasploit_lifecycle(target, fp)
         runner.last_results = [rpc_result.result]
@@ -906,13 +932,26 @@ def pipeline_execute_node(state: PentestState) -> dict:
         # can decide whether to retry or rotate.
         if rpc_result.session:
             completed.update(range(len(target.procedure)))
+            attempt_succeeded = True
         else:
             # Mark step 0 as attempted (the launch step) but not terminal.
             completed.add(0)
     else:
-        runner._execute_one(rc, fp, verifier_approved_ids={target.candidate_id}, step_indexes={intent.step_index},
-                            count_attempt=not completed)
-        completed.add(intent.step_index)
+        runner._execute_one(
+            rc,
+            fp,
+            verifier_approved_ids={target.candidate_id},
+            step_indexes={intent.step_index},
+            count_attempt=not completed,
+        )
+        attempt_succeeded = bool(runner.last_results) and all(
+            result.returncode == 0 for result in runner.last_results
+        )
+        if attempt_succeeded:
+            completed.add(intent.step_index)
+        else:
+            candidate_progress.setdefault("attempted", []).append(intent.step_index)
+            candidate_progress.setdefault("failed", []).append(intent.step_index)
     candidate_progress["completed"] = sorted(completed)
     candidate_progress["terminal"] = len(completed) >= len(target.procedure) or \
         target.procedure[intent.step_index].stage == "cleanup"
@@ -941,6 +980,7 @@ def pipeline_execute_node(state: PentestState) -> dict:
         "execution_intent": intent.to_dict(),
         "lifecycle_progress": progress,
         "session_artifacts": session_artifacts,
+        "budget_state": runner.budget.state_to_dict(),
         "role_usage": _role_usage(state, "executor", llm),
         "execution_step_count": int(state.get("execution_step_count", 0) or 0) + 1,
     }
@@ -981,6 +1021,44 @@ def pipeline_planner_node(state: PentestState) -> dict:
     eligible = [rc.candidate for rc in queue.ranked if rc.candidate.candidate_id not in attempted]
     catalog = [c for c in eligible if c.kind != "guided_procedure"]
     catalog_exhausted = not catalog
+    # The policy is part of the real selection path, not an offline helper.
+    # Candidate ordering is deterministic for ties so reruns/resume are stable.
+    limits = ResourceLimits(**manifest.limits)
+    confidence = 0.8 if fp.applicability_grade() == "exact" else 0.5
+    policy = BudgetPolicy()
+    policy.restore_state(dict(state.get("policy_state") or {}))
+    _, difficulty = DifficultyEstimator.from_budget_state(
+        dict(state.get("budget_state") or {}), limits.max_tool_calls,
+        limits.max_executed_commands, limits.max_total_tokens,
+        mean_confidence=confidence,
+    )
+    scored = [policy.score_action(
+        candidate_id=item.candidate_id, service_key=fp.service_key, cve_id=item.cve_id,
+        kind=item.kind, p_success=confidence,
+        expected_evidence_gain=min(1.0, len(item.expected_evidence) / 3.0),
+        normalized_cost=min(1.0, len(item.procedure) / max(1, limits.max_executed_commands)),
+        risk=0.8 if item.requires_callback or item.auth_required == "unknown" else 0.2,
+        difficulty=difficulty,
+    ) for item in catalog]
+    scored = policy.rank_actions(scored)
+    rank = {item.candidate_id: item for item in scored}
+    catalog.sort(key=lambda item: (-rank[item.candidate_id].policy_score, item.candidate_id))
+    if scored:
+        budget_before = dict(state.get("budget_state") or {})
+        decision_memory = DecisionMemory.from_list(list(state.get("decision_memory") or []))
+        decision_memory.record(Decision(
+            step=len(decision_memory.to_list()) + 1, phase="planning",
+            question="Which candidate should be attempted next?", chosen=catalog[0].candidate_id,
+            alternatives=[item.candidate_id for item in catalog[1:]],
+            evidence_ids=list(fp.evidence_sources), difficulty_vector=difficulty.to_dict(),
+            expected_utility=rank[catalog[0].candidate_id].policy_score,
+            budget_before=budget_before, budget_after=budget_before,
+            verifier_verdict="pending", action="select_candidate",
+        ))
+        ledger.record(phase="planner", stage="policy_decision", service=fp.service_key,
+                      candidate_id=catalog[0].candidate_id, policy_decision="rank",
+                      payload={"difficulty": difficulty.to_dict(),
+                               "scored_actions": [item.to_dict() for item in scored]})
     references: list[str] = []
     records = _load_records((state.get("pipeline_result", {}) or {}).get("source_records_path") or _records_path(manifest))
     for record in records:
@@ -1017,6 +1095,8 @@ def pipeline_planner_node(state: PentestState) -> dict:
         "exploit_candidates": [c.to_dict() for c in all_candidates],
         "active_plan": proposal.to_dict() if proposal else {},
         "active_fp_key": active_key,
+        "decision_memory": decision_memory.to_list() if scored else list(state.get("decision_memory") or []),
+        "policy_state": policy.state_to_dict(),
         "role_usage": _role_usage(state, "restore_planner" if state.get("last_execution_result") else "planner", llm),
     }
 
@@ -1034,7 +1114,9 @@ def pipeline_critic_node(state: PentestState) -> dict:
     observations = _observations_from_state(state)
     runner = _runner(state, manifest, ledger)
     fps = runner.evidence(observations)
-    fp = fps[0] if fps else None
+    active_key = str(state.get("active_fp_key") or "")
+    fp = next((item for item in fps if item.service_key == active_key), None) if active_key else None
+    fp = fp or (fps[0] if fps else None)
 
     llm = _role_llm(state, "critic")
     critic = CriticAgent(
@@ -1071,7 +1153,9 @@ def pipeline_verifier_node(state: PentestState) -> dict:
     runner = _runner(state, manifest, ledger)
     observations = _observations_from_state(state)
     fps = runner.evidence(observations)
-    fp = fps[0] if fps else None
+    active_key = str(state.get("active_fp_key") or "")
+    fp = next((item for item in fps if item.service_key == active_key), None) if active_key else None
+    fp = fp or (fps[0] if fps else None)
 
     candidates = _candidate_objs(state.get("exploit_candidates", []))
     queue = runner.build_queue(fp=fp, candidates=candidates) if fp else CandidateQueue(ranked=[])
@@ -1205,6 +1289,50 @@ def pipeline_oracle_node(state: PentestState) -> dict:
     }
 
 
+def pipeline_finalize_node(state: PentestState) -> dict:
+    """Normalize terminal infrastructure/model/budget failures.
+
+    This node is intentionally separate from the oracle.  It does not inspect
+    hidden truth and is used when the run cannot validly reach evaluation.
+    """
+    manifest = _manifest_from_state(state)
+    ledger = _open_ledger(state, manifest)
+    result = dict(state.get("pipeline_result", {}) or {})
+    fail_reason = str(result.get("retrieval_fail_reason") or state.get("retrieval_status") or "")
+    if fail_reason == "dataset_missing":
+        terminal_status = "infrastructure_failure"
+        failure_class = "dataset_missing"
+        detail = "required retrieval snapshot/dataset is missing"
+    else:
+        terminal_status = str(result.get("termination_status") or "infrastructure_failure")
+        failure_class = str(result.get("failure_class") or "infrastructure_failure")
+        detail = str(result.get("reason") or "run finalized before oracle")
+    ledger.record(
+        phase="lifecycle",
+        stage="termination",
+        outcome=terminal_status,
+        failure_class=failure_class,
+        detail=detail,
+    )
+    result.update({
+        "outcome": terminal_status,
+        "termination_status": terminal_status,
+        "terminal_causal_class": failure_class,
+        "reason": detail,
+        "ledger_path": _ledger_path(state, manifest),
+        "run_dir": manifest.run_dir,
+    })
+    _save_manifest(manifest)
+    return {
+        "current_phase": "done",
+        "pipeline_manifest": manifest.to_dict(),
+        "pipeline_result": result,
+        "execution_success": False,
+        "execution_summary": detail,
+        "run_end_time": time.time(),
+    }
+
+
 def _build_v5_graph(thread_id: str):
     """Build the legacy v5 deterministic pipeline graph.
 
@@ -1223,6 +1351,7 @@ def _build_v5_graph(thread_id: str):
     graph.add_node("pipeline_queue", pipeline_queue_node)
     graph.add_node("pipeline_execute", pipeline_execute_node)
     graph.add_node("pipeline_oracle", pipeline_oracle_node)
+    graph.add_node("pipeline_finalize", pipeline_finalize_node)
 
     # ── Edges ─────────────────────────────────────────────────────────────────
     graph.set_entry_point("recon")
@@ -1233,10 +1362,15 @@ def _build_v5_graph(thread_id: str):
         "end": END,
     })
     graph.add_edge("pipeline_prepare", "pipeline_retrieve")
-    graph.add_edge("pipeline_retrieve", "pipeline_queue")
+    graph.add_conditional_edges("pipeline_retrieve", _route_retrieve, {
+        "pipeline_queue": "pipeline_queue",
+        "pipeline_finalize": "pipeline_finalize",
+        "end": END,
+    })
     graph.add_edge("pipeline_queue", "pipeline_execute")
     graph.add_edge("pipeline_execute", "pipeline_oracle")
     graph.add_edge("pipeline_oracle", END)
+    graph.add_edge("pipeline_finalize", END)
 
     # ── Compile with disk-backed MemorySaver ──────────────────────────────────
     compiled = graph.compile(
@@ -1264,8 +1398,6 @@ def _build_v6_graph(thread_id: str):
     it decides: collect_evidence, replan, execute (next candidate),
     or stop.  A hard loop cap (default 5) prevents infinite cycling.
     """
-    from src.pipeline.queue import CandidateQueue as _CQ
-    from src.pipeline.candidates import SUPPORTED_KINDS as _SK
 
     checkpoint_path = os.path.join(_CHECKPOINT_DIR, f"{thread_id}.pkl")
     saver = _DiskBackedSaver(checkpoint_path)
@@ -1283,6 +1415,7 @@ def _build_v6_graph(thread_id: str):
     graph.add_node("pipeline_targeted_recon", pipeline_targeted_recon_node)
     graph.add_node("pipeline_execute", pipeline_execute_node)
     graph.add_node("pipeline_oracle", pipeline_oracle_node)
+    graph.add_node("pipeline_finalize", pipeline_finalize_node)
 
     # ── Edges ─────────────────────────────────────────────────────────────────
     graph.set_entry_point("recon")
@@ -1293,7 +1426,11 @@ def _build_v6_graph(thread_id: str):
         "end": END,
     })
     graph.add_edge("pipeline_prepare", "pipeline_retrieve")
-    graph.add_edge("pipeline_retrieve", "pipeline_queue")
+    graph.add_conditional_edges("pipeline_retrieve", _route_retrieve, {
+        "pipeline_queue": "pipeline_queue",
+        "pipeline_finalize": "pipeline_finalize",
+        "end": END,
+    })
 
     # Queue → Planner (planner checks catalog exhaustion internally)
     graph.add_conditional_edges("pipeline_queue", _route_queue_to_planner, {
@@ -1331,6 +1468,7 @@ def _build_v6_graph(thread_id: str):
     })
 
     graph.add_edge("pipeline_oracle", END)
+    graph.add_edge("pipeline_finalize", END)
 
     # ── Compile with disk-backed MemorySaver ──────────────────────────────────
     compiled = graph.compile(checkpointer=saver)

@@ -10,7 +10,6 @@ that service- or target-named artifact directories are never reused.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import os
@@ -95,6 +94,10 @@ class ResourceLimits:
     max_methods_per_cve: int = 2
     max_executed_candidates: int = 3
     max_attempts_per_candidate: int = 3
+    # These are first-class limits, rather than dynamically attached fields.
+    # That makes the serialized manifest a complete runtime contract.
+    max_total_tokens: int = 300_000
+    max_llm_calls: int = 40
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -105,6 +108,7 @@ class ResourceLimits:
             "max_runtime_seconds", "max_tool_calls", "max_executed_commands",
             "max_cves_per_service", "max_methods_per_cve",
             "max_executed_candidates", "max_attempts_per_candidate",
+            "max_total_tokens", "max_llm_calls",
         )})
 
 

@@ -68,6 +68,32 @@ models:
     timeout: 300
     api_key: ${GOOGLE_API_KEY}
 
+# Experiment profiles are resource contracts, not aliases into `models`.
+# Replace benchmark-pinned with the actual immutable deployed revision before
+# creating policy.lock.json/dataset.lock.json.
+vertex_profiles:
+  gemini-3.5-flash:
+    provider: vertexai
+    resource_id: gemini-3.5-flash
+    resource_revision: benchmark-pinned
+    region: us-central1
+    project: ${GCP_PROJECT_ID}
+    pricing: {input_per_million: 0.0, output_per_million: 0.0}
+  gemini-3.6-flash:
+    provider: vertexai
+    resource_id: gemini-3.6-flash
+    resource_revision: benchmark-pinned
+    region: us-central1
+    project: ${GCP_PROJECT_ID}
+    pricing: {input_per_million: 0.0, output_per_million: 0.0}
+  gemma-4-26b-a4b-it:
+    provider: vertexai
+    resource_id: gemma-4-26b-a4b-it
+    resource_revision: benchmark-pinned
+    region: us-central1
+    project: ${GCP_PROJECT_ID}
+    pricing: {input_per_million: 0.0, output_per_million: 0.0}
+
 # CVE scoring weight configuration
 cve_scoring:
   weights:

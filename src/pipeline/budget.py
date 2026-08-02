@@ -59,7 +59,7 @@ class BudgetTier(str, Enum):
                        "max_total_tokens": 750_000, "max_llm_calls": 80},
         }
         cfg = _map[self.value]
-        limits = ResourceLimits(
+        return ResourceLimits(
             max_runtime_seconds=cfg["max_runtime_seconds"],
             max_tool_calls=cfg["max_tool_calls"],
             max_executed_commands=cfg["max_executed_commands"],
@@ -67,19 +67,21 @@ class BudgetTier(str, Enum):
             max_methods_per_cve=cfg["max_methods_per_cve"],
             max_executed_candidates=cfg["max_executed_candidates"],
             max_attempts_per_candidate=cfg["max_attempts_per_candidate"],
+            max_total_tokens=cfg["max_total_tokens"],
+            max_llm_calls=cfg["max_llm_calls"],
         )
-        # Attach tier-specific caps as extra attrs (ResourceLimits uses dataclass)
-        limits.max_total_tokens = cfg["max_total_tokens"]  # type: ignore[attr-defined]
-        limits.max_llm_calls = cfg["max_llm_calls"]  # type: ignore[attr-defined]
-        return limits
 
     @classmethod
     def from_str(cls, value: str) -> "BudgetTier":
-        """Parse tier from string; default to MEDIUM if unrecognised."""
+        """Parse tier from string.
+
+        Typos are experimental-design errors and must fail before a paid run
+        starts; they must not silently change the condition to medium.
+        """
         try:
             return cls(value.lower())
         except ValueError:
-            return cls.MEDIUM
+            raise ValueError(f"unknown budget tier {value!r}; expected one of {[tier.value for tier in cls]}") from None
 
 
 @dataclass
@@ -127,6 +129,16 @@ class ResourceBudget:
             raise BudgetExceeded("max_runtime_seconds", round(elapsed, 1), self.limits.max_runtime_seconds)
 
     # ── Token budget ──────────────────────────────────────────────────────────
+    def check_llm_call(self, estimated_tokens: int = 0) -> None:
+        """Preflight one LLM request before spending it."""
+        self.check_runtime()
+        max_calls = self.limits.max_llm_calls
+        if max_calls and self.state.llm_calls >= max_calls:
+            raise BudgetExceeded("max_llm_calls", self.state.llm_calls, max_calls)
+        max_tokens = self.limits.max_total_tokens
+        if max_tokens and estimated_tokens and self.state.total_tokens + estimated_tokens > max_tokens:
+            raise BudgetExceeded("max_total_tokens", self.state.total_tokens + estimated_tokens, max_tokens)
+
     def record_llm_usage(
         self,
         input_tokens: int = 0,
@@ -142,20 +154,22 @@ class ResourceBudget:
         self.state.total_thinking_tokens += thinking_tokens
         self.state.total_usd += usd
         self.state.llm_calls += 1
-        max_tokens = getattr(self.limits, "max_total_tokens", 0)
+        max_tokens = self.limits.max_total_tokens
         if max_tokens and self.state.total_tokens > max_tokens:
             raise BudgetExceeded("max_total_tokens", self.state.total_tokens, max_tokens)
-        max_calls = getattr(self.limits, "max_llm_calls", 0)
+        max_calls = self.limits.max_llm_calls
         if max_calls and self.state.llm_calls > max_calls:
             raise BudgetExceeded("max_llm_calls", self.state.llm_calls, max_calls)
 
     # ── Tool calls / commands ─────────────────────────────────────────────────
     def record_tool_call(self) -> None:
-        self.state.tool_calls += 1
-        if self.state.tool_calls > self.limits.max_tool_calls:
+        self.check_runtime()
+        if self.state.tool_calls >= self.limits.max_tool_calls:
             raise BudgetExceeded("max_tool_calls", self.state.tool_calls, self.limits.max_tool_calls)
+        self.state.tool_calls += 1
 
     def check_command(self) -> None:
+        self.check_runtime()
         if self.state.executed_commands >= self.limits.max_executed_commands:
             raise BudgetExceeded("max_executed_commands", self.state.executed_commands, self.limits.max_executed_commands)
 

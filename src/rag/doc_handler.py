@@ -10,12 +10,11 @@ economic_mode=True  → single direct-score query per repo (doc_handler_ec.py)
 
 from __future__ import annotations
 
-import json
 import logging
 import multiprocessing
 import os
 from functools import wraps
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +225,6 @@ class UnifiedDocHandler:
             StorageContext, load_index_from_storage,
         )
         from llama_index.core.schema import IndexNode
-        from llama_index.core.storage.index_store import SimpleIndexStore
         from llama_index.core.query_engine import RetrieverQueryEngine
 
         idx_dir = os.path.join(os.environ.get("INDEX_STORAGE_DIR", "."), "keyword_repos", keyword)

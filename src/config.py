@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import sys
 from functools import lru_cache
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import yaml
 
@@ -67,6 +67,20 @@ class AppConfig:
         if cfg is None:
             raise KeyError(f"Model '{name}' not found in configs/config.yaml → models")
         return cfg
+
+    def model_profile_cfg(self, profile_name: str) -> Dict[str, Any]:
+        """Resolve a preregistered Vertex profile without config-name aliases."""
+        profiles = self._data.get("vertex_profiles", {})
+        cfg = profiles.get(profile_name)
+        if not isinstance(cfg, dict):
+            raise KeyError(f"Vertex model profile {profile_name!r} is not configured")
+        required = ("provider", "resource_id", "resource_revision", "region", "pricing")
+        missing = [key for key in required if not cfg.get(key)]
+        if missing:
+            raise ValueError(f"Vertex model profile {profile_name!r} missing: {', '.join(missing)}")
+        if cfg["provider"] != "vertexai":
+            raise ValueError(f"Vertex model profile {profile_name!r} must use provider='vertexai'")
+        return dict(cfg)
 
     def get_llm(self, name: str):
         """Instantiate a LangChain-compatible LLM from the named model config."""
@@ -122,6 +136,17 @@ class AppConfig:
 
     def get_role_llm(self, role: str, override: str = ""):
         """Instantiate the configured LLM for an active-pipeline role."""
+        if override:
+            profiles = self._data.get("vertex_profiles", {})
+            if override in profiles:
+                sys.path.insert(0, _ROOT)
+                from utils.llm_factory import create_llm_from_config  # noqa: PLC0415
+                profile = self.model_profile_cfg(override)
+                return create_llm_from_config({
+                    "name": override, "provider": profile["provider"],
+                    "model": profile["resource_id"], "location": profile["region"],
+                    "project": profile.get("project", ""), "temperature": 0,
+                })
         return self.get_llm(self.role_model(role, override))
 
     @property

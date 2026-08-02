@@ -8,17 +8,15 @@ Covers:
   4. Checkpoint saver thread-safety race fix
 """
 
-import logging
 import os
 import pickle
 import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
 
 from src.agents.hypothesis_phase.critic_agent import _deterministic_fast_path
-from src.execution.preflight import _contains_foreign_ip, _extract_foreign_ips, prepare_candidate
+from src.execution.preflight import _extract_foreign_ips, prepare_candidate
 from src.graph import _DiskBackedSaver
 from src.memory.world_state import HostInfo, ServiceInfo, WorldState
 from src.retrieval.applicability import (
@@ -27,13 +25,11 @@ from src.retrieval.applicability import (
     assess_candidates,
 )
 from src.retrieval.models import (
-    ApplicabilityAssessment,
     AuthoritativeRecord,
     PocCandidate,
     ProcedureSnippet,
     ProductFingerprint,
 )
-
 
 # ── Component 1: Snippet assumption validation ──────────────────────────────
 
@@ -173,7 +169,7 @@ class TestForeignIPHygieneSignal(unittest.TestCase):
     """Foreign IPs in snippet commands produce hygiene warnings in reasons."""
 
     def test_foreign_ip_in_reasons_warning(self):
-        ws = WorldState(hosts={
+        WorldState(hosts={
             "10.0.0.1": HostInfo(
                 ip="10.0.0.1",
                 services=[ServiceInfo(port=80, name="Apache", version="2.4.49", accessibility="open", confidence=0.9)],
@@ -184,7 +180,7 @@ class TestForeignIPHygieneSignal(unittest.TestCase):
             vendor="apache", product="httpd", version="2.4.49",
             platform_hints=["linux"], confidence=0.9,
         )
-        record = AuthoritativeRecord(
+        AuthoritativeRecord(
             cve_id="CVE-2021-41773", source="vendor",
             title="Apache httpd traversal", description="Apache httpd on Linux",
             platform_hints=["linux"],

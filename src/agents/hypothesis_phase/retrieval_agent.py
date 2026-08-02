@@ -19,31 +19,29 @@ from src.retrieval import (
     collect_poc_candidates,
     extract_procedure_snippets,
 )
-from src.state import PentestState, runtime_exceeded
+from src.state import PentestState, runtime_exceeded, service_target_key
 from src.utils.structured_logger import get_structured_logger
 
 from .shared import (
-    emit_budget_event,
     hypothesis_runtime_cfg,
     keyword_from_fingerprints,
     log_stage,
     output_dir,
     persist_bundle_artifacts,
 )
-from src.state import service_target_key
 
 logger = logging.getLogger(__name__)
 slog = get_structured_logger()
 
 
 def retrieval_agent_node(state: PentestState) -> dict[str, Any]:
-    cfg = get_config()
+    get_config()
     runtime_cfg = hypothesis_runtime_cfg(state)
     retrieval_cfg = runtime_cfg["retrieval"]
     ws = WorldState.from_dict(state.get("world_state", {}))
     em = EpisodicMemory.from_list(state.get("episodic_memory", []))
     phase_timestamps = dict(state.get("phase_timestamps", {}))
-    shortlist = list((state.get("retrieval_bundle", {}) or {}).get("shortlist", []))
+    list((state.get("retrieval_bundle", {}) or {}).get("shortlist", []))
     phase_timestamps.setdefault("hypothesis_start_time", time.time())
     retrieval_started_at = time.time()
 

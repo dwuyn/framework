@@ -132,13 +132,13 @@ class Fingerprint:
 
     @property
     def service_key(self) -> str:
-        """Stable key for this fingerprint: target_ip:port:product.
+        """Stable key for this fingerprint: target_ip:port:protocol:product.
 
         Used by B2 multi-fingerprint planner to persist the active service
         across graph nodes without serializing the full Fingerprint object.
         """
         product = self.product.parsed or "unknown"
-        return f"{self.target_ip}:{self.port}:{product}"
+        return f"{self.target_ip}:{self.port}:{self.protocol.lower()}:{product}"
 
     def cpe_primary(self) -> str:
         return self.observed_cpe or (self.inferred_cpe_candidates[0] if self.inferred_cpe_candidates else "")

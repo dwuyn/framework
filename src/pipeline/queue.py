@@ -21,18 +21,17 @@ an exact-applicability rating.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Iterable
 
 from src.pipeline.candidates import (
-    ExploitCandidate, SUPPORTED_CAPABILITIES, SUPPORTED_KINDS,
+    ExploitCandidate,
     is_executable,
 )
-from src.pipeline.evidence import Fingerprint, VersionConstraint, constraint_matches
+from src.pipeline.evidence import Fingerprint, constraint_matches
 from src.pipeline.ledger import EventLedger
-from src.pipeline.manifest import Scope, ResourceLimits
-from src.pipeline.scope import ScopeDecision, ScopeValidator
+from src.pipeline.manifest import ResourceLimits, Scope
+from src.pipeline.scope import ScopeValidator
 
 
 @dataclass

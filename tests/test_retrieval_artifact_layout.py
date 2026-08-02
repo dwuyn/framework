@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-from src.agents.hypothesis_phase.shared import output_dir, hypothesis_runtime_cfg
+from src.agents.hypothesis_phase.shared import hypothesis_runtime_cfg, output_dir
 from src.state import initial_state
 
 

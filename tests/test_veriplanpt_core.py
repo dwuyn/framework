@@ -11,7 +11,6 @@ Unit tests for VeriPlanPT core additions:
 
 from __future__ import annotations
 
-import time
 import pytest
 
 # ── BudgetTier & ResourceBudget ────────────────────────────────────────────────
@@ -40,12 +39,13 @@ class TestBudgetTier:
         assert BudgetTier.from_str("HIGH") == BudgetTier.HIGH
         assert BudgetTier.from_str("Medium") == BudgetTier.MEDIUM
 
-    def test_from_str_invalid_defaults_to_medium(self):
+    def test_from_str_invalid_raises(self):
         from src.pipeline.budget import BudgetTier
-        assert BudgetTier.from_str("nonexistent") == BudgetTier.MEDIUM
+        with pytest.raises(ValueError, match="unknown budget tier"):
+            BudgetTier.from_str("nonexistent")
 
     def test_budget_exceeded_on_token_cap(self):
-        from src.pipeline.budget import BudgetTier, ResourceBudget, BudgetExceeded
+        from src.pipeline.budget import BudgetExceeded, BudgetTier, ResourceBudget
         tier = BudgetTier.LOW
         lim = tier.to_limits()
         budget = ResourceBudget(lim)
@@ -55,7 +55,7 @@ class TestBudgetTier:
         assert "max_total_tokens" in str(exc_info.value)
 
     def test_budget_exceeded_on_llm_call_cap(self):
-        from src.pipeline.budget import BudgetTier, ResourceBudget, BudgetExceeded
+        from src.pipeline.budget import BudgetExceeded, BudgetTier, ResourceBudget
         tier = BudgetTier.LOW
         lim = tier.to_limits()
         budget = ResourceBudget(lim)
@@ -176,8 +176,8 @@ class TestDifficultyEstimator:
 
 class TestBudgetPolicy:
     def test_score_action(self):
-        from src.planning.policy import BudgetPolicy
         from src.planning.difficulty import DifficultyVector
+        from src.planning.policy import BudgetPolicy
         p = BudgetPolicy()
         v = DifficultyVector(difficulty_score=0.3)
         a = p.score_action("c1", "host:80:apache", "CVE-2021-X", "metasploit",
@@ -257,7 +257,7 @@ class TestBudgetPolicy:
 class TestLedgerMetrics:
     def _make_ledger(self, run_id: str = "test-run"):
         """Build a simple EventLedger with some test events."""
-        from src.pipeline.ledger import EventLedger, Event
+        from src.pipeline.ledger import EventLedger
         ledger = EventLedger(run_id=run_id)
         return ledger
 
@@ -270,7 +270,6 @@ class TestLedgerMetrics:
 
     def test_osr_one_on_task_proof_obtained(self):
         from src.scoring.ledger_metrics import compute_metrics
-        from src.pipeline.ledger import EventLedger
         ledger = self._make_ledger()
         ledger.record(phase="execution", stage="exploit", outcome="task_proof_obtained",
                       cve_id="CVE-2021-X", candidate_id="c1")
@@ -280,7 +279,6 @@ class TestLedgerMetrics:
 
     def test_false_positive_on_control(self):
         from src.scoring.ledger_metrics import compute_metrics
-        from src.pipeline.ledger import EventLedger
         ledger = self._make_ledger()
         ledger.record(phase="execution", stage="exploit", outcome="task_proof_obtained",
                       cve_id="CVE-X", candidate_id="c1")
@@ -290,7 +288,6 @@ class TestLedgerMetrics:
 
     def test_correct_cve_at_k(self):
         from src.scoring.ledger_metrics import compute_metrics
-        from src.pipeline.ledger import EventLedger
         ledger = self._make_ledger()
         ledger.record(phase="retrieve", stage="applicability", outcome="not_applicable",
                       cve_id="CVE-wrong-1", candidate_id="c0")
@@ -304,7 +301,6 @@ class TestLedgerMetrics:
 
     def test_to_dict_has_all_keys(self):
         from src.scoring.ledger_metrics import compute_metrics
-        from src.pipeline.ledger import EventLedger
         ledger = self._make_ledger()
         m = compute_metrics(ledger)
         d = m.to_dict()
@@ -319,7 +315,6 @@ class TestLedgerMetrics:
 
     def test_hallucination_counting(self):
         from src.scoring.ledger_metrics import compute_metrics
-        from src.pipeline.ledger import EventLedger
         ledger = self._make_ledger()
         ledger.record(phase="execution", stage="run", outcome="execution_failed",
                       failure_class="command_invalid", detail="nonexistent option --foo")
@@ -334,55 +329,87 @@ class TestLedgerMetrics:
 # ── FrameworkAdapter types ─────────────────────────────────────────────────────
 
 class TestFrameworkAdapterTypes:
-    def test_model_profile_validates(self):
+    @staticmethod
+    def _model_profile(label="gemini-3.5-flash"):
         from src.pipeline.framework_adapter import ModelProfile
-        mp = ModelProfile(model_name="gemini-3.5-flash", location="us-central1")
+        return ModelProfile(
+            model_name=label,
+            project="vertex-project",
+            location="us-central1",
+            resource_id=f"publishers/google/models/{label}-endpoint",
+            resource_revision=f"endpoints/{label}/deployedModels/20260801",
+            pricing={
+                "input_per_million": 1.0,
+                "cached_input_per_million": 0.25,
+                "output_per_million": 2.0,
+                "thinking_per_million": 3.0,
+            },
+        )
+
+    def test_model_profile_validates(self):
+        mp = self._model_profile()
         assert mp.model_name == "gemini-3.5-flash"
+        assert mp.resource_id != mp.model_name
 
     def test_model_profile_rejects_unknown(self):
         from src.pipeline.framework_adapter import ModelProfile
         with pytest.raises(ValueError, match="not in the preregistered set"):
-            ModelProfile(model_name="gpt-4")
+            ModelProfile(
+                model_name="gpt-4",
+                project="vertex-project",
+                location="us-central1",
+                resource_id="publishers/openai/models/gpt-4",
+                resource_revision="endpoints/gpt-4/deployedModels/20260801",
+                pricing={
+                    "input_per_million": 1.0,
+                    "cached_input_per_million": 0.25,
+                    "output_per_million": 2.0,
+                    "thinking_per_million": 3.0,
+                },
+            )
 
     def test_public_task_roundtrip(self):
         from src.pipeline.framework_adapter import PublicTask
-        t = PublicTask(case_id="CVE-2021-X", track="blind",
+        t = PublicTask(case_id="vp-test-0001", track="blind",
                        objective="gain rce", host="10.0.0.1", port_range="80,443")
         d = t.to_dict()
         t2 = PublicTask.from_dict(d)
-        assert t2.case_id == "CVE-2021-X"
+        assert t2.case_id == "vp-test-0001"
         assert t2.track == "blind"
         assert t2.host == "10.0.0.1"
 
     def test_public_task_guided_fields(self):
         from src.pipeline.framework_adapter import PublicTask
-        t = PublicTask(case_id="CVE-X", track="guided",
+        t = PublicTask(case_id="vp-test-0002", track="guided",
                        objective="bypass auth", host="10.0.0.1", port_range="8080",
-                       component="MyApp", endpoint="/login", method_hint="POST injection")
-        assert t.component == "MyApp"
-        assert t.method_hint == "POST injection"
+                       hints={"component": "MyApp", "endpoint": "/login", "method": "POST injection"})
+        assert t.hints["component"] == "MyApp"
+        assert t.hints["method"] == "POST injection"
 
     def test_budget_tier_in_adapter(self):
         from src.pipeline.framework_adapter import BudgetTier
         assert BudgetTier.MEDIUM.value == "medium"
 
     def test_run_artifact_to_dict(self):
-        from src.pipeline.framework_adapter import RunArtifact, ModelProfile, BudgetTier
-        mp = ModelProfile(model_name="gemini-3.6-flash")
+        from src.pipeline.framework_adapter import BudgetTier, RunArtifact
+        mp = self._model_profile("gemini-3.6-flash")
         ra = RunArtifact(case_id="CVE-X", repetition=1, track="blind",
                          model_profile=mp, budget_tier=BudgetTier.MEDIUM,
                          run_id="test-run", internal_outcome="no_truth")
         d = ra.to_dict()
+        assert d["schema_version"] == "2.0.0"
         assert d["internal_outcome"] == "no_truth"
+        assert d["termination_status"] == "no_truth"
         assert d["budget_tier"] == "medium"
         assert d["model_profile"]["model_name"] == "gemini-3.6-flash"
+        assert d["model_revision"] == mp.resource_revision
 
 
 # ── Fingerprint.service_key ────────────────────────────────────────────────────
 
 class TestFingerprintServiceKey:
     def test_service_key_format(self):
-        from src.pipeline.evidence import fingerprint_service, ServiceObservation
+        from src.pipeline.evidence import ServiceObservation, fingerprint_service
         obs = ServiceObservation(target_ip="192.168.1.10", port=443,
                                  service_name="nginx", banner="nginx/1.24.0")
         fp = fingerprint_service(obs)
@@ -392,7 +419,7 @@ class TestFingerprintServiceKey:
 
     def test_service_key_stable(self):
         """Same observation produces same service_key."""
-        from src.pipeline.evidence import fingerprint_service, ServiceObservation
+        from src.pipeline.evidence import ServiceObservation, fingerprint_service
         obs = ServiceObservation(target_ip="10.0.0.1", port=80,
                                  service_name="apache", banner="Apache/2.4.54")
         fp1 = fingerprint_service(obs)

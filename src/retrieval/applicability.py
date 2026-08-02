@@ -4,7 +4,6 @@ Applicability assessment and shortlist construction.
 
 from __future__ import annotations
 
-import math
 import re
 from collections import defaultdict
 from typing import Any
@@ -306,7 +305,7 @@ def build_shortlist(
     assessments: list[ApplicabilityAssessment],
     top_cves: int = 5,
 ) -> list[dict[str, Any]]:
-    fp_map = {(fp.target_ip, fp.port): fp for fp in fingerprints}
+    {(fp.target_ip, fp.port): fp for fp in fingerprints}
     record_map = {record.cve_id: record for record in records}
     candidate_map = {candidate.candidate_id: candidate for candidate in candidates}
     snippet_map = {snippet.candidate_id: snippet for snippet in snippets}

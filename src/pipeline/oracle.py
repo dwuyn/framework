@@ -16,8 +16,6 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from src.pipeline.ledger import ALLOWED_OUTCOMES
-
 # Capability taxonomy.
 CAPABILITIES = (
     "detection",

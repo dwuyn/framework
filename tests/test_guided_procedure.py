@@ -11,28 +11,26 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from src.agents.critic import CriticAgent, CriticVerdict
+from src.agents.planner import (
+    PlannerProposal,
+    build_guided_candidate,
+    validate_guided_procedure,
+)
+from src.agents.verifier_pipeline import PipelineVerifierAgent, VerifierDecision
 from src.pipeline.candidates import (
+    SUPPORTED_KINDS,
+    SUPPORTED_TRUST,
     ExploitCandidate,
     ProcedureStep,
     Provenance,
-    SUPPORTED_KINDS,
-    SUPPORTED_TRUST,
     derive_candidate_id,
     evaluate_trust,
     is_executable,
 )
 from src.pipeline.evidence import Fingerprint, IdentityField
 from src.pipeline.manifest import Scope
-from src.agents.planner import (
-    PlannerAgent,
-    PlannerProposal,
-    build_guided_candidate,
-    validate_guided_procedure,
-)
-from src.agents.critic import CriticAgent, CriticVerdict
-from src.agents.verifier_pipeline import PipelineVerifierAgent, VerifierDecision
 from src.pipeline.queue import CandidateQueue, RankedCandidate
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -456,7 +454,7 @@ class TestVerifierRouting(unittest.TestCase):
 class TestBenchmarkIsolation(unittest.TestCase):
 
     def test_oracle_rejects_guided_procedure_without_accepted_evidence(self):
-        from src.pipeline.oracle import BenchmarkOracle, ProofArtifact, TargetTruth, ProofSpec
+        from src.pipeline.oracle import BenchmarkOracle, ProofArtifact, ProofSpec, TargetTruth
         oracle = BenchmarkOracle()
         truth = TargetTruth(
             target_id="test",
@@ -472,7 +470,7 @@ class TestBenchmarkIsolation(unittest.TestCase):
         self.assertEqual(result.outcome, "execution_failed")
 
     def test_oracle_accepts_guided_procedure_with_accepted_evidence(self):
-        from src.pipeline.oracle import BenchmarkOracle, ProofArtifact, TargetTruth, ProofSpec
+        from src.pipeline.oracle import BenchmarkOracle, ProofArtifact, ProofSpec, TargetTruth
         oracle = BenchmarkOracle()
         truth = TargetTruth(
             target_id="test",
@@ -487,7 +485,13 @@ class TestBenchmarkIsolation(unittest.TestCase):
         self.assertTrue(result.task_proof)
 
     def test_textual_markers_never_override_oracle(self):
-        from src.pipeline.oracle import BenchmarkOracle, ProofArtifact, TargetTruth, ProofSpec, TextualMarkerChecker
+        from src.pipeline.oracle import (
+            BenchmarkOracle,
+            ProofArtifact,
+            ProofSpec,
+            TargetTruth,
+            TextualMarkerChecker,
+        )
         checker = TextualMarkerChecker()
         # Textual markers detect success...
         self.assertTrue(checker.matches("uid=0(root)"))
@@ -507,7 +511,7 @@ class TestBenchmarkIsolation(unittest.TestCase):
         self.assertFalse(result.task_proof)
 
     def test_patched_control_cannot_succeed(self):
-        from src.pipeline.oracle import BenchmarkOracle, ProofArtifact, TargetTruth, ProofSpec
+        from src.pipeline.oracle import BenchmarkOracle, ProofArtifact, ProofSpec, TargetTruth
         oracle = BenchmarkOracle()
         truth = TargetTruth(
             target_id="test-patched",

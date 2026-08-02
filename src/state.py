@@ -125,9 +125,10 @@ class PentestState(TypedDict, total=False):
     budget_tier: str
     # Serialized BudgetState dict — singleton persisted across all graph nodes
     budget_state: dict
+    policy_state: dict          # service budgets, failure streaks and rotation state
 
     # ── Active fingerprint key (B2 multi-service targeting) ──────────────────
-    # Identifies which host:port:service fingerprint is currently being planned
+    # Identifies which host:port:protocol:service fingerprint is planned.
     active_fp_key: str
 
     # ── LLM Agent Pipeline State (v6 evidence-gated) ─────────────────────────
@@ -286,6 +287,7 @@ def initial_state(
         # Budget tier and singleton state (B1/B8)
         budget_tier="medium",
         budget_state={},
+        policy_state={},
         # Active fingerprint key (B2)
         active_fp_key="",
         # LLM Agent Pipeline (v6 evidence-gated)
