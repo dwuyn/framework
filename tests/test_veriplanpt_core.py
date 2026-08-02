@@ -98,7 +98,7 @@ class TestBudgetTier:
         b = ResourceBudget(BudgetTier.MEDIUM.to_limits())
         b.record_llm_usage(input_tokens=100, cached_input_tokens=50,
                            output_tokens=200, thinking_tokens=30)
-        assert b.state.total_tokens == 380
+        assert b.state.total_tokens == 330
 
 
 # ── DifficultyEstimator ───────────────────────────────────────────────────────
@@ -344,6 +344,9 @@ class TestFrameworkAdapterTypes:
                 "output_per_million": 2.0,
                 "thinking_per_million": 3.0,
             },
+            generation_parameters={"temperature": 0.0},
+            usage_semantics={"input_includes_cached": "true", "total_formula": "input+output+thinking"},
+            pricing_effective_at="2026-08-02T00:00:00Z",
         )
 
     def test_model_profile_validates(self):
@@ -366,6 +369,9 @@ class TestFrameworkAdapterTypes:
                     "output_per_million": 2.0,
                     "thinking_per_million": 3.0,
                 },
+                generation_parameters={"temperature": 0.0},
+                usage_semantics={"input_includes_cached": "true", "total_formula": "input+output+thinking"},
+                pricing_effective_at="2026-08-02T00:00:00Z",
             )
 
     def test_public_task_roundtrip(self):

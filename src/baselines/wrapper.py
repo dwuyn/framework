@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -12,6 +13,12 @@ from typing import Any, Sequence
 from src.pipeline.budget import BudgetTier
 from src.pipeline.data_bridge import _load_model_profile
 from src.pipeline.framework_adapter import PublicTask, RunArtifact
+
+
+def _bounded_digest(value: str, *, limit: int = 16_384) -> dict[str, Any]:
+    """Keep baseline logs auditable without storing secrets or unbounded output."""
+    raw = value.encode("utf-8", errors="replace")
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw), "truncated": len(raw) > limit}
 
 
 def run_baseline_command(
@@ -50,8 +57,8 @@ def run_baseline_command(
             "framework": framework,
             "argv": list(command),
             "returncode": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
+            "stdout": _bounded_digest(proc.stdout),
+            "stderr": _bounded_digest(proc.stderr),
             "automation_wrapper": automation_wrapper,
         },
     }]
@@ -77,7 +84,9 @@ def run_baseline_command(
         run_id=run_id,
         run_dir=run_dir,
         termination_status="completed" if proc.returncode == 0 else "infrastructure_failure",
-        internal_outcome="completed" if proc.returncode == 0 else "infrastructure_failure",
+        # A zero process status means only that the wrapper completed.  Proof
+        # success remains an evaluator verdict, never a baseline claim.
+        internal_outcome="proof_submitted" if proc.returncode == 0 else "infrastructure_failure",
         transcript=transcript,
         usage={"wall_seconds": round(time.time() - started, 3)},
     )

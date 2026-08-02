@@ -22,6 +22,9 @@ def _profile() -> ModelProfile:
             "output_per_million": 2.0,
             "thinking_per_million": 3.0,
         },
+        generation_parameters={"temperature": 0.0},
+        usage_semantics={"input_includes_cached": "true", "total_formula": "input+output+thinking"},
+        pricing_effective_at="2026-08-02T00:00:00Z",
     )
 
 
@@ -55,7 +58,7 @@ def test_budgeted_llm_records_usage_cost_and_revision() -> None:
     assert event.stage == "llm_usage"
     assert event.payload["event_type"] == "llm_usage"
     assert event.payload["model_revision"] == "endpoints/123/deployedModels/456"
-    assert event.payload["total_tokens"] == 21
+    assert event.payload["total_tokens"] == 17
     assert event.payload["usd"] > 0
     assert budget.state.llm_calls == 1
 
@@ -72,5 +75,5 @@ def test_budgeted_llm_preflight_blocks_before_call() -> None:
             model_profile=_profile(),
             role="planner",
         ).invoke("x")
-    assert ledger.events[-1].payload["event_type"] == "budget_exceeded"
+    assert ledger.events[-1].payload["event_type"] == "budget_exhausted"
     assert ledger.events[-1].failure_class == "budget_exceeded"

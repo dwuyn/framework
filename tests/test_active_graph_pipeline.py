@@ -106,8 +106,11 @@ class TestActiveGraphPipeline(unittest.TestCase):
         ):
             state.update(node(state))
 
-        self.assertTrue(state["execution_success"])
-        self.assertEqual(state["pipeline_result"]["outcome"], "task_proof_obtained")
+        # A public graph manifest has had its evaluator truth removed and has
+        # no attacker container configuration, so it must not fall back to a
+        # host shell merely because this fixture contains a benign command.
+        self.assertFalse(state["execution_success"])
+        self.assertNotEqual(state["pipeline_result"]["outcome"], "task_proof_obtained")
         self.assertTrue(os.path.exists(state["pipeline_ledger_path"]))
 
 

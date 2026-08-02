@@ -10,9 +10,12 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
+from src.pipeline.budget import BudgetExceeded, ResourceBudget
 from src.pipeline.candidates import ExploitCandidate
+from src.pipeline.ledger import EventLedger
 from src.pipeline.manifest import Scope
 from src.pipeline.runner import ExecutionResult
+from src.pipeline.scope import ScopeValidator
 
 
 @dataclass
@@ -37,6 +40,50 @@ class RuntimeResult:
     failure_class: str = ""
     evidence_kind: str = ""
     session: SessionArtifact | None = None
+
+
+class ExecutionGateway:
+    """Only command path available to benchmark execution.
+
+    It enforces structured argv, scope and budget before giving an isolated
+    attacker runtime the command.  No benchmark caller may fall back to a host
+    shell when the runtime is absent or rejects a command.
+    """
+
+    def __init__(self, *, runtime: "IsolatedContainerRuntime", scope: Scope,
+                 budget: ResourceBudget, ledger: EventLedger) -> None:
+        self.runtime = runtime
+        self.validator = ScopeValidator(scope)
+        self.budget = budget
+        self.ledger = ledger
+
+    def execute(self, argv: list[str], *, timeout: int, stage: str, candidate_id: str = "",
+                cve_id: str = "") -> RuntimeResult:
+        if not argv or any(not isinstance(part, str) or not part for part in argv):
+            self.ledger.record(phase="execution", stage="command", candidate_id=candidate_id, cve_id=cve_id,
+                               failure_class="command_invalid",
+                               payload={"event_type": "command", "validator_rejected": True, "argv": argv})
+            return RuntimeResult(ExecutionResult(2, "", "invalid structured argv", 0), "command_invalid")
+        decision = self.validator.validate_args(argv, stage=stage)
+        if not decision:
+            self.ledger.record(phase="execution", stage="command", candidate_id=candidate_id, cve_id=cve_id,
+                               failure_class="scope_violation", scope_decision="blocked",
+                               payload={"event_type": "command", "validator_rejected": True, "argv": argv,
+                                        "reason": decision.reason})
+            return RuntimeResult(ExecutionResult(2, "", decision.reason, 0), "scope_violation")
+        try:
+            self.budget.record_tool_call()
+            self.budget.record_command()
+        except BudgetExceeded as exc:
+            self.ledger.record(phase="lifecycle", stage="budget_exhausted", candidate_id=candidate_id,
+                               cve_id=cve_id, outcome="execution_failed", failure_class="budget_exceeded",
+                               payload={"event_type": "budget_exhausted", "reason": str(exc),
+                                        "budget_state": self.budget.state_to_dict()})
+            return RuntimeResult(ExecutionResult(124, "", str(exc), 0), "budget_exceeded")
+        self.ledger.record(phase="execution", stage="command", candidate_id=candidate_id, cve_id=cve_id,
+                           scope_decision="allowed", policy_decision="execute",
+                           payload={"event_type": "command", "argv": argv, "stage": stage})
+        return self.runtime.run(argv, timeout=timeout)
 
 
 def static_preflight(path: str, language: str) -> str:
@@ -73,7 +120,7 @@ class IsolatedContainerRuntime:
         self.docker, self.execute = docker, execute
 
     def argv(self, command: list[str]) -> list[str]:
-        if not self.network:
+        if not self.network or self.network == "host":
             raise ValueError("scope_violation: lab network is required")
         workspace = os.path.join(self.run_dir, "workspace")
         os.makedirs(workspace, exist_ok=True)

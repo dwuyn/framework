@@ -20,6 +20,9 @@ def _profile(label: str = "gemini-3.5-flash") -> ModelProfile:
             "output_per_million": 2.0,
             "thinking_per_million": 3.0,
         },
+        generation_parameters={"temperature": 0.0, "max_output_tokens": 1024},
+        usage_semantics={"input_includes_cached": "true", "total_formula": "input+output+thinking"},
+        pricing_effective_at="2026-08-02T00:00:00Z",
     )
 
 
@@ -27,7 +30,7 @@ def test_vertex_profiles_require_real_pinned_contract() -> None:
     profile = _profile()
     assert profile.logical_label == "gemini-3.5-flash"
     assert profile.provider == "vertexai"
-    assert profile.project and profile.resource_id and profile.resource_revision and profile.location
+    assert profile.resource_id and profile.resource_revision and profile.location and profile.profile_hash
     assert set(ModelProfile.REQUIRED_PRICING_KEYS) <= set(profile.pricing)
 
 

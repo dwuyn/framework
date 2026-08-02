@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 
 import yaml
 
@@ -37,12 +38,19 @@ def _load_model_profile(value: str) -> ModelProfile:
 def run_public_task(public_task_path: str, run_dir: str, *, model_profile: str = "",
                     budget_tier: str = "medium", repetition: int = 1,
                     track: str = "", condition: str = "") -> dict:
-    with open(public_task_path, encoding="utf-8") as handle:
+    requested_track = track or "blind"
+    selected_path = _select_public_task(public_task_path, requested_track)
+    with open(selected_path, encoding="utf-8") as handle:
         task = yaml.safe_load(handle) or {}
     public = PublicTask.from_dict(task)
     if track and track != public.track:
         raise ValueError("CLI track does not match public task track")
     os.makedirs(run_dir, exist_ok=True)
+    # The framework always receives the same filename, independent of track.
+    # Hidden evaluator files are never copied into the run directory.
+    destination = os.path.join(run_dir, "public_task.yml")
+    if os.path.abspath(selected_path) != os.path.abspath(destination):
+        shutil.copyfile(selected_path, destination)
 
     profile = _load_model_profile(model_profile)
     artifact = FrameworkAdapter(
@@ -74,6 +82,19 @@ def run_public_task(public_task_path: str, run_dir: str, *, model_profile: str =
     with open(os.path.join(run_dir, "framework_result.json"), "w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, sort_keys=True)
     return summary
+
+
+def _select_public_task(path: str, track: str) -> str:
+    """Select the public blind/guided half without exposing hidden manifests."""
+    supplied = os.path.abspath(path)
+    if os.path.isdir(supplied):
+        filename = "public_task.guided.yml" if track == "guided" else "public_task.yml"
+        supplied = os.path.join(supplied, filename)
+    if os.path.basename(supplied).startswith("hidden") or "/hidden/" in supplied.replace("\\", "/"):
+        raise ValueError("framework bridge cannot read hidden evaluator material")
+    if not os.path.isfile(supplied):
+        raise ValueError(f"public task file is missing: {supplied}")
+    return supplied
 
 
 def main() -> int:

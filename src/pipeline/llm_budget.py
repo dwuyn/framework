@@ -11,6 +11,10 @@ from src.pipeline.framework_adapter import ModelProfile
 from src.pipeline.ledger import EventLedger
 
 
+class UsageMetadataMissing(ValueError):
+    """A paid model response lacked the provider usage contract."""
+
+
 @dataclass
 class NormalizedUsage:
     input_tokens: int = 0
@@ -57,19 +61,26 @@ def _usage_mapping(response: Any) -> Mapping[str, Any]:
 
 def normalize_usage(response: Any, profile: ModelProfile, latency_ms: float = 0.0) -> NormalizedUsage:
     raw = _usage_mapping(response)
-    input_tokens = int(raw.get("input_tokens") or raw.get("prompt_tokens") or 0)
+    required_any = (
+        "input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "total_tokens",
+    )
+    if not raw or not any(key in raw for key in required_any):
+        raise UsageMetadataMissing("Vertex response is missing usage metadata")
+    input_tokens = int(raw.get("input_tokens") if "input_tokens" in raw else raw.get("prompt_tokens", 0))
     cached_tokens = int(
         raw.get("cached_input_tokens")
         or raw.get("cached_tokens")
         or raw.get("cache_read_input_tokens")
         or 0
     )
-    output_tokens = int(raw.get("output_tokens") or raw.get("completion_tokens") or 0)
+    output_tokens = int(raw.get("output_tokens") if "output_tokens" in raw else raw.get("completion_tokens", 0))
     thinking_tokens = int(raw.get("thinking_tokens") or raw.get("reasoning_tokens") or 0)
-    total_tokens = input_tokens + cached_tokens + output_tokens + thinking_tokens
+    if cached_tokens > input_tokens:
+        raise UsageMetadataMissing("Vertex cached input tokens exceed input tokens")
+    total_tokens = input_tokens + output_tokens + thinking_tokens
     pricing = profile.pricing
     usd = (
-        input_tokens * pricing["input_per_million"]
+        (input_tokens - cached_tokens) * pricing["input_per_million"]
         + cached_tokens * pricing["cached_input_per_million"]
         + output_tokens * pricing["output_per_million"]
         + thinking_tokens * pricing["thinking_per_million"]
@@ -110,12 +121,12 @@ class BudgetedLLM:
         except BudgetExceeded as exc:
             self.ledger.record(
                 phase="lifecycle",
-                stage="budget_exceeded",
-                outcome="infrastructure_failure",
+                stage="budget_exhausted",
+                outcome="execution_failed",
                 failure_class="budget_exceeded",
                 detail=str(exc),
                 payload={
-                    "event_type": "budget_exceeded",
+                    "event_type": "budget_exhausted",
                     "role": self.role,
                     "limit": exc.limit,
                     "used": exc.used,
@@ -148,8 +159,8 @@ class BudgetedLLM:
             })
             self.ledger.record(
                 phase="lifecycle",
-                stage="budget_exceeded",
-                outcome="infrastructure_failure",
+                stage="budget_exhausted",
+                outcome="execution_failed",
                 failure_class="budget_exceeded",
                 detail=str(exc),
                 payload=payload,
@@ -166,3 +177,15 @@ class BudgetedLLM:
             payload=payload,
         )
         return response
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> "BudgetedLLM":
+        """Preserve budget enforcement when a LangChain model is tool-bound."""
+        if not hasattr(self.llm, "bind_tools"):
+            raise TypeError("wrapped model does not support bind_tools")
+        return BudgetedLLM(
+            self.llm.bind_tools(tools, **kwargs),
+            budget=self.budget,
+            ledger=self.ledger,
+            model_profile=self.model_profile,
+            role=self.role,
+        )

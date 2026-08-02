@@ -21,6 +21,9 @@ def test_baseline_wrapper_emits_run_artifact_v2(tmp_path) -> None:
             "output_per_million": 2,
             "thinking_per_million": 3,
         },
+        "generation_parameters": {"temperature": 0},
+        "usage_semantics": {"input_includes_cached": "true", "total_formula": "input+output+thinking"},
+        "pricing_effective_at": "2026-08-02T00:00:00Z",
     }))
     artifact = run_baseline_command(
         framework="PentestGPT",

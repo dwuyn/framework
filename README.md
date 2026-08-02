@@ -228,6 +228,50 @@ The canonical output is `run_artifact.json` (`RunArtifact v2`). The
 `framework_result.json` file is only a compatibility view generated from that
 artifact.
 
+### Freeze workflow
+
+The dependency graph is one-way and hash-based:
+
+```
+dataset.lock.json -> baseline.lock.json + training_protocol.json
+                  -> policy.lock.json -> matrix.json/csv -> experiment.lock.json
+```
+
+`dataset.lock.json` is the root only: it must not contain policy or matrix
+hashes. `training_protocol.json` pins the dataset lock hash, framework and
+evaluator commits, the three Model Profile v2 hashes, feature schema, budget,
+and CV protocol. Model profiles are fail-closed and keep project identity and
+credentials in the environment, not in committed JSON.
+
+Run the stages in this order:
+
+```bash
+# 1. Dataset construction/migration and independent lab validation (dataset repo)
+export VERIPLANPT_DATASET_ROOT=../veriplanpt-dataset
+
+# 2. Gate before any paid call. Exit 0 is the only train-ready signal.
+poetry run python -m src.pipeline.pretrain_check \
+  --dataset-root "$VERIPLANPT_DATASET_ROOT" \
+  --baseline-lock "$VERIPLANPT_DATASET_ROOT/baseline.lock.json" \
+  --training-protocol "$VERIPLANPT_DATASET_ROOT/training_protocol.json" \
+  --output pretrain_readiness.json
+
+# 3. Default is planning only: exactly 4,560 train cells, no Vertex call.
+poetry run python -m src.pipeline.train \
+  --dataset-root "$VERIPLANPT_DATASET_ROOT" \
+  --training-protocol "$VERIPLANPT_DATASET_ROOT/training_protocol.json" \
+  --output training_plan.json
+
+# 4. After explicit cost approval: run the approved execution service, freeze
+#    policy.lock.json atomically, then generate the final 3,807-cell matrix.
+```
+
+The train CLI rejects dirty framework state, test paths, invalid dataset/profile
+hashes, and attempts to execute without `--approve-cost`. `pretrain-check`
+requires recorded evidence for all 67 vulnerable/fixed lab checks, 3 exact
+Vertex canaries, 15 baseline-model smokes, a 4,560-cell dry run, and no policy
+lock, final matrix, or test artifact.
+
 ### Policy, matrix, and metric tooling
 
 - `src.pipeline.llm_budget.BudgetedLLM` is the LLM-call budget authority and
@@ -238,11 +282,12 @@ artifact.
   degradation.
 - `src.planning.policy_lock` implements deterministic 5-fold policy-lock
   helpers with seed `20260801`.
-- `src.pipeline.matrix.generate_matrix` generates the fixed 3,807-cell test
-  matrix and stable run IDs.
-- `src.pipeline.dataset_lock.validate_dataset_lock` rejects placeholder dataset
-  locks, CVE-leaking public case lists, missing model revisions, and wrong
-  replacement-case versions.
+- `src.pipeline.matrix.generate_matrix` only runs after policy freeze and
+  generates the fixed 3,807-cell matrix with each framework commit/image,
+  model resource/revision, evaluator commit, and upstream hashes in every row.
+- `src.pipeline.dataset_lock.validate_dataset_lock` rejects downstream circular
+  references, non-opaque split IDs, incomplete robustness strata, hash
+  tampering, and stale/uncommitted dataset state.
 
 ### Baselines
 

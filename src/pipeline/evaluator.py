@@ -35,6 +35,31 @@ VariantRunner = Callable[
 ]
 
 
+@dataclass(frozen=True)
+class EvaluatorResult:
+    """Sealed evaluator output; this is the only source of final success."""
+    run_id: str
+    proof_accepted: bool
+    hidden_truth_match: bool
+    terminal_root_cause: str
+    recon_match: bool = False
+    infrastructure_failure: bool = False
+    fixed_control: bool = False
+    evaluator_commit: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "proof_accepted": self.proof_accepted,
+            "hidden_truth_match": self.hidden_truth_match,
+            "terminal_root_cause": self.terminal_root_cause,
+            "recon_match": self.recon_match,
+            "infrastructure_failure": self.infrastructure_failure,
+            "fixed_control": self.fixed_control,
+            "evaluator_commit": self.evaluator_commit,
+        }
+
+
 @dataclass
 class ResultRow:
     run_id: str

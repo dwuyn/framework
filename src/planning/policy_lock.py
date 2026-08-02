@@ -7,8 +7,10 @@ import itertools
 import json
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from src.pipeline.protocol import write_json_atomically
 from src.planning.policy import PolicyWeights
 
 POLICY_SEED = 20260801
@@ -56,22 +58,23 @@ def stratified_folds(cases: Sequence[Mapping[str, Any]], *, seed: int = POLICY_S
         if case.case_id.startswith("CVE-"):
             raise ValueError("policy CV train case IDs must be opaque")
         strata.setdefault((case.severity, case.capability), []).append(case)
+    # Allocate every stratum independently while keeping fold sizes balanced.
+    # This is deliberately not replaced by a global fallback: a global shuffle
+    # erases the severity×capability protocol when a stratum is small.
     for key in sorted(strata):
         ordered = sorted(
             strata[key],
             key=lambda c: stable_hash_text(f"{seed}:{c.case_id}:{c.severity}:{c.capability}"),
         )
+        start = int(stable_hash_text(f"{seed}:{key[0]}:{key[1]}")[:8], 16) % 5
         for index, case in enumerate(ordered):
-            folds[index % 5].append(case.case_id)
+            candidates = [(len(folds[(start + offset) % 5]), (start + offset) % 5) for offset in range(5)]
+            _, destination = min(candidates)
+            folds[destination].append(case.case_id)
     for fold in folds:
         fold.sort()
     if sorted(len(fold) for fold in folds) != [8, 8, 8, 8, 8]:
-        # Round-robin by small strata can leave imbalance. Rebalance globally by hash.
-        ordered_ids = sorted(
-            [case.case_id for case in parsed],
-            key=lambda case_id: stable_hash_text(f"{seed}:{case_id}"),
-        )
-        folds = [sorted(ordered_ids[i * 8:(i + 1) * 8]) for i in range(5)]
+        raise ValueError("stratified allocation did not yield five folds of eight cases")
     return folds
 
 
@@ -149,3 +152,33 @@ def validate_policy_lock(lock: Mapping[str, Any], *, dataset_train_hash: str, fe
     weights = dict(lock.get("selected_weights") or {})
     if abs(sum(float(v) for v in weights.values()) - 1.0) > 1e-9:
         raise ValueError("policy lock weights must sum to 1")
+
+
+def freeze_policy_lock(
+    path: str | Path,
+    lock: Mapping[str, Any],
+    *,
+    valid_artifact_count: int,
+    training_protocol_hash: str,
+    dataset_lock_hash: str,
+    profile_hashes: Sequence[str],
+    evaluator_commit: str,
+    framework_commit: str,
+) -> None:
+    """Atomically freeze a complete policy result; an existing lock is final."""
+    if valid_artifact_count != 4560:
+        raise ValueError("policy lock requires exactly 4,560 valid run artifacts")
+    if not training_protocol_hash or not dataset_lock_hash or len(profile_hashes) != 3:
+        raise ValueError("policy lock requires all upstream protocol and profile hashes")
+    payload = dict(lock)
+    payload.update({
+        "schema_version": "2.0.0",
+        "training_protocol_hash": training_protocol_hash,
+        "dataset_lock_hash": dataset_lock_hash,
+        "profile_hashes": sorted(profile_hashes),
+        "evaluator_commit": evaluator_commit,
+        "framework_commit": framework_commit,
+        "valid_artifact_count": valid_artifact_count,
+    })
+    payload["policy_hash"] = tree_hash(payload)
+    write_json_atomically(path, payload, refuse_existing=True)

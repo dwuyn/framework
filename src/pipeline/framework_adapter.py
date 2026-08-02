@@ -40,22 +40,21 @@ __all__ = [
 
 @dataclass
 class ModelProfile:
-    """Identifies the model configuration for a run.
-
-    ``model_name`` is the experiment's logical label.  It is intentionally
-    separate from the Vertex AI resource actually called by the client.
-
-    model_name must be one of the three preregistered logical labels:
-        gemini-3.5-flash, gemini-3.6-flash, gemma-4-26b-a4b-it
-    """
+    """Pinned, reproducible Vertex profile; credentials stay in the environment."""
     model_name: str
-    project: str
     location: str
     resource_id: str
-    # Immutable Vertex AI endpoint/resource revision actually called.
     resource_revision: str
     pricing: dict[str, float]
     provider: str = "vertexai"
+    # Compatibility-only runtime input. It is intentionally not serialized;
+    # benchmark project selection comes from Vertex environment credentials.
+    project: str = field(default="", repr=False)
+    generation_parameters: dict[str, Any] = field(default_factory=dict)
+    usage_semantics: dict[str, str] = field(default_factory=dict)
+    pricing_currency: str = "USD"
+    pricing_effective_at: str = ""
+    pricing_billing_basis: str = "per_million_tokens"
 
     ALLOWED_MODELS: ClassVar[frozenset[str]] = frozenset({
         "gemini-3.5-flash",
@@ -63,10 +62,7 @@ class ModelProfile:
         "gemma-4-26b-a4b-it",
     })
     REQUIRED_PRICING_KEYS: ClassVar[frozenset[str]] = frozenset({
-        "input_per_million",
-        "cached_input_per_million",
-        "output_per_million",
-        "thinking_per_million",
+        "input_per_million", "cached_input_per_million", "output_per_million", "thinking_per_million",
     })
 
     def __post_init__(self) -> None:
@@ -77,15 +73,13 @@ class ModelProfile:
             )
         if self.provider != "vertexai":
             raise ValueError("VeriPlanPT benchmark profiles must use provider='vertexai'")
-        missing_fields = [
-            name for name in ("project", "location", "resource_id", "resource_revision")
-            if not str(getattr(self, name, "")).strip()
-        ]
+        missing_fields = [name for name in ("location", "resource_id", "resource_revision")
+                          if not str(getattr(self, name, "")).strip()]
         if missing_fields:
             raise ValueError(f"ModelProfile missing required field(s): {', '.join(missing_fields)}")
         if self.resource_id == self.model_name:
             raise ValueError("ModelProfile.resource_id must be the real Vertex resource ID, not the logical label")
-        if self.resource_revision == "benchmark-pinned":
+        if self.resource_revision.lower() in {"benchmark-pinned", "latest", "default", "unknown"}:
             raise ValueError("ModelProfile.resource_revision must be an immutable Vertex revision/endpoint ID")
         missing_prices = self.REQUIRED_PRICING_KEYS.difference(self.pricing)
         if missing_prices:
@@ -96,10 +90,28 @@ class ModelProfile:
         ]
         if zero_prices:
             raise ValueError(f"ModelProfile.pricing must be positive for: {', '.join(sorted(zero_prices))}")
+        if self.pricing_currency != "USD":
+            raise ValueError("ModelProfile pricing_currency must be USD")
+        if not self.pricing_effective_at:
+            raise ValueError("ModelProfile requires pricing_effective_at")
+        if self.pricing_billing_basis != "per_million_tokens":
+            raise ValueError("ModelProfile pricing_billing_basis must be per_million_tokens")
+        required_usage = {"input_includes_cached", "total_formula"}
+        missing_usage = required_usage.difference(self.usage_semantics)
+        if missing_usage:
+            raise ValueError(f"ModelProfile usage_semantics missing key(s): {', '.join(sorted(missing_usage))}")
+        if self.usage_semantics["input_includes_cached"] != "true":
+            raise ValueError("ModelProfile usage must declare input_includes_cached=true")
+        if self.usage_semantics["total_formula"] != "input+output+thinking":
+            raise ValueError("ModelProfile usage total_formula must be input+output+thinking")
 
     @property
     def logical_label(self) -> str:
         return self.model_name
+
+    @property
+    def profile_hash(self) -> str:
+        return self.profile_hash_without_self()
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ModelProfile":
@@ -109,11 +121,15 @@ class ModelProfile:
         return cls(
             model_name=str(label),
             provider=str(data.get("provider", "vertexai")),
-            project=str(data.get("project", "")),
             location=str(data.get("location", "")),
             resource_id=str(data.get("resource_id", "")),
             resource_revision=str(data.get("resource_revision") or data.get("endpoint_id") or ""),
             pricing={str(k): float(v) for k, v in dict(data.get("pricing") or {}).items()},
+            generation_parameters=dict(data.get("generation_parameters") or {}),
+            usage_semantics={str(k): str(v) for k, v in dict(data.get("usage_semantics") or {}).items()},
+            pricing_currency=str(data.get("pricing_currency") or "USD"),
+            pricing_effective_at=str(data.get("pricing_effective_at") or ""),
+            pricing_billing_basis=str(data.get("pricing_billing_basis") or "per_million_tokens"),
         )
 
     @classmethod
@@ -126,12 +142,33 @@ class ModelProfile:
             "logical_label": self.model_name,
             "model_name": self.model_name,
             "provider": self.provider,
-            "project": self.project,
             "resource_id": self.resource_id,
             "resource_revision": self.resource_revision,
             "location": self.location,
             "pricing": dict(self.pricing),
+            "generation_parameters": dict(self.generation_parameters),
+            "usage_semantics": dict(self.usage_semantics),
+            "pricing_currency": self.pricing_currency,
+            "pricing_effective_at": self.pricing_effective_at,
+            "pricing_billing_basis": self.pricing_billing_basis,
+            "profile_hash": self.profile_hash_without_self(),
         }
+
+    def profile_hash_without_self(self) -> str:
+        data = {
+            "logical_label": self.model_name,
+            "provider": self.provider,
+            "resource_id": self.resource_id,
+            "resource_revision": self.resource_revision,
+            "location": self.location,
+            "pricing": self.pricing,
+            "generation_parameters": self.generation_parameters,
+            "usage_semantics": self.usage_semantics,
+            "pricing_currency": self.pricing_currency,
+            "pricing_effective_at": self.pricing_effective_at,
+            "pricing_billing_basis": self.pricing_billing_basis,
+        }
+        return hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass

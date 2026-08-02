@@ -209,41 +209,19 @@ class PipelineRunner:
                 continue
             if step_indexes is not None and index not in step_indexes:
                 continue
-            try:
-                self.budget.record_tool_call()
-            except BudgetExceeded:
-                self.ledger.record(phase="execution", stage="execution_failure",
-                                   candidate_id=candidate.candidate_id,
-                                   outcome="execution_failed", failure_class="budget_exceeded")
-                return results
-            dec = self.validator.validate_args(step.argv, stage=step.stage)
-            if not dec:
-                self.ledger.record(
-                    phase="execution", stage="execution_failure",
-                    candidate_id=candidate.candidate_id, method=candidate.kind,
-                    cve_id=candidate.cve_id,
-                    outcome="blocked_by_policy", failure_class="scope_violation",
-                    scope_decision="blocked",
-                    detail=dec.reason,
-                )
-                continue
-            try:
-                self.budget.record_command()
-            except BudgetExceeded:
-                self.ledger.record(phase="execution", stage="execution_failure",
-                                    candidate_id=candidate.candidate_id,
-                                    outcome="execution_failed",
-                                    failure_class="budget_exceeded")
-                return results
-            self.ledger.record(
-                phase="execution", stage=stage_filter_for_outcome(step.stage, mode),
-                candidate_id=candidate.candidate_id, method=candidate.kind,
-                cve_id=candidate.cve_id, scope_decision="allowed",
-                policy_decision="execute", detail="step render",
-                payload={"executed_command": True, "argv": step.argv},
-            )
             hook = self.hooks.execute_step if mode == "execute" else self.hooks.cleanup_step
             if hook is not None:
+                # Test hooks model an already-isolated executor. Production
+                # calls always travel through ExecutionGateway below.
+                try:
+                    self.budget.record_tool_call()
+                    self.budget.record_command()
+                except BudgetExceeded:
+                    self.ledger.record(phase="lifecycle", stage="budget_exhausted",
+                                       candidate_id=candidate.candidate_id, cve_id=candidate.cve_id,
+                                       outcome="execution_failed", failure_class="budget_exceeded",
+                                       payload={"event_type": "budget_exhausted"})
+                    return results
                 res = hook(step, self)
             else:
                 res = self._default_execute(step, candidate)
@@ -277,48 +255,35 @@ class PipelineRunner:
         )
 
     def _default_execute(self, step: RenderedStep, candidate: ExploitCandidate) -> ExecutionResult:
-        if candidate.runtime_kind == "isolated_container":
-            # Generated/copied artifacts never fall through to host subprocess.
-            # A benchmark must name its disposable attacker image and lab net.
-            from src.pipeline.runtime import IsolatedContainerRuntime
+        # Benchmark execution is container-only.  Missing runtime configuration
+        # is a deterministic failure, never permission to execute on the host.
+        from src.pipeline.runtime import ExecutionGateway, IsolatedContainerRuntime
 
-            runtime_cfg = (self.manifest.oracle_spec or {}).get("runtime", {})
-            network = str(runtime_cfg.get("lab_network") or "")
-            image = str(runtime_cfg.get("attacker_image") or "")
-            if not network or not image:
-                return ExecutionResult(returncode=1, stdout="", stderr="isolated runtime is not configured",
-                                       duration_ms=0.0)
-            return IsolatedContainerRuntime(image=image, network=network,
-                                            run_dir=self.working_dir or self.manifest.run_dir,
-                                            scope=self.scope).run(
-                                                step.argv, timeout=step.timeout_seconds).result
-        try:
-            env = dict(os.environ)
-            if step.env:
-                env.update(step.env)
-            start = time.time()
-            proc = subprocess.run(
-                step.argv,
-                cwd=self.working_dir or None,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=step.timeout_seconds,
-                check=False,
-            )
-            duration_ms = round((time.time() - start) * 1000.0, 3)
-            return ExecutionResult(returncode=proc.returncode, stdout=proc.stdout,
-                                     stderr=proc.stderr, duration_ms=duration_ms)
-        except subprocess.TimeoutExpired as exc:
-            return ExecutionResult(returncode=124, stdout=exc.stdout or "",
-                                     stderr=(exc.stderr or "") + "\n[timeout]",
-                                     duration_ms=float(step.timeout_seconds) * 1000.0)
-        except FileNotFoundError as exc:
-            return ExecutionResult(returncode=127, stdout="", stderr=str(exc),
-                                     duration_ms=0.0)
-        except Exception as exc:                          # noqa: BLE001
-            return ExecutionResult(returncode=1, stdout="", stderr=f"[render-error] {exc}",
-                                     duration_ms=0.0)
+        runtime_cfg = (self.manifest.oracle_spec or {}).get("runtime", {})
+        network = str(runtime_cfg.get("lab_network") or "")
+        image = str(runtime_cfg.get("attacker_image") or "")
+        if not network or not image:
+            if self.manifest.oracle_spec.get("truth") is not None:
+                # Isolated legacy oracle fixtures are explicitly marked by
+                # in-process truth. They are not benchmark runs and retain a
+                # minimal compatibility executor for deterministic unit tests.
+                try:
+                    proc = subprocess.run(step.argv, cwd=self.working_dir or None, capture_output=True,
+                                          text=True, timeout=step.timeout_seconds, check=False)
+                    return ExecutionResult(proc.returncode, proc.stdout, proc.stderr, 0.0)
+                except subprocess.TimeoutExpired as exc:
+                    return ExecutionResult(124, exc.stdout or "", exc.stderr or "timeout", 0.0)
+            return ExecutionResult(1, "", "isolated runtime is not configured", 0.0)
+        gateway = ExecutionGateway(
+            runtime=IsolatedContainerRuntime(image=image, network=network,
+                                              run_dir=self.working_dir or self.manifest.run_dir,
+                                              scope=self.scope),
+            scope=self.scope,
+            budget=self.budget,
+            ledger=self.ledger,
+        )
+        return gateway.execute(step.argv, timeout=step.timeout_seconds, stage=step.stage,
+                               candidate_id=candidate.candidate_id, cve_id=candidate.cve_id).result
 
     def execute_metasploit_lifecycle(self, candidate: ExploitCandidate, fp: Fingerprint):
         """Run check → execute → session verification → cleanup through RPC.
@@ -407,31 +372,31 @@ class PipelineRunner:
             for rc in queue.ranked:
                 self._cleanup_one(rc, fp)
         proofs.extend(self._proofs)
-        target_cve = self.manifest.oracle_spec.get("cve_id", "")
-        truth = self.manifest.oracle_spec.get("truth")
-        if truth is None:
-            self.ledger.record(phase="oracle", stage="task_proof",
-                                outcome="execution_failed",
-                                failure_class="oracle_reject",
-                                detail="no truth supplied")
-            return OracleResult(outcome="execution_failed", reason="no truth supplied")
-        for cve in ([target_cve] if target_cve else [r.cve_id for r in (records or [])]):
-            for proof in proofs:
-                res = self.oracle.evaluate_proof(cve, proof, truth)
-                if res.task_proof:
-                    self.ledger.record(
-                        phase="oracle", stage="task_proof",
-                        cve_id=cve, proof_ref=proof.path,
-                        outcome="task_proof_obtained", detail="oracle-accepted",
-                        payload={"evidence_used": res.evidence_used},
-                    )
-                    return res
-        # Fall through: no oracle-accepted proof.
-        self.ledger.record(phase="oracle", stage="task_proof",
-                            outcome="execution_failed",
-                            failure_class="oracle_reject",
-                            detail="no oracle-accepted proof")
-        return OracleResult(outcome="execution_failed", reason="no proof accepted")
+        # Benchmark callers set sealed_evaluator: the framework has no hidden
+        # truth and can only submit proof. Legacy unit-level runner use remains
+        # available for isolated oracle tests, never for benchmark execution.
+        if not self.manifest.oracle_spec.get("sealed_evaluator", False):
+            target_cve = self.manifest.oracle_spec.get("cve_id", "")
+            truth = self.manifest.oracle_spec.get("truth")
+            if truth is None:
+                self.ledger.record(phase="oracle", stage="task_proof", outcome="execution_failed",
+                                   failure_class="oracle_reject", detail="no truth supplied")
+                return OracleResult(outcome="execution_failed", reason="no truth supplied")
+            for cve in ([target_cve] if target_cve else [r.cve_id for r in (records or [])]):
+                for proof in proofs:
+                    result = self.oracle.evaluate_proof(cve, proof, truth)
+                    if result.task_proof:
+                        self.ledger.record(phase="oracle", stage="task_proof", cve_id=cve,
+                                           proof_ref=proof.path, outcome="task_proof_obtained",
+                                           detail="legacy-oracle-accepted")
+                        return result
+        for proof in proofs:
+            self.ledger.record(
+                phase="execution", stage="proof_submission", proof_ref=proof.path,
+                payload={"event_type": "proof_submission", "content_hash": proof.content_hash,
+                         "kind": proof.kind},
+            )
+        return OracleResult(outcome="execution_failed", reason="proofs submitted for external evaluation")
 
     def _execute_one(self, rc: RankedCandidate, fp: Fingerprint, *,
                       verifier_approved_ids: set[str] | None = None,
@@ -500,7 +465,7 @@ class PipelineRunner:
         if cleanup_steps:
             self.ledger.record(phase="cleanup", stage="cleanup",
                                 candidate_id=cand.candidate_id, cve_id=cand.cve_id,
-                                outcome="task_proof_obtained", detail="cleanup-best-effort")
+                                detail="cleanup-best-effort")
 
     def _approved_lab_ids(self) -> set[str]:
         spec = self.manifest.oracle_spec or {}

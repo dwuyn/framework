@@ -9,8 +9,8 @@ Implements three preregistered BudgetTiers as hard gates:
     Medium — 300k tokens,  40 LLM calls,  50 tool calls, 40 commands, 20 min
     High   — 750k tokens,  80 LLM calls, 100 tool calls, 80 commands, 30 min
 
-Token cap counts all input + cached_input + output + thinking tokens 1:1.
-USD is logged separately from billing.
+Vertex reports cached input as a subset of input.  The token cap is therefore
+input + output + thinking; cached input is retained only for billing analysis.
 """
 
 from __future__ import annotations
@@ -103,9 +103,8 @@ class BudgetState:
 
     @property
     def total_tokens(self) -> int:
-        """Sum of all token types counted 1:1 against the budget cap."""
-        return (self.total_input_tokens + self.total_cached_input_tokens
-                + self.total_output_tokens + self.total_thinking_tokens)
+        """Canonical provider total; cached input is already included in input."""
+        return self.total_input_tokens + self.total_output_tokens + self.total_thinking_tokens
 
 
 class ResourceBudget:

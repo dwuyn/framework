@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.pipeline.dataset_lock import validate_dataset_lock
+from src.pipeline.evaluator import EvaluatorResult
 from src.pipeline.ledger import EventLedger
 from src.pipeline.matrix import generate_matrix, matrix_hash
 from src.planning.policy_lock import build_policy_lock, tree_hash, validate_policy_lock, weight_grid
@@ -64,16 +65,17 @@ def test_paper_metrics_golden_fixture() -> None:
         stage="repeated_action",
         payload={"event_type": "repeated_action", "signature": "curl /login"},
     )
-    ledger.record(
+    failure = ledger.record(
         phase="execution",
         stage="execution_failure",
         outcome="execution_failed",
         failure_class="runtime_error",
+        payload={"recoverable_failure": True},
     )
     ledger.record(
         phase="execution",
         stage="recovery",
-        payload={"event_type": "recovery", "milestone_reached": True},
+        payload={"event_type": "recovery", "milestone_reached": True, "failure_event_id": failure.event_id},
     )
     ledger.record(
         phase="llm",
@@ -91,13 +93,13 @@ def test_paper_metrics_golden_fixture() -> None:
     ledger.record(
         phase="oracle",
         stage="proof_submission",
-        outcome="task_proof_obtained",
-        payload={"event_type": "proof_submission", "accepted": True},
+        payload={"event_type": "proof_submission"},
     )
     ledger.record(
         phase="maintain",
         stage="session_continuity",
-        payload={"event_type": "session_continuity", "verified": True},
+        payload={"event_type": "session_continuity", "created": True, "checked_after_action": True,
+                 "reused_before_cleanup": True},
     )
 
     metrics = compute_paper_metrics(
@@ -105,7 +107,9 @@ def test_paper_metrics_golden_fixture() -> None:
         truth={
             "applicable_cves": ["CVE-2026-39987"],
             "service": {"service_key": "host:80:tcp:marimo"},
+            "applicable_candidate_ids": ["exp-1"],
         },
+        evaluator_result=EvaluatorResult("run", True, True, "", recon_match=True),
     ).to_dict()
     assert metrics["OSR"] == 1.0
     assert metrics["SSR_Recon"] == 1.0
@@ -116,7 +120,7 @@ def test_paper_metrics_golden_fixture() -> None:
     assert metrics["Correct-CVE@3"] is True
     assert metrics["invalid_command_rate"] == 0.5
     assert metrics["recovery_rate"] == 1.0
-    assert metrics["total_tokens"] == 20
+    assert metrics["total_tokens"] == 18
     assert metrics["llm_calls_by_revision"] == {"rev-a": 1}
 
 
@@ -149,14 +153,18 @@ def test_matrix_generator_produces_3807_unique_cells() -> None:
     cells = generate_matrix(
         test_cases=[f"vp-test-{i + 1:04d}" for i in range(27)],
         robustness_cases=[f"vp-test-{i + 1:04d}" for i in range(9)],
-        frameworks=["VeriPlanPT", "PentestGPT", "PentestAgent", "VulnBot", "HackSynth"],
+        frameworks=[
+            {"name": name, "commit": f"{name}-sha", "image_digest": f"sha256:{name}"}
+            for name in ["VeriPlanPT", "PentestGPT", "PentestAgent", "VulnBot", "HackSynth"]
+        ],
         models=[
-            {"logical_label": "gemini-3.5-flash", "resource_revision": "rev-35"},
-            {"logical_label": "gemini-3.6-flash", "resource_revision": "rev-36"},
-            {"logical_label": "gemma-4-26b-a4b-it", "resource_revision": "rev-gemma"},
+            {"logical_label": "gemini-3.5-flash", "resource_id": "resource-35", "resource_revision": "rev-35"},
+            {"logical_label": "gemini-3.6-flash", "resource_id": "resource-36", "resource_revision": "rev-36"},
+            {"logical_label": "gemma-4-26b-a4b-it", "resource_id": "resource-gemma", "resource_revision": "rev-gemma"},
         ],
         dataset_lock_hash="dataset",
-        framework_sha="framework",
+        policy_lock_hash="policy",
+        evaluator_commit="evaluator",
     )
     assert len(cells) == 3807
     assert matrix_hash(cells) == matrix_hash(cells)
@@ -165,28 +173,21 @@ def test_matrix_generator_produces_3807_unique_cells() -> None:
 def test_dataset_lock_validator_requires_freeze_contract() -> None:
     lock = {
         "schema_version": "2.0.0",
-        "locked_at": "2026-08-01T00:00:00Z",
-        "snapshot_cutoff": "2026-08-01T00:00:00Z",
-        "constructed_before_freeze": True,
+        "dataset_commit": "abc123",
+        "frozen_at": "2026-08-02T00:00:00Z",
+        "source_snapshot_at": "2026-08-02T00:00:00Z",
         "tree_hash": "tree",
-        "file_hashes": {},
+        "file_hashes": {"manifest.json": "a" * 64},
         "train_cases": [f"vp-train-{i + 1:04d}" for i in range(40)],
         "test_cases": [f"vp-test-{i + 1:04d}" for i in range(27)],
-        "model_profiles": [
-            {"logical_label": "gemini-3.5-flash", "resource_revision": "rev-35"},
-            {"logical_label": "gemini-3.6-flash", "resource_revision": "rev-36"},
-            {"logical_label": "gemma-4-26b-a4b-it", "resource_revision": "rev-gemma"},
+        "robustness_variants": [
+            {"kind": kind, "case_id": f"vp-robust-{kind}-{index}"}
+            for kind in ["decoy_service", "ambiguous_banner", "transient_failure"] for index in range(3)
         ],
-        "policy_hash": "policy",
-        "matrix_hash": "matrix",
-        "replacement_cases": [
-            {"product": "Marimo", "vulnerable_version": "0.20.4", "fixed_version": "0.23.0"},
-            {"product": "Quarkus", "vulnerable_version": "3.34.6", "fixed_version": "3.34.7"},
-            {"product": "Kirby", "vulnerable_version": "5.4.0", "fixed_version": "5.4.1"},
-            {"product": "FUXA", "vulnerable_version": "1.3.0", "fixed_version": "1.3.1"},
-        ],
+        "snapshot_manifest_hash": "b" * 64,
+        "migration_report_hash": "c" * 64,
     }
     validate_dataset_lock(lock)
     lock["test_cases"][0] = "CVE-2026-39987"
-    with pytest.raises(ValueError, match="opaque IDs"):
+    with pytest.raises(ValueError, match="opaque"):
         validate_dataset_lock(lock)
