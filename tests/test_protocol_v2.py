@@ -9,7 +9,7 @@ from src.pipeline.llm_budget import UsageMetadataMissing, normalize_usage
 from src.pipeline.manifest import ResourceLimits, Scope
 from src.pipeline.runner import ExecutionResult
 from src.pipeline.runtime import ExecutionGateway, RuntimeResult
-from src.pipeline.train import training_cells
+from src.pipeline.train import confirmation_cells, training_cells
 
 
 def _profile(label: str) -> dict[str, object]:
@@ -27,18 +27,46 @@ def _profile(label: str) -> dict[str, object]:
     return profile.to_dict()
 
 
+def _run_context() -> dict[str, str]:
+    return {
+        "dataset_commit": "dataset-commit",
+        "dataset_lock_hash": "dataset-lock",
+        "training_protocol_hash": "protocol-lock",
+        "framework_commit": "framework-commit",
+        "evaluator_commit": "evaluator-commit",
+    }
+
+
 def test_training_plan_has_exact_locked_cell_counts() -> None:
     cases = [
         {"case_id": f"vp-train-{number:04d}", "severity": f"s{number % 4}", "capability": f"c{number % 5}"}
         for number in range(1, 41)
     ]
     profiles = [_profile(label) for label in sorted(ModelProfile.ALLOWED_MODELS)]
-    cells = training_cells(cases, profiles)
-    assert len(cells) == 4560
-    assert sum(cell.phase == "sweep" for cell in cells) == 4200
-    assert sum(cell.phase == "confirmation" for cell in cells) == 360
-    assert len({cell.run_id for cell in cells}) == 4560
+    cells = training_cells(cases, profiles, run_context=_run_context())
+    assert len(cells) == 4200
+    assert all(cell.phase == "sweep" for cell in cells)
+    assert len({cell.run_id for cell in cells}) == 4200
     assert all(cell.track == "blind" and cell.budget_tier == "medium" for cell in cells)
+
+
+def test_confirmation_cells_require_selected_weights_and_bind_them_to_identity() -> None:
+    cases = [
+        {"case_id": f"vp-train-{number:04d}", "severity": f"s{number % 4}", "capability": f"c{number % 5}"}
+        for number in range(1, 41)
+    ]
+    profiles = [_profile(label) for label in sorted(ModelProfile.ALLOWED_MODELS)]
+    weights = {"w_success": 0.5, "w_evidence_gain": 0.25, "w_cost": 0.25, "w_risk": 0.0}
+    cells = confirmation_cells(cases, profiles, selected_weights=weights, run_context=_run_context())
+    assert len(cells) == 360
+    assert all(cell.phase == "confirmation" and cell.weights == weights for cell in cells)
+    changed = confirmation_cells(
+        cases,
+        profiles,
+        selected_weights={"w_success": 0.25, "w_evidence_gain": 0.5, "w_cost": 0.25, "w_risk": 0.0},
+        run_context=_run_context(),
+    )
+    assert {cell.run_id for cell in cells}.isdisjoint({cell.run_id for cell in changed})
 
 
 def test_usage_requires_provider_metadata_and_never_counts_cache_twice() -> None:

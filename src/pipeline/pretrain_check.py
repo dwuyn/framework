@@ -64,7 +64,7 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path, train
         nonlocal dataset_lock
         dataset_lock = load_dataset_lock(lock_path)
         validate_dataset_lock(dataset_lock, dataset_root=root)
-        return {"lock_hash": lock_hash(dataset_lock), "dataset_commit": dataset_lock["dataset_commit"]}
+        return {"lock_hash": lock_hash(dataset_lock)}
 
     _check(checks, "dataset_lock", dataset_gate)
     def baseline_gate() -> dict[str, str]:
@@ -79,7 +79,7 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path, train
         protocol = load_json(training_protocol)
         state = git_state(framework)
         validate_training_protocol(protocol, dataset_hash=lock_hash(dataset_lock), framework_commit=state["commit"],
-                                   evaluator_commit=str(protocol.get("evaluator_commit") or ""))
+                                   evaluator_commit=str(protocol.get("evaluator_source_hash") or ""))
         return {"protocol_hash": hash_lock_file(training_protocol)}
 
     _check(checks, "training_protocol", protocol_gate)

@@ -172,13 +172,13 @@ def test_matrix_generator_produces_3807_unique_cells() -> None:
 
 def test_dataset_lock_validator_requires_freeze_contract() -> None:
     lock = {
-        "schema_version": "2.0.0",
-        "dataset_commit": "abc123",
+        "schema_version": "3.0.0",
         "frozen_at": "2026-08-02T00:00:00Z",
         "source_snapshot_at": "2026-08-02T00:00:00Z",
-        "tree_hash": "tree",
+        "content_tree_hash": "tree",
         "file_hashes": {"manifest.json": "a" * 64},
         "train_cases": [f"vp-train-{i + 1:04d}" for i in range(40)],
+        "validation_cases": [f"vp-validation-{i + 1:04d}" for i in range(27)],
         "test_cases": [f"vp-test-{i + 1:04d}" for i in range(27)],
         "robustness_variants": [
             {"kind": kind, "case_id": f"vp-robust-{kind}-{index}"}
@@ -186,6 +186,7 @@ def test_dataset_lock_validator_requires_freeze_contract() -> None:
         ],
         "snapshot_manifest_hash": "b" * 64,
         "migration_report_hash": "c" * 64,
+        "replacement_fidelity_summary": {"faithful": 94, "emulated": 0},
     }
     validate_dataset_lock(lock)
     lock["test_cases"][0] = "CVE-2026-39987"

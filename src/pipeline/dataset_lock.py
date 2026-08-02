@@ -32,14 +32,24 @@ def sha256_file(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+_EXCLUDED_PARTS = frozenset({".git", "results", "readiness", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+_EXCLUDED_NAMES = frozenset({"dataset.lock.json"})
+
+
 def tree_file_hashes(root: str | Path) -> dict[str, str]:
-    """Return deterministic hashes for every dataset file except Git metadata."""
+    """Hash only immutable dataset content, never locks or runtime output."""
     root_path = Path(root).resolve()
     hashes: dict[str, str] = {}
     for path in sorted(root_path.rglob("*")):
-        if not path.is_file() or ".git" in path.parts:
+        relative = path.relative_to(root_path)
+        if (
+            not path.is_file()
+            or path.name in _EXCLUDED_NAMES
+            or _EXCLUDED_PARTS.intersection(relative.parts)
+            or path.suffix in {".log", ".pyc"}
+        ):
             continue
-        hashes[path.relative_to(root_path).as_posix()] = sha256_file(path)
+        hashes[relative.as_posix()] = sha256_file(path)
     return hashes
 
 
@@ -55,33 +65,36 @@ def load_dataset_lock(path: str | Path) -> dict[str, Any]:
     return data
 
 
-def _opaque_ids(values: Any, name: str, expected: int) -> list[str]:
+def _opaque_ids(values: Any, name: str, expected: int, split: str) -> list[str]:
     if not isinstance(values, list) or len(values) != expected:
         raise ValueError(f"dataset lock must list exactly {expected} {name}")
     ids = [str(value) for value in values]
-    split = "train" if name == "train_cases" else "test"
     if len(set(ids)) != len(ids) or any(not value.startswith(f"vp-{split}-") for value in ids):
         raise ValueError(f"dataset lock {name} must contain unique opaque vp-{split}-* IDs")
     return ids
 
 
 def validate_dataset_lock(lock: Mapping[str, Any], *, dataset_root: str | Path | None = None) -> None:
-    """Validate the root lock without permitting downstream references."""
+    """Validate the v3 root lock without permitting downstream references."""
     required = {
-        "schema_version", "dataset_commit", "frozen_at", "source_snapshot_at",
-        "tree_hash", "file_hashes", "train_cases", "test_cases", "robustness_variants",
-        "snapshot_manifest_hash", "migration_report_hash",
+        "schema_version", "frozen_at", "source_snapshot_at", "content_tree_hash", "file_hashes",
+        "train_cases", "validation_cases", "test_cases", "robustness_variants", "snapshot_manifest_hash",
+        "migration_report_hash", "replacement_fidelity_summary",
     }
     missing = sorted(required.difference(lock))
     if missing:
         raise ValueError(f"dataset lock missing required field(s): {', '.join(missing)}")
-    if str(lock["schema_version"]) != "2.0.0":
-        raise ValueError("dataset lock schema_version must be 2.0.0")
-    forbidden = {"policy_hash", "matrix_hash", "training_protocol_hash"}.intersection(lock)
+    unexpected = set(lock).difference(required)
+    if unexpected:
+        raise ValueError(f"dataset lock contains non-root field(s): {', '.join(sorted(unexpected))}")
+    if str(lock["schema_version"]) != "3.0.0":
+        raise ValueError("dataset lock schema_version must be 3.0.0")
+    forbidden = {"policy_hash", "matrix_hash", "training_protocol_hash", "dataset_commit", "lock_hash"}.intersection(lock)
     if forbidden:
         raise ValueError(f"dataset lock must not reference downstream artifact(s): {', '.join(sorted(forbidden))}")
-    _opaque_ids(lock["train_cases"], "train_cases", 40)
-    _opaque_ids(lock["test_cases"], "test_cases", 27)
+    _opaque_ids(lock["train_cases"], "train_cases", 40, "train")
+    _opaque_ids(lock["validation_cases"], "validation_cases", 27, "validation")
+    _opaque_ids(lock["test_cases"], "test_cases", 27, "test")
     variants = lock["robustness_variants"]
     if not isinstance(variants, list) or len(variants) != 9:
         raise ValueError("dataset lock must list exactly 9 robustness variants")
@@ -89,22 +102,15 @@ def validate_dataset_lock(lock: Mapping[str, Any], *, dataset_root: str | Path |
     expected_types = {"decoy_service", "ambiguous_banner", "transient_failure"}
     if types != expected_types or any(sum(1 for item in variants if item.get("kind") == kind) != 3 for kind in expected_types):
         raise ValueError("robustness variants must contain three cases for each required kind")
-    if not str(lock["dataset_commit"]).strip() or str(lock["dataset_commit"]).lower() in {"pending", "unknown"}:
-        raise ValueError("dataset lock needs a real dataset_commit")
     hashes = lock["file_hashes"]
     if not isinstance(hashes, Mapping) or not hashes:
         raise ValueError("dataset lock file_hashes must be a non-empty mapping")
     if any(len(str(value)) != 64 for value in hashes.values()):
         raise ValueError("dataset lock file_hashes must contain SHA-256 values")
-    if lock.get("lock_hash") and str(lock["lock_hash"]) != lock_hash(lock):
-        raise ValueError("dataset lock self hash mismatch")
     if dataset_root is not None:
         actual = tree_file_hashes(dataset_root)
         expected = {str(key): str(value) for key, value in hashes.items()}
-        # The lock cannot include itself, because writing it would change its tree hash.
-        actual.pop("dataset.lock.json", None)
-        expected.pop("dataset.lock.json", None)
         if actual != expected:
             raise ValueError("dataset tree file hashes do not match dataset lock")
-        if str(lock["tree_hash"]) != canonical_hash(expected):
+        if str(lock["content_tree_hash"]) != canonical_hash(expected):
             raise ValueError("dataset tree hash does not match file hashes")

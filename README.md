@@ -256,21 +256,23 @@ poetry run python -m src.pipeline.pretrain_check \
   --training-protocol "$VERIPLANPT_DATASET_ROOT/training_protocol.json" \
   --output pretrain_readiness.json
 
-# 3. Default is planning only: exactly 4,560 train cells, no Vertex call.
+# 3. Default is planning only: exactly 4,200 sweep cells, no Vertex call.
 poetry run python -m src.pipeline.train \
   --dataset-root "$VERIPLANPT_DATASET_ROOT" \
   --training-protocol "$VERIPLANPT_DATASET_ROOT/training_protocol.json" \
   --output training_plan.json
 
-# 4. After explicit cost approval: run the approved execution service, freeze
-#    policy.lock.json atomically, then generate the final 3,807-cell matrix.
+# 4. After selecting a winner, materialize its 360 confirmation cells with
+#    the selected vector included in every run identity.  After explicit cost
+#    approval, run the approved execution service, freeze policy.lock.json
+#    atomically, then generate the final 3,807-cell matrix.
 ```
 
 The train CLI rejects dirty framework state, test paths, invalid dataset/profile
 hashes, and attempts to execute without `--approve-cost`. `pretrain-check`
-requires recorded evidence for all 67 vulnerable/fixed lab checks, 3 exact
-Vertex canaries, 15 baseline-model smokes, a 4,560-cell dry run, and no policy
-lock, final matrix, or test artifact.
+requires recorded evidence for all 94 vulnerable/fixed lab checks, 9 robustness
+smokes, 3 exact Vertex canaries, 15 baseline-model smokes, a 4,200-cell sweep
+dry plan, and no policy lock, final matrix, or test artifact.
 
 ### Policy, matrix, and metric tooling
 

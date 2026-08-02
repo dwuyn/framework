@@ -78,18 +78,32 @@ def validate_training_protocol(
     protocol: Mapping[str, Any], *, dataset_hash: str, framework_commit: str, evaluator_commit: str,
 ) -> None:
     required = {
-        "schema_version", "dataset_lock_hash", "framework_commit", "evaluator_commit", "model_profiles",
-        "feature_schema", "budget", "cv", "baseline_lock_hash",
+        "schema_version", "dataset_repository_commit", "dataset_lock_hash", "framework_commit",
+        "evaluator_source_hash", "evaluator_image_digest", "model_profiles", "feature_schema_hash",
+        "budget_tiers", "cv", "baseline_lock_hash", "selection_rules", "expected_training_cells",
+        "snapshot_mode", "cost_estimate_usd", "pricing_snapshot",
     }
     missing = sorted(required.difference(protocol))
     if missing:
         raise ValueError(f"training protocol missing required field(s): {', '.join(missing)}")
-    if str(protocol["schema_version"]) != "2.0.0":
-        raise ValueError("training protocol schema_version must be 2.0.0")
+    if str(protocol["schema_version"]) != "3.0.0":
+        raise ValueError("training protocol schema_version must be 3.0.0")
     if str(protocol["dataset_lock_hash"]) != dataset_hash:
         raise ValueError("training protocol dataset hash mismatch")
-    if str(protocol["framework_commit"]) != framework_commit or str(protocol["evaluator_commit"]) != evaluator_commit:
+    if not str(protocol["dataset_repository_commit"]).strip():
+        raise ValueError("training protocol requires the downstream dataset repository commit")
+    if str(protocol["framework_commit"]) != framework_commit or str(protocol["evaluator_source_hash"]) != evaluator_commit:
         raise ValueError("training protocol code commit mismatch")
+    if not str(protocol["evaluator_image_digest"]).startswith("sha256:"):
+        raise ValueError("training protocol requires an evaluator image digest")
+    if not isinstance(protocol["feature_schema_hash"], str) or len(protocol["feature_schema_hash"]) != 64:
+        raise ValueError("training protocol requires a feature schema SHA-256")
+    if protocol["budget_tiers"] != ["low", "medium", "high"]:
+        raise ValueError("training protocol budget tiers mismatch")
+    if protocol["expected_training_cells"] != {"sweep": 4200, "confirmation": 360, "total": 4560}:
+        raise ValueError("training protocol cell-count contract mismatch")
+    if protocol["snapshot_mode"] != "frozen":
+        raise ValueError("training protocol must use frozen snapshots")
     profiles = protocol["model_profiles"]
     if not isinstance(profiles, list) or len(profiles) != 3:
         raise ValueError("training protocol must contain exactly three model profiles")

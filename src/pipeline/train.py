@@ -38,8 +38,33 @@ def _run_id(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(dict(payload), sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:32]
 
 
-def training_cells(cases: Sequence[Mapping[str, Any]], profiles: Sequence[Mapping[str, Any]]) -> list[TrainingCell]:
-    """Create 4,200 sweep and 360 confirmation cells without touching test data."""
+def _require_run_context(run_context: Mapping[str, Any]) -> dict[str, str]:
+    """Return the immutable identities that make a training run resumable."""
+    required = {
+        "dataset_commit",
+        "dataset_lock_hash",
+        "training_protocol_hash",
+        "framework_commit",
+        "evaluator_commit",
+    }
+    missing = sorted(key for key in required if not str(run_context.get(key, "")).strip())
+    if missing:
+        raise ValueError(f"training run context missing immutable identity: {', '.join(missing)}")
+    return {key: str(run_context[key]) for key in required}
+
+
+def training_cells(
+    cases: Sequence[Mapping[str, Any]],
+    profiles: Sequence[Mapping[str, Any]],
+    *,
+    run_context: Mapping[str, Any],
+) -> list[TrainingCell]:
+    """Materialize only the 4,200 approved sweep cells.
+
+    Confirmation is deliberately absent: it is illegal to create a confirmation
+    run with ``weights=None`` before the winner is selected.
+    """
+    context = _require_run_context(run_context)
     folds = stratified_folds(cases)
     fold_index = {case_id: index for index, fold in enumerate(folds) for case_id in fold}
     if len(fold_index) != 40 or len(profiles) != 3:
@@ -54,21 +79,43 @@ def training_cells(cases: Sequence[Mapping[str, Any]], profiles: Sequence[Mappin
                     "model_label": profile["logical_label"], "model_profile_hash": profile["profile_hash"],
                     "budget_tier": "medium", "track": "blind", "repetition": 1, "weights": weight_data,
                 }
-                cells.append(TrainingCell(**payload, run_id=_run_id(payload)))
-    # Confirmation can only use the selected weight at execution time.  Its
-    # stable placeholder makes the dry-run count auditable without pretending a
-    # winner was already selected.
+                cells.append(TrainingCell(**payload, run_id=_run_id({**context, **payload})))
+    if len(cells) != 4200 or len({cell.run_id for cell in cells}) != 4200:
+        raise ValueError("training sweep must contain 4,200 unique cells")
+    return cells
+
+
+def confirmation_cells(
+    cases: Sequence[Mapping[str, Any]],
+    profiles: Sequence[Mapping[str, Any]],
+    *,
+    selected_weights: Mapping[str, float],
+    run_context: Mapping[str, Any],
+) -> list[TrainingCell]:
+    """Materialize the 360 confirmation cells only after weight selection."""
+    context = _require_run_context(run_context)
+    required_weights = {"w_success", "w_evidence_gain", "w_cost", "w_risk"}
+    if set(selected_weights) != required_weights:
+        raise ValueError("confirmation requires the complete selected weight vector")
+    weights = {name: float(selected_weights[name]) for name in sorted(required_weights)}
+    if abs(sum(weights.values()) - 1.0) > 1e-9:
+        raise ValueError("confirmation weights must sum to 1")
+    folds = stratified_folds(cases)
+    fold_index = {case_id: index for index, fold in enumerate(folds) for case_id in fold}
+    if len(fold_index) != 40 or len(profiles) != 3:
+        raise ValueError("training protocol requires 40 cases and 3 model profiles")
+    cells: list[TrainingCell] = []
     for case in cases:
         for profile in profiles:
             for repetition in (1, 2, 3):
                 payload = {
                     "phase": "confirmation", "case_id": case["case_id"], "fold": fold_index[case["case_id"]],
                     "model_label": profile["logical_label"], "model_profile_hash": profile["profile_hash"],
-                    "budget_tier": "medium", "track": "blind", "repetition": repetition, "weights": None,
+                    "budget_tier": "medium", "track": "blind", "repetition": repetition, "weights": weights,
                 }
-                cells.append(TrainingCell(**payload, run_id=_run_id(payload)))
-    if len(cells) != 4560 or len({cell.run_id for cell in cells}) != 4560:
-        raise ValueError("training plan must contain 4,560 unique cells")
+                cells.append(TrainingCell(**payload, run_id=_run_id({**context, **payload})))
+    if len(cells) != 360 or len({cell.run_id for cell in cells}) != 360:
+        raise ValueError("confirmation must contain 360 unique cells")
     return cells
 
 
@@ -104,19 +151,29 @@ def plan_training(*, dataset_root: str | Path, protocol_path: str | Path, output
     state = git_state(Path(__file__).resolve().parents[2])
     if state["dirty"]:
         raise ValueError("training refuses a dirty framework repository")
-    evaluator_commit = str(protocol.get("evaluator_commit") or "")
+    evaluator_commit = str(protocol.get("evaluator_source_hash") or "")
     validate_training_protocol(protocol, dataset_hash=lock_hash(lock), framework_commit=str(state["commit"]),
                                evaluator_commit=evaluator_commit)
     cases = _read_train_cases(root, lock)
-    cells = training_cells(cases, protocol["model_profiles"])
-    plan = {
-        "schema_version": "2.0.0",
-        "seed": POLICY_SEED,
+    protocol_hash = hash_lock_file(protocol_path)
+    context = {
+        "dataset_commit": str(protocol["dataset_repository_commit"]),
         "dataset_lock_hash": lock_hash(lock),
-        "training_protocol_hash": hash_lock_file(protocol_path),
+        "training_protocol_hash": protocol_hash,
+        "framework_commit": str(state["commit"]),
+        "evaluator_commit": evaluator_commit,
+    }
+    cells = training_cells(cases, protocol["model_profiles"], run_context=context)
+    plan = {
+        "schema_version": "3.0.0",
+        "seed": POLICY_SEED,
+        "run_context": context,
+        "dataset_lock_hash": lock_hash(lock),
+        "training_protocol_hash": protocol_hash,
         "cell_count": len(cells),
         "sweep_cell_count": 4200,
         "confirmation_cell_count": 360,
+        "confirmation_materialized": False,
         "estimated_cost_usd": protocol.get("cost_estimate_usd"),
         "cells": [asdict(cell) for cell in cells],
     }
