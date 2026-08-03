@@ -1,29 +1,41 @@
-"""Validation for the single pre-training smoke-evidence contract.
-
-The evidence is recorded by the dataset/build workflow, but the framework
-validates it before accepting a paid training run. This module validates
-evidence structure and immutable digests only; it never fabricates success.
-"""
+"""Canonical VeriPlanPT readiness-evidence contract shared with the dataset."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "2.0.0"
 BASE_CASE_COUNT = 94
 ROBUSTNESS_COUNT = 9
 VERTEX_CANARY_COUNT = 3
-BASELINE_SMOKE_COUNT = 15
-ROBUSTNESS_KINDS = frozenset({"semantic_preserving", "environmental", "deceptive_noise"})
-BASELINE_FRAMEWORKS = frozenset({"PentestGPT", "VulnBot", "HackSynth", "PentestAgent"})
+FRAMEWORK_MODEL_SMOKE_COUNT = 15
+ROBUSTNESS_STRATA = frozenset({"semantic_preserving", "environmental", "deceptive_noise"})
+FRAMEWORKS = frozenset({"VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent"})
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
+def canonical_hash(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def dataset_owned_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": evidence.get("schema_version"),
+        "base_case_fixed_controls": evidence.get("base_case_fixed_controls"),
+        "robustness": evidence.get("robustness"),
+    }
+
+
+def dataset_owned_evidence_hash(evidence: Mapping[str, Any]) -> str:
+    return canonical_hash(dataset_owned_evidence(evidence))
+
+
 def load_smoke_evidence(path: str | Path) -> dict[str, Any]:
-    """Load the one canonical readiness evidence file."""
     with Path(path).open(encoding="utf-8") as handle:
         evidence = json.load(handle)
     if not isinstance(evidence, dict):
@@ -67,12 +79,16 @@ def validate_smoke_evidence(
     evidence: Mapping[str, Any],
     *,
     base_case_ids: Sequence[str],
-    model_labels: Sequence[str],
+    model_labels: Sequence[str] = (),
+    robustness_base_case_ids: Sequence[str] | None = None,
+    mode: str,
 ) -> dict[str, int]:
-    """Validate paired controls, robustness, canaries, and baseline smokes."""
+    """Validate dataset-freeze or pretrain evidence without fabricating results."""
+    if mode not in {"dataset-freeze", "pretrain"}:
+        raise ValueError("smoke evidence mode must be 'dataset-freeze' or 'pretrain'")
     required = {
         "schema_version", "generated_at", "base_case_fixed_controls", "robustness",
-        "vertex_canaries", "baseline_smokes",
+        "vertex_canaries", "framework_model_smokes",
     }
     missing = sorted(required.difference(evidence))
     if missing:
@@ -89,8 +105,7 @@ def validate_smoke_evidence(
     if len(expected_cases) != BASE_CASE_COUNT:
         raise ValueError(f"readiness requires exactly {BASE_CASE_COUNT} locked base cases")
     controls = _records(evidence["base_case_fixed_controls"], "base-case fixed-control", BASE_CASE_COUNT)
-    control_ids = {str(record.get("case_id", "")) for record in controls}
-    if control_ids != expected_cases:
+    if {str(record.get("case_id", "")) for record in controls} != expected_cases:
         raise ValueError("base-case fixed-control evidence must cover exactly the locked base cases")
     for record in controls:
         case_id = str(record["case_id"])
@@ -98,52 +113,70 @@ def validate_smoke_evidence(
         _validate_control(record.get("fixed", {}), f"{case_id}.fixed", oracle_status="expected_failure")
 
     robustness = _records(evidence["robustness"], "robustness", ROBUSTNESS_COUNT)
+    allowed_bases = set(robustness_base_case_ids or base_case_ids)
     variant_ids: set[str] = set()
-    kinds: list[str] = []
+    bases: set[str] = set()
+    strata: list[str] = []
     for record in robustness:
         variant_id = str(record.get("variant_id", ""))
+        base_case_id = str(record.get("base_case_id", ""))
         if not variant_id or variant_id in variant_ids:
             raise ValueError("robustness variant_id must be present and unique")
-        variant_ids.add(variant_id)
-        if str(record.get("base_case_id", "")) not in expected_cases:
+        if not base_case_id or base_case_id in bases:
+            raise ValueError("robustness base_case_id must be present and unique")
+        if base_case_id not in allowed_bases:
             raise ValueError(f"robustness {variant_id} references an unlocked base case")
-        kinds.append(str(record.get("kind", "")))
+        if not str(record.get("transformation", "")).strip():
+            raise ValueError(f"robustness {variant_id} requires a transformation")
+        variant_ids.add(variant_id)
+        bases.add(base_case_id)
+        strata.append(str(record.get("stratum", "")))
         _passed(record.get("semantic_validity", {}), f"{variant_id}.semantic_validity")
         _passed(record.get("smoke", {}), f"{variant_id}.smoke")
-    if {kind for kind in kinds} != ROBUSTNESS_KINDS or any(kinds.count(kind) != 3 for kind in ROBUSTNESS_KINDS):
+    if set(strata) != ROBUSTNESS_STRATA or any(strata.count(stratum) != 3 for stratum in ROBUSTNESS_STRATA):
         raise ValueError("robustness evidence requires three records per required stratum")
+
+    canaries = evidence["vertex_canaries"]
+    smokes = evidence["framework_model_smokes"]
+    if mode == "dataset-freeze":
+        if canaries != [] or smokes != []:
+            raise ValueError("dataset-freeze evidence requires empty runtime evidence sections")
+        return {
+            "base_case_fixed_controls": len(controls),
+            "robustness": len(robustness),
+            "vertex_canaries": 0,
+            "framework_model_smokes": 0,
+        }
 
     expected_models = set(model_labels)
     if len(expected_models) != VERTEX_CANARY_COUNT:
         raise ValueError("readiness requires exactly three locked model labels")
-    canaries = _records(evidence["vertex_canaries"], "Vertex canary", VERTEX_CANARY_COUNT)
-    canary_labels = {str(record.get("model_label", "")) for record in canaries}
-    if canary_labels != expected_models:
+    canary_records = _records(canaries, "Vertex canary", VERTEX_CANARY_COUNT)
+    if {str(record.get("model_label", "")) for record in canary_records} != expected_models:
         raise ValueError("Vertex canaries must cover exactly the locked model labels")
-    for record in canaries:
+    for record in canary_records:
         _passed(record, f"Vertex canary {record.get('model_label', '')}")
         if not str(record.get("resource_id", "")).strip() or not str(record.get("resource_revision", "")).strip():
             raise ValueError("Vertex canary requires a pinned resource_id and resource_revision")
 
-    baselines = _records(evidence["baseline_smokes"], "baseline smoke", BASELINE_SMOKE_COUNT)
-    baseline_ids: set[tuple[str, str]] = set()
-    for record in baselines:
+    smoke_records = _records(smokes, "framework-model smoke", FRAMEWORK_MODEL_SMOKE_COUNT)
+    expected_pairs = {(framework, model) for framework in FRAMEWORKS for model in expected_models}
+    pairs: set[tuple[str, str]] = set()
+    for record in smoke_records:
         framework = str(record.get("framework", ""))
         model = str(record.get("model_label", ""))
-        smoke_id = str(record.get("smoke_id", ""))
-        if framework not in BASELINE_FRAMEWORKS:
-            raise ValueError(f"unsupported baseline framework {framework!r}")
-        if model not in expected_models or not smoke_id:
-            raise ValueError("baseline smoke requires a locked model_label and smoke_id")
-        identifier = (framework, smoke_id)
-        if identifier in baseline_ids:
-            raise ValueError("baseline smoke framework/smoke_id pairs must be unique")
-        baseline_ids.add(identifier)
-        _passed(record, f"baseline smoke {framework}/{smoke_id}")
-
+        if not str(record.get("smoke_id", "")).strip():
+            raise ValueError("framework-model smoke requires smoke_id")
+        pair = (framework, model)
+        if pair in pairs:
+            raise ValueError("framework-model smoke pairs must be unique")
+        pairs.add(pair)
+        _passed(record, f"framework-model smoke {framework}/{model}")
+    if pairs != expected_pairs:
+        raise ValueError("framework-model smokes must cover exactly every framework/model pair")
     return {
         "base_case_fixed_controls": len(controls),
         "robustness": len(robustness),
-        "vertex_canaries": len(canaries),
-        "baseline_smokes": len(baselines),
+        "vertex_canaries": len(canary_records),
+        "framework_model_smokes": len(smoke_records),
     }

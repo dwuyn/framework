@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
+
+from src.pipeline.readiness_evidence import dataset_owned_evidence_hash, load_smoke_evidence
 
 
 def canonical_hash(value: Any) -> str:
@@ -34,6 +37,7 @@ def sha256_file(path: str | Path) -> str:
 
 _EXCLUDED_PARTS = frozenset({".git", "results", "readiness", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
 _EXCLUDED_NAMES = frozenset({"dataset.lock.json"})
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def tree_file_hashes(root: str | Path) -> dict[str, str]:
@@ -75,11 +79,12 @@ def _opaque_ids(values: Any, name: str, expected: int, split: str) -> list[str]:
 
 
 def validate_dataset_lock(lock: Mapping[str, Any], *, dataset_root: str | Path | None = None) -> None:
-    """Validate the v3 root lock without permitting downstream references."""
+    """Validate the v3.1 root lock without permitting downstream references."""
     required = {
         "schema_version", "frozen_at", "source_snapshot_at", "content_tree_hash", "file_hashes",
         "train_cases", "validation_cases", "test_cases", "robustness_variants", "snapshot_manifest_hash",
-        "migration_report_hash", "replacement_fidelity_summary",
+        "migration_report_hash", "replacement_fidelity_summary", "dataset_owned_smoke_evidence_hash",
+        "sealed_train_metadata_hash",
     }
     missing = sorted(required.difference(lock))
     if missing:
@@ -87,30 +92,48 @@ def validate_dataset_lock(lock: Mapping[str, Any], *, dataset_root: str | Path |
     unexpected = set(lock).difference(required)
     if unexpected:
         raise ValueError(f"dataset lock contains non-root field(s): {', '.join(sorted(unexpected))}")
-    if str(lock["schema_version"]) != "3.0.0":
-        raise ValueError("dataset lock schema_version must be 3.0.0")
+    if str(lock["schema_version"]) != "3.1.0":
+        raise ValueError("dataset lock schema_version must be 3.1.0")
     forbidden = {"policy_hash", "matrix_hash", "training_protocol_hash", "dataset_commit", "lock_hash"}.intersection(lock)
     if forbidden:
         raise ValueError(f"dataset lock must not reference downstream artifact(s): {', '.join(sorted(forbidden))}")
     _opaque_ids(lock["train_cases"], "train_cases", 40, "train")
     _opaque_ids(lock["validation_cases"], "validation_cases", 27, "validation")
-    _opaque_ids(lock["test_cases"], "test_cases", 27, "test")
+    test_cases = _opaque_ids(lock["test_cases"], "test_cases", 27, "test")
     variants = lock["robustness_variants"]
     if not isinstance(variants, list) or len(variants) != 9:
         raise ValueError("dataset lock must list exactly 9 robustness variants")
-    types = {str(item.get("kind")) for item in variants if isinstance(item, Mapping)}
-    expected_types = {"decoy_service", "ambiguous_banner", "transient_failure"}
-    if types != expected_types or any(sum(1 for item in variants if item.get("kind") == kind) != 3 for kind in expected_types):
+    if not all(isinstance(item, Mapping) for item in variants):
+        raise ValueError("dataset lock robustness variants must be objects")
+    strata = [str(item.get("stratum", "")) for item in variants]
+    expected_strata = {"semantic_preserving", "environmental", "deceptive_noise"}
+    base_ids = [str(item.get("base_case_id", "")) for item in variants]
+    if (
+        set(strata) != expected_strata
+        or any(strata.count(stratum) != 3 for stratum in expected_strata)
+        or len(set(base_ids)) != 9
+        or any(base_case_id not in test_cases for base_case_id in base_ids)
+        or any(not str(item.get("transformation", "")).strip() for item in variants)
+    ):
         raise ValueError("robustness variants must contain three cases for each required kind")
     hashes = lock["file_hashes"]
     if not isinstance(hashes, Mapping) or not hashes:
         raise ValueError("dataset lock file_hashes must be a non-empty mapping")
     if any(len(str(value)) != 64 for value in hashes.values()):
         raise ValueError("dataset lock file_hashes must contain SHA-256 values")
+    for name in ("dataset_owned_smoke_evidence_hash", "sealed_train_metadata_hash"):
+        if not SHA256_RE.fullmatch(str(lock[name])):
+            raise ValueError(f"dataset lock {name} must be a SHA-256 digest")
     if dataset_root is not None:
-        actual = tree_file_hashes(dataset_root)
+        root = Path(dataset_root)
+        actual = tree_file_hashes(root)
         expected = {str(key): str(value) for key, value in hashes.items()}
         if actual != expected:
             raise ValueError("dataset tree file hashes do not match dataset lock")
         if str(lock["content_tree_hash"]) != canonical_hash(expected):
             raise ValueError("dataset tree hash does not match file hashes")
+        if sha256_file(root / "sealed-train-metadata.json") != str(lock["sealed_train_metadata_hash"]):
+            raise ValueError("sealed train metadata hash does not match dataset lock")
+        evidence = load_smoke_evidence(root / "readiness" / "smoke-evidence.json")
+        if dataset_owned_evidence_hash(evidence) != str(lock["dataset_owned_smoke_evidence_hash"]):
+            raise ValueError("dataset-owned smoke evidence hash does not match dataset lock")

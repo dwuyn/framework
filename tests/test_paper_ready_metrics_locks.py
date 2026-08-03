@@ -172,7 +172,7 @@ def test_matrix_generator_produces_3807_unique_cells() -> None:
 
 def test_dataset_lock_validator_requires_freeze_contract() -> None:
     lock = {
-        "schema_version": "3.0.0",
+        "schema_version": "3.1.0",
         "frozen_at": "2026-08-02T00:00:00Z",
         "source_snapshot_at": "2026-08-02T00:00:00Z",
         "content_tree_hash": "tree",
@@ -181,12 +181,16 @@ def test_dataset_lock_validator_requires_freeze_contract() -> None:
         "validation_cases": [f"vp-validation-{i + 1:04d}" for i in range(27)],
         "test_cases": [f"vp-test-{i + 1:04d}" for i in range(27)],
         "robustness_variants": [
-            {"kind": kind, "case_id": f"vp-robust-{kind}-{index}"}
-            for kind in ["decoy_service", "ambiguous_banner", "transient_failure"] for index in range(3)
+            {"stratum": stratum, "base_case_id": f"vp-test-{index + 1:04d}", "transformation": "fixture"}
+            for index, stratum in enumerate(
+                ["semantic_preserving"] * 3 + ["environmental"] * 3 + ["deceptive_noise"] * 3
+            )
         ],
         "snapshot_manifest_hash": "b" * 64,
         "migration_report_hash": "c" * 64,
         "replacement_fidelity_summary": {"faithful": 94, "emulated": 0},
+        "dataset_owned_smoke_evidence_hash": "d" * 64,
+        "sealed_train_metadata_hash": "e" * 64,
     }
     validate_dataset_lock(lock)
     lock["test_cases"][0] = "CVE-2026-39987"

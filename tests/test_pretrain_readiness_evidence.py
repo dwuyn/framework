@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
+import os
+from pathlib import Path
 
 import pytest
 
@@ -34,17 +37,18 @@ def _control(case_id: str, value: int) -> dict[str, object]:
 
 def _evidence() -> dict[str, object]:
     robustness = []
-    kinds = ("semantic_preserving",) * 3 + ("environmental",) * 3 + ("deceptive_noise",) * 3
-    for index, kind in enumerate(kinds):
+    strata = ("semantic_preserving",) * 3 + ("environmental",) * 3 + ("deceptive_noise",) * 3
+    for index, stratum in enumerate(strata):
         robustness.append({
             "variant_id": f"vp-robustness-{index + 1:04d}",
             "base_case_id": BASE_CASE_IDS[index],
-            "kind": kind,
+            "stratum": stratum,
+            "transformation": "fixture",
             "semantic_validity": _passed(500 + index * 2),
             "smoke": _passed(501 + index * 2),
         })
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "generated_at": "2026-08-03T00:00:00Z",
         "base_case_fixed_controls": [_control(case_id, index * 4 + 1) for index, case_id in enumerate(BASE_CASE_IDS)],
         "robustness": robustness,
@@ -52,20 +56,24 @@ def _evidence() -> dict[str, object]:
             {**_passed(700 + index), "model_label": label, "resource_id": f"resource/{index}", "resource_revision": f"revision/{index}"}
             for index, label in enumerate(MODEL_LABELS)
         ],
-        "baseline_smokes": [
-            {**_passed(800 + index), "framework": ("PentestGPT", "VulnBot", "HackSynth", "PentestAgent")[index % 4], "model_label": MODEL_LABELS[index % 3], "smoke_id": f"smoke-{index:02d}"}
-            for index in range(15)
+        "framework_model_smokes": [
+            {**_passed(800 + index), "framework": framework, "model_label": model, "smoke_id": f"smoke-{index:02d}"}
+            for index, (framework, model) in enumerate(
+                (framework, model)
+                for framework in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")
+                for model in MODEL_LABELS
+            )
         ],
     }
 
 
 def test_readiness_evidence_requires_every_locked_base_case() -> None:
-    summary = validate_smoke_evidence(_evidence(), base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS)
+    summary = validate_smoke_evidence(_evidence(), base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS, mode="pretrain")
     assert summary == {
         "base_case_fixed_controls": 94,
         "robustness": 9,
         "vertex_canaries": 3,
-        "baseline_smokes": 15,
+        "framework_model_smokes": 15,
     }
 
 
@@ -73,11 +81,41 @@ def test_readiness_evidence_rejects_fixed_oracle_that_does_not_fail() -> None:
     evidence = copy.deepcopy(_evidence())
     evidence["base_case_fixed_controls"][0]["fixed"]["oracle"]["status"] = "passed"  # type: ignore[index]
     with pytest.raises(ValueError, match="expected_failure"):
-        validate_smoke_evidence(evidence, base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS)
+        validate_smoke_evidence(evidence, base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS, mode="pretrain")
 
 
 def test_readiness_evidence_rejects_missing_robustness_stratum() -> None:
     evidence = copy.deepcopy(_evidence())
-    evidence["robustness"][0]["kind"] = "environmental"  # type: ignore[index]
+    evidence["robustness"][0]["stratum"] = "environmental"  # type: ignore[index]
     with pytest.raises(ValueError, match="three records per required stratum"):
-        validate_smoke_evidence(evidence, base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS)
+        validate_smoke_evidence(evidence, base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS, mode="pretrain")
+
+
+def test_dataset_freeze_requires_empty_runtime_evidence() -> None:
+    evidence = _evidence()
+    evidence["vertex_canaries"] = []
+    evidence["framework_model_smokes"] = []
+    summary = validate_smoke_evidence(evidence, base_case_ids=BASE_CASE_IDS, mode="dataset-freeze")
+    assert summary["vertex_canaries"] == 0
+
+
+def test_dataset_checkout_accepts_the_same_golden_evidence() -> None:
+    dataset_root = Path(os.environ.get("VERIPLANPT_DATASET_ROOT", "../veriplanpt-dataset"))
+    contract_path = dataset_root / "scripts" / "readiness_evidence.py"
+    if not contract_path.exists():
+        pytest.skip("dataset checkout is not available")
+    spec = importlib.util.spec_from_file_location("dataset_readiness_evidence", contract_path)
+    assert spec and spec.loader
+    dataset_contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dataset_contract)
+    evidence = _evidence()
+    assert dataset_contract.validate_smoke_evidence(
+        evidence, base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS, mode="pretrain"
+    ) == validate_smoke_evidence(evidence, base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS, mode="pretrain")
+    evidence["framework_model_smokes"][1]["model_label"] = MODEL_LABELS[0]  # type: ignore[index]
+    with pytest.raises(ValueError, match="pairs must be unique"):
+        dataset_contract.validate_smoke_evidence(
+            evidence, base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS, mode="pretrain"
+        )
+    with pytest.raises(ValueError, match="pairs must be unique"):
+        validate_smoke_evidence(evidence, base_case_ids=BASE_CASE_IDS, model_labels=MODEL_LABELS, mode="pretrain")

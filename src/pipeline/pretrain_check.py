@@ -95,6 +95,8 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path, train
                 for profile in profiles
                 if isinstance(profile, dict)
             ],
+            robustness_base_case_ids=dataset_lock["test_cases"],
+            mode="pretrain",
         )
 
     _check(checks, "smoke_evidence", smoke_gate)
