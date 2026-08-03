@@ -16,6 +16,7 @@ from src.pipeline.protocol import (
     validate_baseline_lock,
     validate_training_protocol,
 )
+from src.pipeline.readiness_evidence import load_smoke_evidence, validate_smoke_evidence
 from src.pipeline.train import plan_training
 
 
@@ -25,14 +26,6 @@ def _check(checks: dict[str, dict[str, Any]], name: str, func: Callable[[], Any]
         checks[name] = {"passed": True, "detail": detail}
     except Exception as exc:  # Report every gate rather than stopping at the first failure.
         checks[name] = {"passed": False, "detail": str(exc)}
-
-
-def _passed_count(path: Path, expected: int, label: str) -> dict[str, Any]:
-    data = load_json(path)
-    passed = data.get("passed")
-    if passed != expected or data.get("failed", 0) != 0:
-        raise ValueError(f"{label} needs {expected} passing and zero failing results")
-    return {"path": str(path), "passed": passed}
 
 
 def _command(root: Path, args: list[str]) -> dict[str, str]:
@@ -83,10 +76,28 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path, train
         return {"protocol_hash": hash_lock_file(training_protocol)}
 
     _check(checks, "training_protocol", protocol_gate)
-    evidence = root / "readiness"
-    _check(checks, "lab_and_fixed_smoke", lambda: _passed_count(evidence / "lab_smokes.json", 67, "lab smoke"))
-    _check(checks, "vertex_canaries", lambda: _passed_count(evidence / "vertex_canaries.json", 3, "Vertex canary"))
-    _check(checks, "baseline_smokes", lambda: _passed_count(evidence / "baseline_smokes.json", 15, "baseline smoke"))
+    def smoke_gate() -> dict[str, Any]:
+        if not dataset_lock:
+            raise ValueError("dataset lock did not validate")
+        protocol = load_json(training_protocol)
+        profiles = protocol.get("model_profiles")
+        if not isinstance(profiles, list):
+            raise ValueError("training protocol model_profiles is invalid")
+        return validate_smoke_evidence(
+            load_smoke_evidence(root / "readiness" / "smoke-evidence.json"),
+            base_case_ids=[
+                *dataset_lock["train_cases"],
+                *dataset_lock["validation_cases"],
+                *dataset_lock["test_cases"],
+            ],
+            model_labels=[
+                str(profile.get("logical_label") or profile.get("model_name") or "")
+                for profile in profiles
+                if isinstance(profile, dict)
+            ],
+        )
+
+    _check(checks, "smoke_evidence", smoke_gate)
 
     def no_test_artifacts() -> dict[str, Any]:
         test_root = root / "cases" / "test"

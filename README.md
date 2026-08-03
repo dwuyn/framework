@@ -270,9 +270,11 @@ poetry run python -m src.pipeline.train \
 
 The train CLI rejects dirty framework state, test paths, invalid dataset/profile
 hashes, and attempts to execute without `--approve-cost`. `pretrain-check`
-requires recorded evidence for all 94 vulnerable/fixed lab checks, 9 robustness
-smokes, 3 exact Vertex canaries, 15 baseline-model smokes, a 4,200-cell sweep
-dry plan, and no policy lock, final matrix, or test artifact.
+requires one fail-closed `readiness/smoke-evidence.json` contract: 94
+vulnerable/fixed base-case controls (the vulnerable oracle passes and the fixed
+oracle records an expected failure), 9 semantic-valid robustness smokes, 3
+exact Vertex canaries, and 15 baseline-model smokes. It also requires a
+4,200-cell sweep dry plan and no policy lock, final matrix, or test artifact.
 
 ### Policy, matrix, and metric tooling
 
