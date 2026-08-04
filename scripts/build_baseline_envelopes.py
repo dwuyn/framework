@@ -124,7 +124,6 @@ def _source_record(source: Path, config: Mapping[str, Any]) -> dict[str, Any]:
         "remote": expected_remote or observed_remote,
         "commit": git(source, "rev-parse", "HEAD"),
         "tree_hash": git(source, "rev-parse", "HEAD^{tree}"),
-        "dirty": bool(git(source, "status", "--porcelain", "--untracked-files=all")),
     }
 
 
@@ -133,7 +132,8 @@ def _envelope(name: str, config: Mapping[str, Any], target: Mapping[str, Any]) -
     if not source.is_dir():
         raise FileNotFoundError(f"source tree is missing for {name}: {source}")
     source_record = _source_record(source, config)
-    if name != "VeriPlanPT" and source_record["dirty"]:
+    source_dirty = bool(git(source, "status", "--porcelain", "--untracked-files=all"))
+    if name != "VeriPlanPT" and source_dirty:
         raise RuntimeError(f"upstream source tree is dirty: {source}")
     destination = ROOT / "build" / "dependency-envelopes" / name
     destination.mkdir(parents=True, exist_ok=True)

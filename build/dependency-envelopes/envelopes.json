@@ -20,11 +20,10 @@
       "os_package_requirements": [],
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/veriplanpt.Dockerfile",
       "source": {
-        "commit": "3153e422fe38925a7e020ce26d5db9524c43b06b",
-        "dirty": true,
+        "commit": "01c5381276aa8442c0d6699a9c4b67e726d8f565",
         "path": "/home/dwyn/Research/test/pentest-agent_new",
         "remote": "",
-        "tree_hash": "a6f4d0a759154601b8a357acdba9e138acc27ec0"
+        "tree_hash": "d06947cb4ca1533ed23e59370f703e97824e5e77"
       },
       "source_dependency_lock_sha256": "",
       "target": {
@@ -66,7 +65,6 @@
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/PentestAgent.Dockerfile",
       "source": {
         "commit": "97ac5be7ba47377b235a7eebe64d53539084d229",
-        "dirty": false,
         "path": "/home/dwyn/Research/test/pentest-agent",
         "remote": "https://github.com/nbshenxm/pentest-agent.git",
         "tree_hash": "5ead8fc25aef3e734664b19ca94bfcc8bef67ff3"
@@ -110,7 +108,6 @@
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/PentestGPT.Dockerfile",
       "source": {
         "commit": "8650718334ec97b3eba5fa55ec6c87153a21eb34",
-        "dirty": false,
         "path": "/home/dwyn/Research/test/PentestGPT",
         "remote": "https://github.com/GreyDGL/PentestGPT.git",
         "tree_hash": "22c46ec0d2507beeefe833cd1d83eb41ad886610"
@@ -154,7 +151,6 @@
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/VulnBot.Dockerfile",
       "source": {
         "commit": "951cbcc456e6ab972fe5015230e8ebf1bd9e32af",
-        "dirty": false,
         "path": "/home/dwyn/Research/test/VulnBot",
         "remote": "https://github.com/KHenryAegis/VulnBot.git",
         "tree_hash": "516538d6bfa7c2a9cb48a8c6b9320fd433ead75f"
@@ -222,7 +218,6 @@
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/HackSynth.Dockerfile",
       "source": {
         "commit": "48a41f795dda186df66561c4fd2b58ae84e3e4f8",
-        "dirty": false,
         "path": "/home/dwyn/Research/test/HackSynth",
         "remote": "https://github.com/aielte-research/HackSynth.git",
         "tree_hash": "a87058e0aa22f2a895701a61581f79933ca04bfb"
