@@ -9,9 +9,9 @@ import json
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any, Mapping
-
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT.parent
@@ -98,7 +98,19 @@ def _cpu_input(source: Path, destination: Path) -> dict[str, Any]:
     }
 
 
-def _compile(input_path: Path, output_path: Path, *, extra_cpu_index: bool = False) -> None:
+def _framework_input(source: Path, destination: Path) -> Path:
+    requirements = source / "requirements.txt"
+    pyproject = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))
+    project_dependencies = [str(item) for item in pyproject["project"]["dependencies"]]
+    content = requirements.read_text(encoding="utf-8").rstrip()
+    content += "\n\n# Project dependencies from pyproject.toml\n"
+    content += "\n".join(project_dependencies)
+    destination.write_text(content + "\n", encoding="utf-8")
+    return destination
+
+
+def _compile(input_path: Path, output_path: Path, *, extra_cpu_index: bool = False,
+             override_path: Path | None = None) -> None:
     command = [
         "uv", "pip", "compile", str(input_path),
         "--python-version", "3.11",
@@ -110,6 +122,8 @@ def _compile(input_path: Path, output_path: Path, *, extra_cpu_index: bool = Fal
     ]
     if extra_cpu_index:
         command.extend(["--index-strategy", "unsafe-best-match"])
+    if override_path is not None:
+        command.extend(["--override", str(override_path)])
     _run(command, cwd=ROOT)
 
 
@@ -140,7 +154,12 @@ def _envelope(name: str, config: Mapping[str, Any], target: Mapping[str, Any]) -
     input_hashes = _input_hashes(source, [str(item) for item in config["input_paths"]])
     delta: dict[str, Any] = {}
 
-    if name == "PentestAgent":
+    if name == "VeriPlanPT":
+        input_path = _framework_input(source, destination / "requirements.in")
+        _compile(input_path, destination / "requirements.lock")
+        lock_format = "requirements"
+        source_lock_hash = ""
+    elif name == "PentestAgent":
         poetry_path = source / "poetry.lock"
         _poetry_check(source)
         shutil.copyfile(poetry_path, destination / "poetry.lock")
@@ -163,6 +182,13 @@ def _envelope(name: str, config: Mapping[str, Any], target: Mapping[str, Any]) -
         lock_format = "requirements"
         source_lock_hash = ""
 
+    overrides = [str(item) for item in config.get("resolver_overrides", [])]
+    if overrides:
+        override_path = destination / "resolver-overrides.txt"
+        override_path.write_text("\n".join(overrides) + "\n", encoding="utf-8")
+        if name == "VeriPlanPT":
+            _compile(source / "pyproject.toml", destination / "requirements.lock", override_path=override_path)
+
     lock_name = "requirements.cpu.lock" if name == "HackSynth" else "requirements.lock"
     lock_path = destination / lock_name
     return {
@@ -184,6 +210,7 @@ def _envelope(name: str, config: Mapping[str, Any], target: Mapping[str, Any]) -
             for role, path in dict(config["adapter_paths"]).items()
         },
         "build_delta": delta,
+        "resolver_overrides": overrides,
     }
 
 

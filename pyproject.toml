@@ -29,9 +29,9 @@ dependencies = [
     # ── Misc runtime utils ───────────────────────────────────────────────────
     "tqdm>=4.67",
     "msgpack>=1.1,<2",
-    "certifi (>=2026.1.4)",
-    "urllib3 (>=2.6.3,<3)",
-    "cryptography (>=49,<50)",
+    "certifi==2025.11.12",
+    "urllib3==2.5.0",
+    "cryptography==44.0.3",
 ]
 
 [project.optional-dependencies]

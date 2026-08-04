@@ -193,6 +193,8 @@ def test_dataset_lock_validator_requires_freeze_contract() -> None:
         "sealed_train_metadata_hash": "e" * 64,
     }
     validate_dataset_lock(lock)
-    lock["test_cases"][0] = "CVE-2026-39987"
+    test_cases = lock["test_cases"]
+    assert isinstance(test_cases, list)
+    test_cases[0] = "CVE-2026-39987"
     with pytest.raises(ValueError, match="opaque"):
         validate_dataset_lock(lock)

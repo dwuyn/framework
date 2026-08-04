@@ -9,6 +9,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from email.message import Message
 from unittest.mock import patch
 from urllib.error import HTTPError
 
@@ -43,6 +44,7 @@ class TestEvidenceNormalization(unittest.TestCase):
     def test_banner_parser_sets_identity(self) -> None:
         v, p, vf = parse_banner_identity("Apache/2.4.49 (Unix)", source="probe", timestamp=0.0)
         self.assertEqual((v, p), ("apache", "httpd"))
+        assert vf is not None
         self.assertEqual(vf.parsed, "2.4.49")
         self.assertTrue(vf.observed)
 
@@ -307,7 +309,7 @@ class TestSourceAdapters(unittest.TestCase):
         self.assertEqual(records[0].source, "cve_list_v5")
 
     def test_vulnx_rate_limit_is_isolated(self) -> None:
-        err = HTTPError("https://vulnx.test", 429, "rate limited", hdrs=None, fp=None)
+        err = HTTPError("https://vulnx.test", 429, "rate limited", hdrs=Message(), fp=None)
         with patch("src.pipeline.sources.request.urlopen", side_effect=err):
             registry = SourceRegistry([
                 VulnxAdapter(mode="live", base_url="https://vulnx.test", ledger=self.ledger),

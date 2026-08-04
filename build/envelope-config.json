@@ -4,7 +4,7 @@
   "framework": {
     "name": "VeriPlanPT",
     "source_path": ".",
-    "input_paths": ["pyproject.toml"],
+    "input_paths": ["requirements.txt", "pyproject.toml"],
     "dependency_lock_path": "build/dependency-envelopes/veriplanpt/requirements.lock",
     "recipe_path": "docker/veriplanpt.Dockerfile",
     "adapter_paths": {

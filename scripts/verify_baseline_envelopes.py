@@ -8,8 +8,6 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any
-
 
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ROOT = Path(__file__).resolve().parents[1]

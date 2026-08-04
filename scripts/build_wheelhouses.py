@@ -11,7 +11,6 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_ROOT = ROOT.parent / "veriplanpt-artifacts"
 
@@ -24,13 +23,19 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download(lock: Path, destination: Path, *, cpu: bool) -> None:
+def target_python() -> str:
+    result = subprocess.run(["uv", "python", "find", "3.11"], capture_output=True, text=True, check=False)
+    if result.returncode or not result.stdout.strip():
+        raise RuntimeError(f"CPython 3.11 is unavailable: {result.stderr.strip()}")
+    return result.stdout.strip().splitlines()[-1]
+
+
+def download(lock: Path, destination: Path, *, cpu: bool, python: str) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     command = [
-        "python3", "-m", "pip", "download", "--dest", str(destination),
-        "--require-hashes", "--only-binary=:all:",
-        "--platform", "manylinux_2_17_x86_64", "--python-version", "3.11",
-        "--implementation", "cp", "--abi", "cp311", "-r", str(lock),
+        python, "-m", "pip", "download", "--dest", str(destination),
+        "--require-hashes", "--prefer-binary",
+        "-r", str(lock),
     ]
     if cpu:
         command.extend(["--extra-index-url", "https://download.pytorch.org/whl/cpu"])
@@ -47,18 +52,29 @@ def main() -> int:
     args = parser.parse_args()
     metadata = json.loads(Path(args.metadata).read_text(encoding="utf-8"))
     artifact_root = Path(args.artifact_root).resolve()
+    manifest_path = artifact_root / "wheelhouse-manifest.json"
+    previous_manifest = {}
+    if manifest_path.is_file():
+        previous_manifest = json.loads(manifest_path.read_text(encoding="utf-8")).get("wheelhouses", {})
+    python = target_python()
     wheelhouses: dict[str, Any] = {}
     for envelope in metadata["envelopes"]:
         name = str(envelope["name"])
         lock = ROOT / str(envelope["dependency_lock"]["path"])
         destination = artifact_root / "wheelhouses" / name
-        if destination.exists():
+        previous = previous_manifest.get(name, {})
+        reusable = (
+            destination.is_dir()
+            and previous.get("dependency_lock_sha256") == envelope["dependency_lock"]["sha256"]
+            and any(destination.iterdir())
+        )
+        if destination.exists() and not reusable:
             for child in destination.iterdir():
                 if child.is_file() or child.is_symlink():
                     child.unlink()
                 elif child.is_dir():
                     shutil.rmtree(child)
-        download(lock, destination, cpu=name == "HackSynth")
+        download(lock, destination, cpu=name == "HackSynth", python=python)
         files = []
         for path in sorted(destination.iterdir()):
             if not path.is_file():

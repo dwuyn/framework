@@ -127,14 +127,14 @@ def test_dataset_missing_finalizes_as_infrastructure_failure(tmp_path) -> None:
         run_dir=str(run_dir),
     )
     state = initial_state("lab.local", target_port="80")
-    state.update({
+    state.update({  # type: ignore[typeddict-item]
         "pipeline_manifest": manifest.to_dict(),
         "retrieval_mode": "snapshot",
         "source_snapshot_dir": str(tmp_path / "missing-snapshot"),
         "pipeline_result": {},
     })
 
-    state.update(pipeline_retrieve_node(state))
+    state.update(pipeline_retrieve_node(state))  # type: ignore[typeddict-item]
     assert state["retrieval_status"] == "dataset_missing"
     assert _route_retrieve(state) == "pipeline_finalize"
 

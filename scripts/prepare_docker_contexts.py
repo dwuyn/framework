@@ -5,18 +5,35 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_ROOT = ROOT.parent / "veriplanpt-artifacts"
-IGNORE = shutil.ignore_patterns(".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "logs", "data", "data_test", "results")
+IGNORE = shutil.ignore_patterns(".git", ".venv", "venv", "env", "cyber_venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "logs", "data", "data_test", "results")
 
 
 def copy_clean(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, ignore=IGNORE, dirs_exist_ok=True)
+
+
+def link_or_copy(source: Path, destination: Path) -> None:
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copyfile(source, destination)
+
+
+def materialize_lock(lock: Path, wheelhouse: Path, destination: Path) -> None:
+    text = lock.read_text(encoding="utf-8")
+    for url in sorted(set(re.findall(r"https?://[^\s\\]+", text))):
+        filename = url.split("#", 1)[0].rsplit("/", 1)[-1]
+        if (wheelhouse / filename).is_file():
+            text = text.replace(url, f"file:///opt/wheelhouse/{filename}")
+    destination.write_text(text, encoding="utf-8")
 
 
 def main() -> int:
@@ -36,13 +53,13 @@ def main() -> int:
             directory.mkdir(parents=True, exist_ok=True)
         copy_clean(Path(str(envelope["source"]["path"])), context / "source")
         lock = ROOT / str(envelope["dependency_lock"]["path"])
-        shutil.copyfile(lock, context / "envelope" / lock.name)
         wheelhouse = artifact_root / "wheelhouses" / name
         if not wheelhouse.is_dir():
             raise SystemExit(f"wheelhouse missing for {name}: {wheelhouse}")
+        materialize_lock(lock, wheelhouse, context / "envelope" / lock.name)
         for wheel in wheelhouse.iterdir():
             if wheel.is_file():
-                shutil.copyfile(wheel, context / "wheelhouse" / wheel.name)
+                link_or_copy(wheel, context / "wheelhouse" / wheel.name)
         for role, source_path in dict(envelope["adapter_paths"]).items():
             source = Path(str(source_path))
             shutil.copyfile(source, context / "adapter" / f"{role}-{source.name}")

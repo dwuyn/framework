@@ -104,7 +104,7 @@ class TestActiveGraphPipeline(unittest.TestCase):
             active_graph.pipeline_execute_node,
             active_graph.pipeline_oracle_node,
         ):
-            state.update(node(state))
+            state.update(node(state))  # type: ignore[typeddict-item]
 
         # A public graph manifest has had its evaluator truth removed and has
         # no attacker container configuration, so it must not fall back to a

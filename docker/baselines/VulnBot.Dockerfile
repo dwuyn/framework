@@ -4,7 +4,7 @@ WORKDIR /opt/build
 COPY envelope/requirements.lock /opt/build/requirements.lock
 COPY wheelhouse/ /opt/wheelhouse/
 RUN python -m venv /opt/venv \
-    && /opt/venv/bin/python -m pip install --no-index --require-hashes --no-deps \
+    && /opt/venv/bin/python -m pip install --no-index --require-hashes --no-deps --no-build-isolation \
        --find-links=/opt/wheelhouse -r /opt/build/requirements.lock
 
 FROM python:3.11.15-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba

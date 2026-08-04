@@ -7,7 +7,6 @@ import argparse
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_ROOT = ROOT.parent / "veriplanpt-artifacts"
 IMAGES = {
@@ -46,8 +45,8 @@ def main() -> int:
             "os_package_requirements": envelope["os_package_requirements"],
             "adapter_bundle": {
                 "common": str((Path(context["path"]) / "adapter/provider_shim.py").resolve()),
-                "framework": str((Path(context["path"]) / f"adapter-framework-{name.lower().replace('pentestagent', 'pentest_agent').replace('pentestgpt', 'pentest_gpt').replace('vulnbot', 'vuln_bot').replace('hacksynth', 'hack_synth')}.py").resolve()),
-                "wrapper": str((Path(context["path"]) / "adapter-wrapper.py").resolve()),
+                "framework": str((Path(context["path"]) / "adapter" / f"framework-{name.lower().replace('pentestagent', 'pentest_agent').replace('pentestgpt', 'pentest_gpt').replace('vulnbot', 'vuln_bot').replace('hacksynth', 'hack_synth')}.py").resolve()),
+                "wrapper": str((Path(context["path"]) / "adapter/wrapper-wrapper.py").resolve()),
                 "contract_version": "adapter-2.1",
             },
         })

@@ -11,19 +11,21 @@
         "format": "requirements",
         "hashed": true,
         "path": "build/dependency-envelopes/VeriPlanPT/requirements.lock",
-        "sha256": "c44915cf95a2669a621188d5d68ec58ab6c84abbad2526d0aa3ffde67fe6fc10"
+        "sha256": "e8bd7a78f565579e670857af563bf27534ea28f19b51fd8076d99f7a95f6e3f7"
       },
       "input_hashes": {
-        "pyproject.toml": "c7935b378ce8caa5caad5614928080642d1bc0175dd7b76b5b16031fb6d4d606"
+        "pyproject.toml": "c0cd0b10f601f71625124c6cd2b6b81f3d459eba6b204b7d5a7b46cd167fb328",
+        "requirements.txt": "1851f74d22707f54d64fab6e7f54e763d109a994581e109baf8e8fbb0707897d"
       },
       "name": "VeriPlanPT",
       "os_package_requirements": [],
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/veriplanpt.Dockerfile",
+      "resolver_overrides": [],
       "source": {
-        "commit": "01c5381276aa8442c0d6699a9c4b67e726d8f565",
+        "commit": "67d447fe715176262129880feb769f51cb525dbf",
         "path": "/home/dwyn/Research/test/pentest-agent_new",
         "remote": "",
-        "tree_hash": "d06947cb4ca1533ed23e59370f703e97824e5e77"
+        "tree_hash": "2aaf10464d2c04874fc14a8a0866e86483652ac8"
       },
       "source_dependency_lock_sha256": "",
       "target": {
@@ -54,7 +56,7 @@
         "format": "poetry-source+uv-requirements",
         "hashed": true,
         "path": "build/dependency-envelopes/PentestAgent/requirements.lock",
-        "sha256": "ebb715b8ee836a11a3ce33c40e325a09c23da85560f5d958ca8883024d1f5f65"
+        "sha256": "4bc5a6d924f4f24019b3ee49036c8a73d1f1fc55f3e67e9c5315b8269c52bed4"
       },
       "input_hashes": {
         "poetry.lock": "854247b0d430d5d8c6731963e170271e628bd2ef7f9f7ec885c640274fafcefb",
@@ -63,6 +65,7 @@
       "name": "PentestAgent",
       "os_package_requirements": [],
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/PentestAgent.Dockerfile",
+      "resolver_overrides": [],
       "source": {
         "commit": "97ac5be7ba47377b235a7eebe64d53539084d229",
         "path": "/home/dwyn/Research/test/pentest-agent",
@@ -106,6 +109,7 @@
       "name": "PentestGPT",
       "os_package_requirements": [],
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/PentestGPT.Dockerfile",
+      "resolver_overrides": [],
       "source": {
         "commit": "8650718334ec97b3eba5fa55ec6c87153a21eb34",
         "path": "/home/dwyn/Research/test/PentestGPT",
@@ -141,7 +145,7 @@
         "format": "requirements",
         "hashed": true,
         "path": "build/dependency-envelopes/VulnBot/requirements.lock",
-        "sha256": "41cdef7c2ef39d1e675b00c200e3cd1c5bde97eaef458d97de4f34517d190bce"
+        "sha256": "a04d25ba0e0ab3faed842a5ed8612f1c9136f0b12b060007f26315b1a7ef9999"
       },
       "input_hashes": {
         "requirements.txt": "ff71717369918bed853c20f2c16314a1ce8bc530aee71d57f61925ad4ba538c7"
@@ -149,6 +153,7 @@
       "name": "VulnBot",
       "os_package_requirements": [],
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/VulnBot.Dockerfile",
+      "resolver_overrides": [],
       "source": {
         "commit": "951cbcc456e6ab972fe5015230e8ebf1bd9e32af",
         "path": "/home/dwyn/Research/test/VulnBot",
@@ -216,6 +221,7 @@
       "name": "HackSynth",
       "os_package_requirements": [],
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/HackSynth.Dockerfile",
+      "resolver_overrides": [],
       "source": {
         "commit": "48a41f795dda186df66561c4fd2b58ae84e3e4f8",
         "path": "/home/dwyn/Research/test/HackSynth",

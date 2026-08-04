@@ -10,6 +10,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from typing import Any
 
 from src.pipeline.budget import BudgetExceeded, ResourceBudget, ResourceLimits
 from src.pipeline.evaluator import Evaluator
@@ -47,8 +48,7 @@ class TestManifest(unittest.TestCase):
         self.assertTrue(os.path.isdir(published))
         self.assertEqual(load_manifest(published).run_id, m.run_id)
         # A second run with the same id must not reuse the directory.
-        m2 = RunContext.__new__(RunContext)
-        m2.__init__(m, root=self.root)  # fresh staging
+        m2 = RunContext(m, root=self.root)  # fresh staging
         with self.assertRaises(RuntimeError):
             m2.publish()  # same run_id -> final dir exists -> reuse blocked
 
@@ -120,7 +120,7 @@ class TestBudget(unittest.TestCase):
 
 class TestScope(unittest.TestCase):
     def scope(self, **kw) -> ScopeValidator:
-        base = dict(allowed_networks=["10.0.0.0/24"], allowed_ports=[80, 443, 4444],
+        base: dict[str, Any] = dict(allowed_networks=["10.0.0.0/24"], allowed_ports=[80, 443, 4444],
                     allowed_schemes=["http", "https"], callback_endpoints=["10.0.0.99"],
                     allowed_hostnames=["victim.lab"])
         base.update(kw)

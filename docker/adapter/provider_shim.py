@@ -51,7 +51,11 @@ def main() -> int:
     parser.add_argument("--contract-smoke", action="store_true")
     args = parser.parse_args()
     if args.contract_smoke:
-        print(json.dumps({"provider": "fake", "status": "ok", "network": "gateway-only"}, sort_keys=True))
+        result: dict[str, object] = {"provider": "fake", "status": "ok", "network": "gateway-only"}
+        if os.environ.get("VERIPLANPT_PROVIDER_URL"):
+            result["gateway_response"] = request({"task": "vp-validation-0001", "prompt": "stubbed model response"})
+            result["provider"] = "controlled-gateway"
+        print(json.dumps(result, sort_keys=True))
         return 0
     raise SystemExit("provider_shim.py is a library; use --contract-smoke for the offline probe")
 
