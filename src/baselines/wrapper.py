@@ -21,6 +21,31 @@ def _bounded_digest(value: str, *, limit: int = 16_384) -> dict[str, Any]:
     return {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw), "truncated": len(raw) > limit}
 
 
+def _text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _load_proof_submissions(run_dir: str) -> list[dict[str, Any]]:
+    for name in ("proof_submissions.json", "proof.json"):
+        path = os.path.join(run_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                value = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return []
+        if isinstance(value, list):
+            return [dict(item) for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            return [value]
+    return []
+
+
 def run_baseline_command(
     *,
     framework: str,
@@ -42,23 +67,33 @@ def run_baseline_command(
     os.makedirs(run_dir, exist_ok=True)
     profile = _load_model_profile(model_profile_path)
     started = time.time()
-    proc = subprocess.run(
-        list(command),
-        cwd=run_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=budget_tier.to_limits().max_runtime_seconds,
-    )
+    timed_out = False
+    try:
+        proc = subprocess.run(
+            list(command),
+            cwd=run_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=budget_tier.to_limits().max_runtime_seconds,
+        )
+        stdout = _text(proc.stdout)
+        stderr = _text(proc.stderr)
+        returncode = proc.returncode
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        stdout = _text(exc.stdout)
+        stderr = _text(exc.stderr) or "command timed out"
+        returncode = 124
     transcript = [{
         "role": "baseline_wrapper",
         "event": {
             "event_type": "command",
             "framework": framework,
             "argv": list(command),
-            "returncode": proc.returncode,
-            "stdout": _bounded_digest(proc.stdout),
-            "stderr": _bounded_digest(proc.stderr),
+            "returncode": returncode,
+            "stdout": _bounded_digest(stdout),
+            "stderr": _bounded_digest(stderr),
             "automation_wrapper": automation_wrapper,
         },
     }]
@@ -81,6 +116,31 @@ def run_baseline_command(
         "total_tokens": 0,
         "total_usd": 0.0,
     }
+    proof_submissions = _load_proof_submissions(run_dir)
+    budget_exhausted = (
+        os.environ.get("VERIPLANPT_BUDGET_EXHAUSTED", "").lower() == "true"
+        or os.path.isfile(os.path.join(run_dir, "budget-exhausted.json"))
+    )
+    if timed_out:
+        termination_status = "timeout"
+        internal_outcome = "timeout"
+        budget_reason = "timeout"
+    elif budget_exhausted:
+        termination_status = "budget_exhausted"
+        internal_outcome = "budget_exhausted"
+        budget_reason = "budget_exhausted"
+    elif returncode != 0:
+        termination_status = "infrastructure_failure"
+        internal_outcome = "infrastructure_failure"
+        budget_reason = ""
+    elif not proof_submissions and not automation_wrapper:
+        termination_status = "missing_proof"
+        internal_outcome = "missing_proof"
+        budget_reason = ""
+    else:
+        termination_status = "completed"
+        internal_outcome = "proof_submitted"
+        budget_reason = ""
     framework_key = framework.upper().replace("-", "_")
     artifact = RunArtifact(
         case_id=public_task.case_id,
@@ -95,11 +155,13 @@ def run_baseline_command(
         schema_version="2.0.0" if automation_wrapper else "2.1.0",
         run_id=run_id,
         run_dir=run_dir,
-        termination_status="completed" if proc.returncode == 0 else "infrastructure_failure",
+        termination_status=termination_status,
         # A zero process status means only that the wrapper completed.  Proof
         # success remains an evaluator verdict, never a baseline claim.
-        internal_outcome="proof_submitted" if proc.returncode == 0 else "infrastructure_failure",
+        internal_outcome=internal_outcome,
+        budget_termination_reason=budget_reason,
         transcript=transcript,
+        proof_submissions=proof_submissions,
         usage=normalized_usage,
         framework_identity={
             "name": framework,
@@ -123,7 +185,9 @@ def run_baseline_command(
         event_ledger_hash=hashlib.sha256(
             json.dumps(transcript, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest(),
-        proof_hash=hashlib.sha256(b"[]").hexdigest(),
+        proof_hash=hashlib.sha256(
+            json.dumps(proof_submissions, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
     )
     artifact.save(os.path.join(run_dir, "run_artifact.json"))
     with open(os.path.join(run_dir, "framework_result.json"), "w", encoding="utf-8") as handle:
@@ -136,6 +200,8 @@ def run_baseline_command(
             "condition": condition,
             "repetition": repetition,
             "termination_status": artifact.termination_status,
+            "internal_outcome": artifact.internal_outcome,
+            "proof_submissions": proof_submissions,
             "automation_wrapper": automation_wrapper,
         }, handle, indent=2, sort_keys=True)
     return artifact

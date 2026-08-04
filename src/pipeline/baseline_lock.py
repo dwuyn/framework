@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import subprocess
@@ -9,25 +10,115 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
+def _git(path: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        raise ValueError(f"git {' '.join(args)} failed for {path}: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def _git_tree_hash(root: Path, path: Path | None = None) -> str:
+    """Return the Git tree object, excluding ignored runtime/cache content."""
+    repository = Path(_git(root, "rev-parse", "--show-toplevel")).resolve()
+    target = (path or root).resolve()
+    try:
+        relative = target.relative_to(repository).as_posix()
+    except ValueError as exc:
+        raise ValueError(f"Git tree path {target} is outside repository {repository}") from exc
+    expression = "HEAD^{tree}" if relative in {"", "."} else f"HEAD:{relative}"
+    tree_hash = _git(repository, "rev-parse", expression)
+    if len(tree_hash) != 40:
+        raise ValueError(f"Git tree hash is invalid for {target}")
+    return tree_hash
+
+
 def _tree_hash(root: Path) -> str:
+    """Compatibility name for callers that previously used filesystem hashing."""
+    return _git_tree_hash(root)
+
+
+def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    for path in sorted(p for p in root.rglob("*") if p.is_file() and ".git" not in p.parts):
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(path.read_bytes())
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
     return digest.hexdigest()
 
 
-def _git(path: Path, *args: str) -> str:
-    result = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, check=False)
-    if result.returncode:
-        raise ValueError(f"git {' '.join(args)} failed for {path}")
-    return result.stdout.strip()
+def _required_path(spec: Mapping[str, Any], *keys: str) -> Path:
+    for key in keys:
+        value = str(spec.get(key, "")).strip()
+        if value:
+            path = Path(value).resolve()
+            if not path.is_file():
+                raise ValueError(f"baseline spec {key} is not a file: {path}")
+            return path
+    raise ValueError(f"baseline spec requires one of: {', '.join(keys)}")
+
+
+def _adapter_bundle(spec: Mapping[str, Any]) -> tuple[dict[str, str], str]:
+    bundle = spec.get("adapter_bundle")
+    if not isinstance(bundle, Mapping):
+        bundle = {}
+    paths = {
+        "common": str(
+            bundle.get("common")
+            or spec.get("common_adapter_path")
+            or spec.get("common_adapter")
+            or ""
+        ),
+        "framework": str(
+            bundle.get("framework")
+            or spec.get("framework_adapter_path")
+            or spec.get("framework_adapter")
+            or ""
+        ),
+        "wrapper": str(
+            bundle.get("wrapper")
+            or spec.get("wrapper_path")
+            or spec.get("wrapper")
+            or ""
+        ),
+    }
+    missing = [role for role, value in paths.items() if not value]
+    if missing:
+        raise ValueError(f"adapter bundle missing path(s): {', '.join(missing)}")
+    resolved = {role: str(Path(value).resolve()) for role, value in paths.items()}
+    for role, value in resolved.items():
+        if not Path(value).is_file():
+            raise ValueError(f"adapter bundle {role} is not a file: {value}")
+    version = str(
+        bundle.get("contract_version")
+        or spec.get("adapter_contract_version")
+        or spec.get("adapter_version")
+        or ""
+    ).strip()
+    if not version:
+        raise ValueError("adapter bundle requires a contract_version")
+    return resolved, version
+
+
+def _adapter_bundle_hash(paths: Mapping[str, str], contract_version: str) -> str:
+    payload = {
+        "contract_version": contract_version,
+        "files": {
+            role: _sha256_file(Path(path)) for role, path in sorted(paths.items())
+        },
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def generate_baseline_lock(
     specs: Sequence[Mapping[str, Any]], *, output: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Read Git HEAD/tree/remote and Docker image digest for each baseline."""
+    """Read Git HEAD/tree/remote, recipe/context, adapter bundle, and image digest."""
     if len(specs) != 4:
         raise ValueError("baseline lock requires exactly four baseline specs")
     entries: list[dict[str, Any]] = []
@@ -36,7 +127,7 @@ def generate_baseline_lock(
         root = Path(str(spec.get("path", ""))).resolve()
         if not name or not root.is_dir():
             raise ValueError("baseline spec requires an existing path and name")
-        if _git(root, "status", "--porcelain"):
+        if _git(root, "status", "--porcelain", "--untracked-files=all"):
             raise ValueError(f"baseline {name} worktree is dirty")
         commit = _git(root, "rev-parse", "HEAD")
         remotes = _git(root, "remote", "-v").splitlines()
@@ -44,27 +135,86 @@ def generate_baseline_lock(
         expected_remote = str(spec.get("repo_url", ""))
         if expected_remote and remote and remote != expected_remote:
             raise ValueError(f"baseline {name} remote mismatch")
+
+        recipe = _required_path(spec, "docker_recipe_path", "recipe_path", "dockerfile")
+        context_value = str(
+            spec.get("build_context_path") or spec.get("build_context") or root
+        )
+        context = Path(context_value).resolve()
+        if not context.is_dir():
+            raise ValueError(f"baseline {name} build context is not a directory: {context}")
+        adapter_paths, contract_version = _adapter_bundle(spec)
+
         image = str(spec.get("image", ""))
+        if not image:
+            raise ValueError(f"baseline {name} image is required")
         inspect = subprocess.run(
             ["docker", "image", "inspect", "--format", "{{.Id}}", image],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if inspect.returncode or not inspect.stdout.strip().startswith("sha256:"):
             raise ValueError(f"baseline {name} image is unavailable or unpinned")
-        adapter = Path(str(spec.get("adapter_path", ""))).resolve()
-        if not adapter.is_file():
-            raise ValueError(f"baseline {name} adapter is missing")
-        entries.append({
-            "name": name,
-            "repo_url": expected_remote or remote,
-            "commit": commit,
-            "tree_hash": _tree_hash(root),
-            "image": image,
-            "image_digest": inspect.stdout.strip(),
-            "adapter_version": str(spec.get("adapter_version", "")),
-            "adapter_hash": hashlib.sha256(adapter.read_bytes()).hexdigest(),
-        })
+
+        entries.append(
+            {
+                "name": name,
+                "repo_url": expected_remote or remote,
+                "commit": commit,
+                "tree_hash": _git_tree_hash(root),
+                "tree_hash_kind": "git_tree_object",
+                "build_context_tree_hash": _git_tree_hash(root, context),
+                "docker_recipe_hash": _sha256_file(recipe),
+                "image": image,
+                "image_digest": inspect.stdout.strip(),
+                "adapter_version": contract_version,
+                "adapter_contract_version": contract_version,
+                "adapter_bundle_hash": _adapter_bundle_hash(
+                    adapter_paths, contract_version
+                ),
+            }
+        )
     lock = {"schema_version": "2.0.0", "baselines": entries}
     if output is not None:
-        Path(output).write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        destination = Path(output)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     return lock
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Create a lock exclusively from inspected Git and Docker state.
+
+    The inventory intentionally contains local paths and image references only;
+    all commit, remote, tree, recipe, image digest, and adapter hash values are
+    observed here rather than accepted as hand-authored lock data.
+    """
+    parser = argparse.ArgumentParser(
+        description="Generate a VeriPlanPT baseline lock from a build inventory."
+    )
+    parser.add_argument(
+        "--inventory", required=True, help="JSON inventory with exactly four baseline specs"
+    )
+    parser.add_argument("--output", required=True, help="Destination baseline.lock.json")
+    args = parser.parse_args(argv)
+    inventory_path = Path(args.inventory)
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        parser.error(f"cannot read build inventory: {exc}")
+    specs = inventory.get("baselines") if isinstance(inventory, dict) else inventory
+    if not isinstance(specs, list):
+        parser.error("inventory must be an array or an object containing a 'baselines' array")
+    try:
+        lock = generate_baseline_lock(specs, output=args.output)
+    except (OSError, ValueError, TypeError) as exc:
+        parser.error(str(exc))
+    print(json.dumps({"baseline_count": len(lock["baselines"]), "output": args.output}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

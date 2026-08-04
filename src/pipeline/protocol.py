@@ -99,21 +99,28 @@ def validate_baseline_lock(
             image_digest = str(entry["image_digest"])
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest):
                 raise ValueError(f"baseline {name} requires a real image digest")
-            adapter_hash = str(entry.get("adapter_hash", ""))
+            adapter_hash = str(entry.get("adapter_bundle_hash") or entry.get("adapter_hash") or "")
             if not re.fullmatch(r"[0-9a-f]{64}", adapter_hash):
-                raise ValueError(f"baseline {name} requires an adapter SHA-256")
+                raise ValueError(f"baseline {name} requires an adapter-bundle SHA-256")
+            if not str(entry.get("adapter_contract_version") or entry.get("adapter_version") or "").strip():
+                raise ValueError(f"baseline {name} requires an adapter contract version")
+            for field in ("docker_recipe_hash", "build_context_tree_hash"):
+                if not re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{40}", str(entry.get(field, ""))):
+                    raise ValueError(f"baseline {name} requires a pinned {field}")
             if baseline_root is not None:
                 tree = Path(baseline_root) / name
                 state = git_state(tree)
                 if state["dirty"] or state["commit"] != commit:
                     raise ValueError(f"baseline {name} detached worktree is not clean at the locked commit")
                 if entry.get("tree_hash"):
-                    tree_digest = hashlib.sha256()
-                    for path in sorted(p for p in tree.rglob("*") if p.is_file() and ".git" not in p.parts):
-                        tree_digest.update(path.relative_to(tree).as_posix().encode())
-                        tree_digest.update(path.read_bytes())
-                    if tree_digest.hexdigest() != str(entry["tree_hash"]):
-                        raise ValueError(f"baseline {name} tree hash mismatch")
+                    actual_tree = subprocess.run(
+                        ["git", "-C", str(tree), "rev-parse", "HEAD^{tree}"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if actual_tree.returncode or actual_tree.stdout.strip() != str(entry["tree_hash"]):
+                        raise ValueError(f"baseline {name} Git tree hash mismatch")
                 image = str(entry.get("image", ""))
                 if image:
                     inspected = subprocess.run(
