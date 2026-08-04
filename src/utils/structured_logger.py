@@ -28,6 +28,20 @@ _LOG_DIR = os.environ.get("LOG_DIR", "logs")
 _STRUCTURED_LOG = os.path.join(_LOG_DIR, "structured.jsonl")
 
 
+def _token_count(value: Any) -> int:
+    """Narrow untrusted provider metadata to a usable integer token count."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, (float, str)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
 def extract_token_usage(response: Any) -> tuple[int, int]:
     """
     Extract (input_tokens, output_tokens) from a LangChain LLM response.
@@ -47,7 +61,7 @@ def extract_token_usage(response: Any) -> tuple[int, int]:
         tokens_in = meta.get("input_tokens", meta.get("prompt_tokens", 0))
         tokens_out = meta.get("output_tokens", meta.get("completion_tokens", 0))
         if tokens_in or tokens_out:
-            return int(tokens_in), int(tokens_out)
+            return _token_count(tokens_in), _token_count(tokens_out)
 
     # response_metadata (Ollama, vLLM, etc.)
     rmeta = getattr(response, "response_metadata", None) or {}
@@ -57,10 +71,10 @@ def extract_token_usage(response: Any) -> tuple[int, int]:
             tokens_in = usage.get("prompt_tokens", usage.get("input_tokens", 0))
             tokens_out = usage.get("completion_tokens", usage.get("output_tokens", 0))
             if tokens_in or tokens_out:
-                return int(tokens_in), int(tokens_out)
+                return _token_count(tokens_in), _token_count(tokens_out)
         # Ollama specific
         if "eval_count" in rmeta:
-            return int(rmeta.get("prompt_eval_count", 0)), int(rmeta.get("eval_count", 0))
+            return _token_count(rmeta.get("prompt_eval_count", 0)), _token_count(rmeta.get("eval_count", 0))
 
     # Rough estimate from content length if no metadata
     content = getattr(response, "content", "")

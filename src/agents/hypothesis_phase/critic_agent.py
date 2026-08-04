@@ -14,7 +14,7 @@ from src.config import get_config
 from src.memory.decision import DecisionMemory
 from src.memory.episodic import EpisodicMemory
 from src.retrieval import RetrievalBundle
-from src.state import PentestState, runtime_exceeded
+from src.state import PentestState, runtime_exceeded, state_int
 from src.utils.json_parser import require_json
 from src.utils.structured_logger import extract_token_usage, get_structured_logger
 
@@ -49,7 +49,14 @@ Return JSON only with keys:
 """
 
 
-def _shortlist_maps(bundle: RetrievalBundle) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def _shortlist_maps(
+    bundle: RetrievalBundle,
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, list[dict[str, Any]]],
+]:
     shortlist = list(bundle.shortlist)
     assessments = {item.get("candidate_id", ""): item for item in bundle.assessments}
     authoritative = {item.get("cve_id", ""): item for item in bundle.authoritative_records}
@@ -492,10 +499,10 @@ def _apply_critic_report(
         "spent_steps": em.total_steps(),
         "phase2_route": "",
         "current_phase": "hypothesis",
-        "total_tokens_in": int(state.get("total_tokens_in", 0) or 0) + llm_tokens_in,
-        "total_tokens_out": int(state.get("total_tokens_out", 0) or 0) + llm_tokens_out,
-        "total_tokens": int(state.get("total_tokens", 0) or 0) + llm_tokens_in + llm_tokens_out,
-        "total_llm_requests": int(state.get("total_llm_requests", 0) or 0) + (1 if llm_used else 0),
+        "total_tokens_in": state_int(state, "total_tokens_in") + llm_tokens_in,
+        "total_tokens_out": state_int(state, "total_tokens_out") + llm_tokens_out,
+        "total_tokens": state_int(state, "total_tokens") + llm_tokens_in + llm_tokens_out,
+        "total_llm_requests": state_int(state, "total_llm_requests") + (1 if llm_used else 0),
     }
 
     if report["verdict"] in {"pass", "best_effort_pass"}:
@@ -683,8 +690,9 @@ def critic_agent_node(state: PentestState) -> dict[str, Any]:
         max_rework_rounds=max_rework_rounds,
     )
     update = _apply_critic_report(state, bundle, report, tokens_in, tokens_out, llm_used)
-    if state.get("planning_output_dir"):
-        persist_bundle_artifacts(state["planning_output_dir"], bundle)
+    output_dir = state.get("planning_output_dir")
+    if isinstance(output_dir, str) and output_dir:
+        persist_bundle_artifacts(output_dir, bundle)
     return update
 
 

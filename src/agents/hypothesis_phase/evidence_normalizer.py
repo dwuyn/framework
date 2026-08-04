@@ -56,16 +56,16 @@ def _normalize_evidence(
     candidate_map = {candidate.candidate_id: candidate for candidate in candidates}
     snippet_map = {snippet.candidate_id: snippet for snippet in snippets}
     candidate_by_cve: dict[str, list[PocCandidate]] = {}
-    for candidate in candidates:
-        candidate_by_cve.setdefault(candidate.cve_id, []).append(candidate)
+    for candidate_item in candidates:
+        candidate_by_cve.setdefault(candidate_item.cve_id, []).append(candidate_item)
 
     normalized: list[dict[str, Any]] = []
     seen: set[tuple[str, int, str, str]] = set()
     for assessment in assessments:
         record = record_map.get(assessment.cve_id)
-        candidate = candidate_map.get(assessment.candidate_id)
+        selected_candidate = candidate_map.get(assessment.candidate_id)
         snippet = snippet_map.get(assessment.candidate_id)
-        if record is None or candidate is None:
+        if record is None or selected_candidate is None:
             continue
         text = (record.title + " " + record.description).lower()
         fp = next(
@@ -94,9 +94,9 @@ def _normalize_evidence(
             "version": fp.version,
             "cve_id": assessment.cve_id,
             "candidate_id": assessment.candidate_id,
-            "source": candidate.source,
-            "path": candidate.path,
-            "locator": candidate.locator,
+            "source": selected_candidate.source,
+            "path": selected_candidate.path,
+            "locator": selected_candidate.locator,
             "title": record.title,
             "version_match": assessment.version_match,
             "cpe_match": assessment.cpe_match,
@@ -111,7 +111,7 @@ def _normalize_evidence(
                 assessment.network_match,
             },
             "version_unknown": assessment.version_match != "yes",
-            "google_only": candidate.source == "google" and not {"github", "exploitdb"}.intersection(sibling_sources),
+            "google_only": selected_candidate.source == "google" and not {"github", "exploitdb"}.intersection(sibling_sources),
             "sibling_sources": sibling_sources,
             "trust_score": assessment.trust_score,
             "estimated_cost": assessment.estimated_cost,
@@ -168,8 +168,9 @@ def evidence_normalizer_node(state: PentestState) -> dict[str, Any]:
     bundle.shortlist = shortlist
     bundle.generated_at = bundle.generated_at or time.time()
 
-    if state.get("planning_output_dir"):
-        persist_bundle_artifacts(state["planning_output_dir"], bundle)
+    output_dir = state.get("planning_output_dir")
+    if isinstance(output_dir, str) and output_dir:
+        persist_bundle_artifacts(output_dir, bundle)
 
     slog.node_event(
         "evidence_normalizer",

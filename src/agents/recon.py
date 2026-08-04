@@ -29,7 +29,7 @@ from src.agents.hypothesis_phase.shared import LOW_SIGNAL_LABELS
 from src.config import get_config
 from src.memory.episodic import Episode, EpisodicMemory
 from src.memory.world_state import ServiceInfo, WorldState
-from src.state import PentestState, runtime_exceeded, service_target_key
+from src.state import PentestState, runtime_exceeded, service_target_key, state_int
 from src.tools.shell import run_shell
 from src.utils.json_parser import extract_json
 from src.utils.structured_logger import extract_token_usage, get_structured_logger
@@ -450,15 +450,15 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     tools = [run_shell]
     llm_with_tools = llm.bind_tools(tools)
 
-    step = state.get("recon_step_count", 0)
-    state.get("recon_max_steps", 12)
+    step = state_int(state, "recon_step_count", 0)
+    state_int(state, "recon_max_steps", 12)
     target_ip = state["target_ip"]
 
     # Accumulator baseline
-    acc_tokens_in = state.get("total_tokens_in", 0)
-    acc_tokens_out = state.get("total_tokens_out", 0)
-    acc_requests = state.get("total_llm_requests", 0)
-    acc_invalid = state.get("total_invalid_commands", 0)
+    acc_tokens_in = state_int(state, "total_tokens_in", 0)
+    acc_tokens_out = state_int(state, "total_tokens_out", 0)
+    acc_requests = state_int(state, "total_llm_requests", 0)
+    acc_invalid = state_int(state, "total_invalid_commands", 0)
     phase_timestamps = dict(state.get("phase_timestamps", {}))
     phase_timestamps.setdefault("recon_start", time.time())
     em = EpisodicMemory.from_list(state.get("episodic_memory", []))
@@ -540,7 +540,7 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
 
     if response is None:
         update = {
-            "error_count": state.get("error_count", 0) + 1,
+            "error_count": state_int(state, "error_count", 0) + 1,
             "last_error": "Recon LLM call failed after 3 attempts",
             "recon_complete": True,
             "messages": messages,
@@ -688,9 +688,11 @@ def recon_node(state: PentestState) -> Dict[str, Any]:
     # ── No tool call → parse final summary ───────────────────────────────────
     parsed = extract_json(content)
 
-    if parsed and parsed.get("done") is True:
-        port_services = parsed.get("port_services", {})
-        os_info = parsed.get("os_info")
+    if isinstance(parsed, dict) and parsed.get("done") is True:
+        raw_port_services = parsed.get("port_services", {})
+        port_services = raw_port_services if isinstance(raw_port_services, dict) else {}
+        raw_os_info = parsed.get("os_info")
+        os_info = str(raw_os_info) if raw_os_info else None
         logger.info("Recon complete. Found %d ports.", len(port_services))
 
         # Build / merge final WorldState from summary output
@@ -773,7 +775,7 @@ def route_recon(state: PentestState) -> str:
         return "planning"
     if state.get("recon_complete"):
         return "planning"
-    if state.get("recon_step_count", 0) >= state.get("recon_max_steps", 12):
+    if state_int(state, "recon_step_count", 0) >= state_int(state, "recon_max_steps", 12):
         logger.warning("Recon hit max steps — forcing advance to planning")
         return "planning"
     return "recon"

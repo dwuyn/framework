@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -173,14 +173,14 @@ class WorldState:
 
     def get_services_above_confidence(self, threshold: float) -> list[ServiceInfo]:
         """Return all services across all hosts with confidence >= threshold."""
-        result = []
+        result: list[ServiceInfo] = []
         for host in self.hosts.values():
             result.extend(s for s in host.services if s.confidence >= threshold)
         return result
 
     def get_versioned_services(self) -> list[ServiceInfo]:
         """Return all services that have a non-empty version string."""
-        result = []
+        result: list[ServiceInfo] = []
         for host in self.hosts.values():
             result.extend(s for s in host.services if s.version)
         return result
@@ -188,7 +188,7 @@ class WorldState:
     def get_active_services(self, threshold: float = 0.0, now: float | None = None) -> list[ServiceInfo]:
         if now is None:
             now = time.time()
-        result = []
+        result: list[ServiceInfo] = []
         for host in self.hosts.values():
             for svc in host.services:
                 if svc.is_active(now) and svc.confidence >= threshold:
@@ -226,7 +226,7 @@ class WorldState:
 
     def to_context_dict(self, service_key: str | None = None) -> dict:
         now = time.time()
-        result = {"hosts": {}}
+        result: dict[str, Any] = {"hosts": {}}
         if service_key:
             parts = service_key.split(":")
             if len(parts) in {3, 4}:
@@ -334,10 +334,10 @@ class WorldState:
         lines = []
         for ip, host in self.hosts.items():
             lines.append(f"Host {ip} (OS: {host.os_hint or '?'}, conf={host.os_confidence:.1f}):")
-            for s in host.services:
+            for service in host.services:
                 lines.append(
-                    f"  :{s.port}/{s.protocol} {s.name} {s.version} "
-                    f"[{s.accessibility}] conf={s.confidence:.2f}"
+                    f"  :{service.port}/{service.protocol} {service.name} {service.version} "
+                    f"[{service.accessibility}] conf={service.confidence:.2f}"
                 )
         if self.credentials:
             lines.append("Credentials:")
@@ -345,6 +345,9 @@ class WorldState:
                 lines.append(f"  {c.username}@{c.target_service} (verified={c.verified})")
         if self.sessions:
             lines.append("Sessions:")
-            for s in self.sessions:
-                lines.append(f"  {s.session_type} → {s.target_ip}:{s.target_port} as {s.privilege_level}")
+            for session in self.sessions:
+                lines.append(
+                    f"  {session.session_type} → {session.target_ip}:{session.target_port} "
+                    f"as {session.privilege_level}"
+                )
         return "\n".join(lines)

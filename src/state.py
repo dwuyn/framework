@@ -149,6 +149,18 @@ class PentestState(TypedDict, total=False):
     role_usage: list
     pending_evidence_request: dict
 
+    # Optional pipeline overrides populated by benchmark/runtime callers.
+    # Keeping these keys explicit preserves type checking without changing the
+    # state contract or runtime defaults.
+    oracle_spec: dict[str, Any]
+    approved_lab_cves: list[str]
+    variant: str
+    condition: str
+    pipeline_recon_observations: list[Any]
+    recon_observations: list[Any]
+    exploit_candidate_specs: list[Any]
+    candidate_specs: list[Any]
+
     # ── Recon budget controls ────────────────────────────────────────────────
     recon_followup_step_budget: int
     recon_command_dedupe_window: int
@@ -185,6 +197,29 @@ class PentestState(TypedDict, total=False):
     # ── Conversation (append-only) ────────────────────────────────────────────
     # Uses LangGraph's add_messages reducer so updates are always appended
     messages: Annotated[list, add_messages]
+
+
+def state_int(state: Mapping[str, Any], key: str, default: int = 0) -> int:
+    """Read an integer state value with explicit runtime narrowing.
+
+    TypedDict ``get`` returns ``object`` for optional/dynamic keys under the
+    strict mypy configuration used by the framework.  State is JSON-shaped at
+    runtime, so accepting numeric strings keeps the existing behavior while
+    making arithmetic sites type-safe.
+    """
+    value = state.get(key)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
 
 
 def initial_state(

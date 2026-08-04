@@ -39,6 +39,7 @@ import pickle
 import tempfile
 import threading
 import time
+from typing import Any, cast
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
@@ -296,7 +297,8 @@ def pipeline_targeted_recon_node(state: PentestState) -> dict:
     limit = int(state.get("recon_followup_step_budget", 3) or 3)
     if used >= limit:
         return {"current_phase": "pipeline_targeted_recon", "pending_evidence_request": {}}
-    updates = recon_node(dict(state, current_phase="recon", recon_complete=False))
+    followup_state = cast(PentestState, dict(state, current_phase="recon", recon_complete=False))
+    updates = recon_node(followup_state)
     updates["current_phase"] = "pipeline_targeted_recon"
     updates["phase2_followup_count"] = used + 1
     return updates
@@ -487,7 +489,8 @@ def _runner(state: PentestState, manifest: RunManifest, ledger: EventLedger) -> 
 
 
 def _observations_from_state(state: PentestState) -> list[ReconObservation]:
-    raw = state.get("pipeline_recon_observations") or state.get("recon_observations") or []
+    raw_value = state.get("pipeline_recon_observations") or state.get("recon_observations") or []
+    raw = raw_value if isinstance(raw_value, list) else []
     out: list[ReconObservation] = []
     for item in raw:
         if isinstance(item, ReconObservation):
@@ -583,7 +586,8 @@ def _candidate_objs(items) -> list[ExploitCandidate]:
 
 
 def _candidate_specs_from_state(state: PentestState) -> list:
-    specs = list(state.get("exploit_candidate_specs", []) or [])
+    raw_specs = state.get("exploit_candidate_specs") or []
+    specs: list[Any] = list(raw_specs) if isinstance(raw_specs, list) else []
     for key in ("exploitdb_dir", "exploitdb_root"):
         root = str(state.get(key) or "")
         if root:
@@ -592,7 +596,9 @@ def _candidate_specs_from_state(state: PentestState) -> list:
         root = str(state.get(key) or "")
         if root:
             specs.extend(index_nse_scripts(root))
-    for item in state.get("candidate_specs", []) or []:
+    raw_candidate_specs = state.get("candidate_specs") or []
+    candidate_specs = raw_candidate_specs if isinstance(raw_candidate_specs, list) else []
+    for item in candidate_specs:
         if not isinstance(item, dict):
             specs.append(item)
             continue

@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Mapping
 
 TERMINAL_STATUSES = {"success", "failed", "blocked", "skipped", "preflight_failed"}
 
@@ -21,7 +21,7 @@ def workspace_dir_for_candidate(workspace_root: str, candidate_id: str) -> str:
     return os.path.join(workspace_root, _sanitize_candidate_id(candidate_id))
 
 
-def build_execution_tracker(state: dict[str, Any], execution_cfg: dict[str, Any]) -> dict[str, Any]:
+def build_execution_tracker(state: Mapping[str, Any], execution_cfg: Mapping[str, Any]) -> dict[str, Any]:
     exploit_plan = list(state.get("exploit_plan", []))
     max_candidates = int(execution_cfg.get("max_candidates", 3) or 3)
     selected = exploit_plan[:max_candidates]
@@ -32,7 +32,7 @@ def build_execution_tracker(state: dict[str, Any], execution_cfg: dict[str, Any]
     )
     os.makedirs(workspace_root, exist_ok=True)
 
-    tracker = {
+    tracker: dict[str, Any] = {
         "candidate_order": [item.get("candidate_id", "") for item in selected if item.get("candidate_id")],
         "current_candidate_index": 0,
         "current_command_index": 0,

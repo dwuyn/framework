@@ -187,14 +187,17 @@ def keyword_from_fingerprints(
             fallback_name = best.vendor or "target"
         fallback_name = fallback_name or "target"
 
-        app_name = state.get("app_name") if _is_useful_label(state.get("app_name", "")) else fallback_name
-        version = state.get("app_version") if _is_useful_label(state.get("app_version", "")) else (best.version or "")
-        keyword = state.get("keyword") if _is_useful_label(state.get("keyword", "")) else app_name
+        state_app_name = str(state.get("app_name") or "")
+        state_version = str(state.get("app_version") or "")
+        state_keyword = str(state.get("keyword") or "")
+        app_name = state_app_name if _is_useful_label(state_app_name) else fallback_name
+        version = state_version if _is_useful_label(state_version) else (best.version or "")
+        keyword = state_keyword if _is_useful_label(state_keyword) else app_name
         return keyword, app_name, version
     return (
-        state.get("keyword", "") or state.get("target_ip", "target"),
-        state.get("app_name", ""),
-        state.get("app_version", ""),
+        str(state.get("keyword") or state.get("target_ip") or "target"),
+        str(state.get("app_name") or ""),
+        str(state.get("app_version") or ""),
     )
 
 

@@ -38,7 +38,7 @@ from src.execution.tracker import (
 )
 from src.memory.episodic import Episode, EpisodicMemory
 from src.memory.world_state import WorldState
-from src.state import PentestState, runtime_exceeded
+from src.state import PentestState, runtime_exceeded, state_int
 from src.tools.shell import run_shell
 from src.utils.json_parser import extract_json
 from src.utils.structured_logger import extract_token_usage, get_structured_logger
@@ -287,7 +287,7 @@ def _exhausted_payload(
         "execution_success": False,
         "execution_summary": summary,
         "current_phase": "done",
-        "execution_step_count": state.get("execution_step_count", 0) + 1,
+        "execution_step_count": state_int(state, "execution_step_count", 0) + 1,
         "total_repeated_actions": em.count_repeats(),
         "total_tokens_in": acc_tokens_in,
         "total_tokens_out": acc_tokens_out,
@@ -329,12 +329,12 @@ def execution_node(state: PentestState) -> Dict[str, Any]:
             "phase_timestamps": phase_timestamps,
         }
 
-    acc_tokens_in = state.get("total_tokens_in", 0)
-    acc_tokens_out = state.get("total_tokens_out", 0)
-    acc_requests = state.get("total_llm_requests", 0)
-    acc_invalid = state.get("total_invalid_commands", 0)
-    retry_spent = state.get("retry_spent", 0)
-    step = state.get("execution_step_count", 0)
+    acc_tokens_in = state_int(state, "total_tokens_in", 0)
+    acc_tokens_out = state_int(state, "total_tokens_out", 0)
+    acc_requests = state_int(state, "total_llm_requests", 0)
+    acc_invalid = state_int(state, "total_invalid_commands", 0)
+    retry_spent = state_int(state, "retry_spent", 0)
+    step = state_int(state, "execution_step_count", 0)
 
     if not tracker.get("candidate_order"):
         _log_episode(
@@ -662,7 +662,7 @@ def route_execution(state: PentestState) -> str:
     """Conditional edge after execution node."""
     if state.get("current_phase") == "done":
         return "end"
-    if state.get("execution_step_count", 0) >= state.get("execution_max_steps", 30):
+    if state_int(state, "execution_step_count", 0) >= state_int(state, "execution_max_steps", 30):
         logger.warning("Execution hit max steps — forcing end")
         return "end"
     if state.get("execution_success"):

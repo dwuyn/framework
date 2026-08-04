@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -17,7 +17,7 @@ from src.memory.decision import Decision, DecisionMemory
 from src.memory.episodic import EpisodicMemory
 from src.memory.world_state import WorldState
 from src.scoring.calculator import build_exploit_plan_from_bundle
-from src.state import PentestState, runtime_exceeded
+from src.state import PentestState, runtime_exceeded, state_int
 from src.utils.json_parser import extract_json
 from src.utils.structured_logger import extract_token_usage, get_structured_logger
 
@@ -215,10 +215,10 @@ def planner_node(state: PentestState) -> dict[str, Any]:
 
     update = {
         "current_proposal": proposal,
-        "total_tokens_in": state.get("total_tokens_in", 0) + t_in,
-        "total_tokens_out": state.get("total_tokens_out", 0) + t_out,
-        "total_tokens": state.get("total_tokens", 0) + t_in + t_out,
-        "total_llm_requests": state.get("total_llm_requests", 0) + (1 if t_in or t_out else 0),
+        "total_tokens_in": state_int(state, "total_tokens_in") + t_in,
+        "total_tokens_out": state_int(state, "total_tokens_out") + t_out,
+        "total_tokens": state_int(state, "total_tokens") + t_in + t_out,
+        "total_llm_requests": state_int(state, "total_llm_requests") + (1 if t_in or t_out else 0),
     }
     return update
 
@@ -255,10 +255,10 @@ def skeptic_node(state: PentestState) -> dict[str, Any]:
     debate_history.append(f"SKEPTIC CRITIQUE:\n{critique}")
     update = {
         "debate_history": debate_history,
-        "total_tokens_in": state.get("total_tokens_in", 0) + t_in,
-        "total_tokens_out": state.get("total_tokens_out", 0) + t_out,
-        "total_tokens": state.get("total_tokens", 0) + t_in + t_out,
-        "total_llm_requests": state.get("total_llm_requests", 0) + (1 if t_in or t_out else 0),
+        "total_tokens_in": state_int(state, "total_tokens_in") + t_in,
+        "total_tokens_out": state_int(state, "total_tokens_out") + t_out,
+        "total_tokens": state_int(state, "total_tokens") + t_in + t_out,
+        "total_llm_requests": state_int(state, "total_llm_requests") + (1 if t_in or t_out else 0),
     }
     return update
 
@@ -303,10 +303,10 @@ def risk_officer_node(state: PentestState) -> dict[str, Any]:
         "debate_history": debate_history,
         "debate_round": debate_round + 1,
         "current_phase": "finalize_planning" if verdict == "APPROVE" else "planner",
-        "total_tokens_in": state.get("total_tokens_in", 0) + t_in,
-        "total_tokens_out": state.get("total_tokens_out", 0) + t_out,
-        "total_tokens": state.get("total_tokens", 0) + t_in + t_out,
-        "total_llm_requests": state.get("total_llm_requests", 0) + (1 if t_in or t_out else 0),
+        "total_tokens_in": state_int(state, "total_tokens_in") + t_in,
+        "total_tokens_out": state_int(state, "total_tokens_out") + t_out,
+        "total_tokens": state_int(state, "total_tokens") + t_in + t_out,
+        "total_llm_requests": state_int(state, "total_llm_requests") + (1 if t_in or t_out else 0),
     }
     return update
 
@@ -369,7 +369,13 @@ def _reorder_by_selected(exploit_plan: list[dict[str, Any]], selected_ids: list[
     if not selected_ids:
         return exploit_plan
     index = {candidate_id: pos for pos, candidate_id in enumerate(selected_ids)}
-    return sorted(exploit_plan, key=lambda item: (index.get(item.get("candidate_id"), 10_000), -float(item.get("score", 0.0) or 0.0)))
+    return sorted(
+        exploit_plan,
+        key=lambda item: (
+            index.get(str(item.get("candidate_id") or ""), 10_000),
+            -float(item.get("score", 0.0) or 0.0),
+        ),
+    )
 
 
 def finalize_planning_node(state: PentestState) -> dict[str, Any]:
@@ -437,7 +443,7 @@ def finalize_planning_node(state: PentestState) -> dict[str, Any]:
 
 
 def planning_node(state: PentestState) -> dict[str, Any]:
-    working = dict(state)
+    working: dict[str, Any] = dict(state)
     shortlist = list((working.get("retrieval_bundle", {}) or {}).get("shortlist", []))
     if not shortlist:
         working["current_phase"] = "done"
@@ -447,6 +453,7 @@ def planning_node(state: PentestState) -> dict[str, Any]:
 
     # Deterministic planning: no planner/skeptic/risk debate. The deterministic
     # queue in src.pipeline.queue handles applicability and ranking.
-    working.update(planner_node(working))
-    working.update(finalize_planning_node(working))
+    typed_working = cast(PentestState, working)
+    working.update(planner_node(typed_working))
+    working.update(finalize_planning_node(typed_working))
     return working

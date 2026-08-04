@@ -124,8 +124,8 @@ def _derive_setup_commands(
     raw_setup = list(exploit.get("setup_commands", [])) or list(exploit.get("dependencies", []))
     if not raw_setup:
         requirements = _requirements_file(working_directory)
-        commands = list(exploit.get("commands", []))
-        if requirements and any(str(cmd).strip().startswith(("python ", "python3 ")) for cmd in commands):
+        candidate_commands = list(exploit.get("commands", []))
+        if requirements and any(str(cmd).strip().startswith(("python ", "python3 ")) for cmd in candidate_commands):
             raw_setup = [f"pip install -r {requirements}"]
     if not raw_setup:
         return [], ""

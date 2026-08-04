@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 import socket
-from typing import Any
+from typing import Any, Mapping
 
 from src.memory.world_state import Credential, WorldState
 
@@ -86,7 +86,7 @@ def _pick_lport(preferred: int = 4444) -> str:
 
 def resolve_placeholder_values(
     exploit: dict[str, Any],
-    state: dict[str, Any],
+    state: Mapping[str, Any],
     ws: WorldState,
 ) -> tuple[dict[str, str], list[str]]:
     target_ip = str(exploit.get("target_ip") or state.get("target_ip") or "").strip()

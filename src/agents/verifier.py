@@ -31,7 +31,7 @@ from src.execution.tracker import TERMINAL_STATUSES
 from src.memory.decision import DecisionMemory
 from src.memory.episodic import EpisodicMemory
 from src.memory.world_state import WorldState
-from src.state import PentestState, service_target_key
+from src.state import PentestState, service_target_key, state_int
 from src.utils.json_parser import extract_json
 from src.utils.structured_logger import extract_token_usage, get_structured_logger
 
@@ -123,15 +123,15 @@ def recon_verifier_node(state: PentestState) -> Dict[str, Any]:
     cfg = get_config()
     ws = WorldState.from_dict(state.get("world_state", {}))
     em = EpisodicMemory.from_list(state.get("episodic_memory", []))
-    blocks = state.get("recon_verifier_blocks", 0)
+    blocks = state_int(state, "recon_verifier_blocks", 0)
     vlog = list(state.get("verification_log", []))
     phase_timestamps = dict(state.get("phase_timestamps", {}))
-    step_count = state.get("recon_step_count", 0)
-    max_steps = state.get("recon_max_steps", 12)
+    step_count = state_int(state, "recon_step_count", 0)
+    max_steps = state_int(state, "recon_max_steps", 12)
 
-    acc_tokens_in = state.get("total_tokens_in", 0)
-    acc_tokens_out = state.get("total_tokens_out", 0)
-    acc_requests = state.get("total_llm_requests", 0)
+    acc_tokens_in = state_int(state, "total_tokens_in", 0)
+    acc_tokens_out = state_int(state, "total_tokens_out", 0)
+    acc_requests = state_int(state, "total_llm_requests", 0)
     host_count = len(ws.hosts)
     service_count = sum(len(host.services) for host in ws.hosts.values())
 
@@ -154,7 +154,7 @@ def recon_verifier_node(state: PentestState) -> Dict[str, Any]:
             "timestamp": time.time(),
         }
         vlog.append(verdict)
-        payload = {"verification_log": vlog}
+        payload: dict[str, Any] = {"verification_log": vlog}
         if not sufficient:
             payload["current_phase"] = "done"
         return payload
@@ -413,25 +413,28 @@ def hypothesis_verifier_node(state: PentestState) -> Dict[str, Any]:
         for item in shortlist:
             cve_id = item.get("cve_id", "")
             candidate_id = item.get("candidate_id", "")
-            assessment = next((entry for entry in assessments if entry.get("candidate_id") == candidate_id), {})
+            assessment_item: dict[str, Any] = next(
+                (entry for entry in assessments if entry.get("candidate_id") == candidate_id),
+                {},
+            )
             authority = authoritative.get(cve_id, {})
             source = str(authority.get("source", ""))
             has_authority = source in {"vendor", "kev", "cvemap", "nvd"}
-            version_match = assessment.get("version_match", "unknown")
+            version_match = assessment_item.get("version_match", "unknown")
             hard_mismatch = "no" in {
                 version_match,
-                assessment.get("cpe_match", "unknown"),
-                assessment.get("platform_match", "unknown"),
-                assessment.get("network_match", "unknown"),
+                assessment_item.get("cpe_match", "unknown"),
+                assessment_item.get("platform_match", "unknown"),
+                assessment_item.get("network_match", "unknown"),
             }
             if item.get("source") == "google":
                 sibling_sources = {entry.get("source") for entry in poc_by_cve.get(cve_id, []) if entry.get("candidate_id") != candidate_id}
                 if sibling_sources.intersection({"github", "exploitdb"}):
                     weak.append(item)
                     continue
-            if has_authority and assessment.get("verdict") == "strong" and version_match == "yes" and not hard_mismatch:
+            if has_authority and assessment_item.get("verdict") == "strong" and version_match == "yes" and not hard_mismatch:
                 strong.append(item)
-            elif not hard_mismatch and has_authority and assessment.get("verdict") == "weak":
+            elif not hard_mismatch and has_authority and assessment_item.get("verdict") == "weak":
                 weak.append(item)
                 if version_match != "yes":
                     version_unknown.append(item)
@@ -580,7 +583,7 @@ def _replan_execution_payload(
     reason: str,
 ) -> dict[str, Any]:
     attempted_cves, attempted_services = _collect_attempted_targets(state)
-    replan_count = int(state.get("replan_count", 0) or 0) + 1
+    replan_count = state_int(state, "replan_count", 0) + 1
     next_index = _next_service_index(state, attempted_services)
     target_services = list(state.get("target_services", []) or [])
     next_service = target_services[next_index] if target_services else {}
@@ -633,14 +636,14 @@ def execution_verifier_node(state: PentestState) -> Dict[str, Any]:
     get_config()
     em = EpisodicMemory.from_list(state.get("episodic_memory", []))
     vlog = list(state.get("verification_log", []))
-    exec_step = state.get("execution_step_count", 0)
-    max_steps = state.get("execution_max_steps", 30)
+    exec_step = state_int(state, "execution_step_count", 0)
+    max_steps = state_int(state, "execution_max_steps", 30)
     dm = DecisionMemory.from_list(state.get("decision_memory", []))
     latest = dm.get_latest()
     phase_timestamps = dict(state.get("phase_timestamps", {}))
     tracker = dict(state.get("execution_tracker", {}) or {})
-    replan_count = int(state.get("replan_count", 0) or 0)
-    replan_max = int(state.get("replan_max", 0) or 0)
+    replan_count = state_int(state, "replan_count", 0)
+    replan_max = state_int(state, "replan_max", 0)
     can_replan = not state.get("timeout_exceeded") and replan_count < replan_max
 
     # Check if execution node already declared done
@@ -663,7 +666,7 @@ def execution_verifier_node(state: PentestState) -> Dict[str, Any]:
         vlog.append(verdict)
         if latest and latest.phase == "planning":
             dm.mark_outcome(latest.step, "validated" if success else "invalidated")
-        payload = {"verification_log": vlog, "decision_memory": dm.to_list()}
+        payload: dict[str, Any] = {"verification_log": vlog, "decision_memory": dm.to_list()}
         if success:
             phase_timestamps.setdefault("execution_success_time", time.time())
             payload["phase_timestamps"] = phase_timestamps

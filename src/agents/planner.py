@@ -234,7 +234,8 @@ class PlannerAgent:
         if not candidates:
             return None
         selected = candidates[0]
-        if self.llm is not None:
+        llm = self.llm
+        if llm is not None:
             ids = [c.candidate_id for c in candidates]
             prompt = (
                 "Select exactly one candidate id from this evidence-gated catalog. "
@@ -243,7 +244,7 @@ class PlannerAgent:
                 f"Candidates: {ids}"
             )
             try:
-                response = self.llm.invoke(prompt)
+                response = llm.invoke(prompt)
                 choice = str(getattr(response, "content", response) or "").strip()
                 selected = next((c for c in candidates if c.candidate_id == choice), selected)
             except Exception as exc:
@@ -316,8 +317,11 @@ class PlannerAgent:
             f"Return ONLY the JSON array."
         )
 
+        llm = self.llm
+        if llm is None:
+            return None
         try:
-            response = self.llm.invoke(prompt)
+            response = llm.invoke(prompt)
             text = str(getattr(response, "content", response) or "")
             return _parse_procedure_json(text)
         except Exception as exc:
