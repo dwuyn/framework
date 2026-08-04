@@ -1,0 +1,266 @@
+{
+  "envelopes": [
+    {
+      "adapter_paths": {
+        "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
+        "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/pentest_agent.py",
+        "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
+      },
+      "build_delta": {},
+      "dependency_lock": {
+        "format": "requirements",
+        "hashed": true,
+        "path": "build/dependency-envelopes/VeriPlanPT/requirements.lock",
+        "sha256": "c44915cf95a2669a621188d5d68ec58ab6c84abbad2526d0aa3ffde67fe6fc10"
+      },
+      "input_hashes": {
+        "pyproject.toml": "c7935b378ce8caa5caad5614928080642d1bc0175dd7b76b5b16031fb6d4d606"
+      },
+      "name": "VeriPlanPT",
+      "os_package_requirements": [],
+      "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/veriplanpt.Dockerfile",
+      "source": {
+        "commit": "3153e422fe38925a7e020ce26d5db9524c43b06b",
+        "dirty": true,
+        "path": "/home/dwyn/Research/test/pentest-agent_new",
+        "remote": "",
+        "tree_hash": "a6f4d0a759154601b8a357acdba9e138acc27ec0"
+      },
+      "source_dependency_lock_sha256": "",
+      "target": {
+        "hash_algorithm": "sha256",
+        "network_policy": {
+          "docker_build": "network_disabled",
+          "provider": "local_fake_only",
+          "resolve_and_download": "network_allowed",
+          "wheelhouse_install": "network_disabled"
+        },
+        "os": "linux",
+        "platform": "x86_64-unknown-linux-gnu",
+        "python": "3.11",
+        "python_implementation": "CPython",
+        "resolver": "uv",
+        "resolver_version": "0.11.28",
+        "schema_version": "1.0.0"
+      }
+    },
+    {
+      "adapter_paths": {
+        "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
+        "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/pentest_agent.py",
+        "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
+      },
+      "build_delta": {},
+      "dependency_lock": {
+        "format": "poetry-source+uv-requirements",
+        "hashed": true,
+        "path": "build/dependency-envelopes/PentestAgent/requirements.lock",
+        "sha256": "ebb715b8ee836a11a3ce33c40e325a09c23da85560f5d958ca8883024d1f5f65"
+      },
+      "input_hashes": {
+        "poetry.lock": "854247b0d430d5d8c6731963e170271e628bd2ef7f9f7ec885c640274fafcefb",
+        "pyproject.toml": "ffb0e0638ff7e3c2300677b64f7d40a3f8161c10c019d0e0f31d318a00c687cf"
+      },
+      "name": "PentestAgent",
+      "os_package_requirements": [],
+      "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/PentestAgent.Dockerfile",
+      "source": {
+        "commit": "97ac5be7ba47377b235a7eebe64d53539084d229",
+        "dirty": false,
+        "path": "/home/dwyn/Research/test/pentest-agent",
+        "remote": "https://github.com/nbshenxm/pentest-agent.git",
+        "tree_hash": "5ead8fc25aef3e734664b19ca94bfcc8bef67ff3"
+      },
+      "source_dependency_lock_sha256": "854247b0d430d5d8c6731963e170271e628bd2ef7f9f7ec885c640274fafcefb",
+      "target": {
+        "hash_algorithm": "sha256",
+        "network_policy": {
+          "docker_build": "network_disabled",
+          "provider": "local_fake_only",
+          "resolve_and_download": "network_allowed",
+          "wheelhouse_install": "network_disabled"
+        },
+        "os": "linux",
+        "platform": "x86_64-unknown-linux-gnu",
+        "python": "3.11",
+        "python_implementation": "CPython",
+        "resolver": "uv",
+        "resolver_version": "0.11.28",
+        "schema_version": "1.0.0"
+      }
+    },
+    {
+      "adapter_paths": {
+        "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
+        "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/pentest_gpt.py",
+        "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
+      },
+      "build_delta": {},
+      "dependency_lock": {
+        "format": "requirements",
+        "hashed": true,
+        "path": "build/dependency-envelopes/PentestGPT/requirements.lock",
+        "sha256": "d7047a97513fe71312c036ea4732ff04e050ddfd72ba29fa2f71cbf912b9588e"
+      },
+      "input_hashes": {
+        "requirements.txt": "123e5d73ef5a6524209c024889bc0e5d1543ef586e8f1d8a8665597c9f944687"
+      },
+      "name": "PentestGPT",
+      "os_package_requirements": [],
+      "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/PentestGPT.Dockerfile",
+      "source": {
+        "commit": "8650718334ec97b3eba5fa55ec6c87153a21eb34",
+        "dirty": false,
+        "path": "/home/dwyn/Research/test/PentestGPT",
+        "remote": "https://github.com/GreyDGL/PentestGPT.git",
+        "tree_hash": "22c46ec0d2507beeefe833cd1d83eb41ad886610"
+      },
+      "source_dependency_lock_sha256": "",
+      "target": {
+        "hash_algorithm": "sha256",
+        "network_policy": {
+          "docker_build": "network_disabled",
+          "provider": "local_fake_only",
+          "resolve_and_download": "network_allowed",
+          "wheelhouse_install": "network_disabled"
+        },
+        "os": "linux",
+        "platform": "x86_64-unknown-linux-gnu",
+        "python": "3.11",
+        "python_implementation": "CPython",
+        "resolver": "uv",
+        "resolver_version": "0.11.28",
+        "schema_version": "1.0.0"
+      }
+    },
+    {
+      "adapter_paths": {
+        "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
+        "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/vuln_bot.py",
+        "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
+      },
+      "build_delta": {},
+      "dependency_lock": {
+        "format": "requirements",
+        "hashed": true,
+        "path": "build/dependency-envelopes/VulnBot/requirements.lock",
+        "sha256": "41cdef7c2ef39d1e675b00c200e3cd1c5bde97eaef458d97de4f34517d190bce"
+      },
+      "input_hashes": {
+        "requirements.txt": "ff71717369918bed853c20f2c16314a1ce8bc530aee71d57f61925ad4ba538c7"
+      },
+      "name": "VulnBot",
+      "os_package_requirements": [],
+      "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/VulnBot.Dockerfile",
+      "source": {
+        "commit": "951cbcc456e6ab972fe5015230e8ebf1bd9e32af",
+        "dirty": false,
+        "path": "/home/dwyn/Research/test/VulnBot",
+        "remote": "https://github.com/KHenryAegis/VulnBot.git",
+        "tree_hash": "516538d6bfa7c2a9cb48a8c6b9320fd433ead75f"
+      },
+      "source_dependency_lock_sha256": "",
+      "target": {
+        "hash_algorithm": "sha256",
+        "network_policy": {
+          "docker_build": "network_disabled",
+          "provider": "local_fake_only",
+          "resolve_and_download": "network_allowed",
+          "wheelhouse_install": "network_disabled"
+        },
+        "os": "linux",
+        "platform": "x86_64-unknown-linux-gnu",
+        "python": "3.11",
+        "python_implementation": "CPython",
+        "resolver": "uv",
+        "resolver_version": "0.11.28",
+        "schema_version": "1.0.0"
+      }
+    },
+    {
+      "adapter_paths": {
+        "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
+        "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/hack_synth.py",
+        "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
+      },
+      "build_delta": {
+        "added_index": "https://download.pytorch.org/whl/cpu",
+        "input_path": "build/dependency-envelopes/HackSynth/requirements.cpu.in",
+        "input_sha256": "6ad6a13536eb542185a61159c3e8c081d57658f57c2c9900e4b68444ff5312bd",
+        "removed_packages": [
+          "nvidia-cublas-cu12",
+          "nvidia-cuda-cupti-cu12",
+          "nvidia-cuda-nvrtc-cu12",
+          "nvidia-cuda-runtime-cu12",
+          "nvidia-cudnn-cu12",
+          "nvidia-cufft-cu12",
+          "nvidia-curand-cu12",
+          "nvidia-cusolver-cu12",
+          "nvidia-cusparse-cu12",
+          "nvidia-nccl-cu12",
+          "nvidia-nvjitlink-cu12",
+          "nvidia-nvtx-cu12",
+          "triton"
+        ],
+        "replaced_packages": {
+          "torch": "torch==2.3.0+cpu",
+          "torchaudio": "torchaudio==2.3.0+cpu",
+          "torchvision": "torchvision==0.18.0+cpu"
+        }
+      },
+      "dependency_lock": {
+        "format": "requirements-cpu",
+        "hashed": true,
+        "path": "build/dependency-envelopes/HackSynth/requirements.cpu.lock",
+        "sha256": "2bd8a2f5d365ae7bf0db4ed77245268ecbdb332a6e71d35c3dfe7a6b45ebc402"
+      },
+      "input_hashes": {
+        "requirements.txt": "ac3697bbea01847143b6c50043ea56e924776365fdbedf69d95b051ae19a3a58"
+      },
+      "name": "HackSynth",
+      "os_package_requirements": [],
+      "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/HackSynth.Dockerfile",
+      "source": {
+        "commit": "48a41f795dda186df66561c4fd2b58ae84e3e4f8",
+        "dirty": false,
+        "path": "/home/dwyn/Research/test/HackSynth",
+        "remote": "https://github.com/aielte-research/HackSynth.git",
+        "tree_hash": "a87058e0aa22f2a895701a61581f79933ca04bfb"
+      },
+      "source_dependency_lock_sha256": "",
+      "target": {
+        "hash_algorithm": "sha256",
+        "network_policy": {
+          "docker_build": "network_disabled",
+          "provider": "local_fake_only",
+          "resolve_and_download": "network_allowed",
+          "wheelhouse_install": "network_disabled"
+        },
+        "os": "linux",
+        "platform": "x86_64-unknown-linux-gnu",
+        "python": "3.11",
+        "python_implementation": "CPython",
+        "resolver": "uv",
+        "resolver_version": "0.11.28",
+        "schema_version": "1.0.0"
+      }
+    }
+  ],
+  "schema_version": "1.0.0",
+  "target": {
+    "hash_algorithm": "sha256",
+    "network_policy": {
+      "docker_build": "network_disabled",
+      "provider": "local_fake_only",
+      "resolve_and_download": "network_allowed",
+      "wheelhouse_install": "network_disabled"
+    },
+    "os": "linux",
+    "platform": "x86_64-unknown-linux-gnu",
+    "python": "3.11",
+    "python_implementation": "CPython",
+    "resolver": "uv",
+    "resolver_version": "0.11.28",
+    "schema_version": "1.0.0"
+  }
+}

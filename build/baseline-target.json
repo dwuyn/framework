@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "platform": "x86_64-unknown-linux-gnu",
+  "os": "linux",
+  "python": "3.11",
+  "python_implementation": "CPython",
+  "resolver": "uv",
+  "resolver_version": "0.11.28",
+  "hash_algorithm": "sha256",
+  "network_policy": {
+    "resolve_and_download": "network_allowed",
+    "wheelhouse_install": "network_disabled",
+    "docker_build": "network_disabled",
+    "provider": "local_fake_only"
+  }
+}

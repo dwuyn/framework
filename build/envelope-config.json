@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0.0",
+  "target": "build/baseline-target.json",
+  "framework": {
+    "name": "VeriPlanPT",
+    "source_path": ".",
+    "input_paths": ["pyproject.toml"],
+    "dependency_lock_path": "build/dependency-envelopes/veriplanpt/requirements.lock",
+    "recipe_path": "docker/veriplanpt.Dockerfile",
+    "adapter_paths": {
+      "common": "docker/adapter/provider_shim.py",
+      "framework": "src/baselines/pentest_agent.py",
+      "wrapper": "src/baselines/wrapper.py"
+    },
+    "os_package_requirements": []
+  },
+  "baselines": [
+    {
+      "name": "PentestAgent",
+      "source_path": "../pentest-agent",
+      "repo_url": "https://github.com/nbshenxm/pentest-agent.git",
+      "input_paths": ["pyproject.toml", "poetry.lock"],
+      "dependency_lock_path": "build/dependency-envelopes/PentestAgent/requirements.lock",
+      "recipe_path": "docker/baselines/PentestAgent.Dockerfile",
+      "adapter_paths": {
+        "common": "docker/adapter/provider_shim.py",
+        "framework": "src/baselines/pentest_agent.py",
+        "wrapper": "src/baselines/wrapper.py"
+      },
+      "os_package_requirements": []
+    },
+    {
+      "name": "PentestGPT",
+      "source_path": "../PentestGPT",
+      "repo_url": "https://github.com/GreyDGL/PentestGPT.git",
+      "input_paths": ["requirements.txt"],
+      "dependency_lock_path": "build/dependency-envelopes/PentestGPT/requirements.lock",
+      "recipe_path": "docker/baselines/PentestGPT.Dockerfile",
+      "adapter_paths": {
+        "common": "docker/adapter/provider_shim.py",
+        "framework": "src/baselines/pentest_gpt.py",
+        "wrapper": "src/baselines/wrapper.py"
+      },
+      "os_package_requirements": []
+    },
+    {
+      "name": "VulnBot",
+      "source_path": "../VulnBot",
+      "repo_url": "https://github.com/KHenryAegis/VulnBot.git",
+      "input_paths": ["requirements.txt"],
+      "dependency_lock_path": "build/dependency-envelopes/VulnBot/requirements.lock",
+      "recipe_path": "docker/baselines/VulnBot.Dockerfile",
+      "adapter_paths": {
+        "common": "docker/adapter/provider_shim.py",
+        "framework": "src/baselines/vuln_bot.py",
+        "wrapper": "src/baselines/wrapper.py"
+      },
+      "os_package_requirements": []
+    },
+    {
+      "name": "HackSynth",
+      "source_path": "../HackSynth",
+      "repo_url": "https://github.com/aielte-research/HackSynth.git",
+      "input_paths": ["requirements.txt"],
+      "dependency_lock_path": "build/dependency-envelopes/HackSynth/requirements.cpu.lock",
+      "recipe_path": "docker/baselines/HackSynth.Dockerfile",
+      "adapter_paths": {
+        "common": "docker/adapter/provider_shim.py",
+        "framework": "src/baselines/hack_synth.py",
+        "wrapper": "src/baselines/wrapper.py"
+      },
+      "os_package_requirements": []
+    }
+  ]
+}

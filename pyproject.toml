@@ -7,7 +7,7 @@ authors = [
 ]
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.11,<3.12"
 
 dependencies = [
     # ── Orchestration ────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ addopts = "--tb=short"
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 exclude = ["data_test", "data", ".venv"]
 
 [tool.ruff.lint]

@@ -37,6 +37,32 @@ def _git_tree_hash(root: Path, path: Path | None = None) -> str:
     return tree_hash
 
 
+def _directory_hash(path: Path) -> str:
+    """Hash a non-Git build context without trusting archive metadata."""
+    digest = hashlib.sha256()
+    for child in sorted(path.rglob("*")):
+        if not child.is_file():
+            continue
+        relative = child.relative_to(path).as_posix().encode("utf-8")
+        digest.update(relative)
+        digest.update(b"\0")
+        with child.open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _build_context_hash(source_root: Path, context: Path) -> tuple[str, str]:
+    """Return an observed Git tree or deterministic staged-context hash."""
+    try:
+        return _git_tree_hash(source_root, context), "git_tree_object"
+    except ValueError:
+        if not context.is_dir():
+            raise
+        return _directory_hash(context), "directory_sha256"
+
+
 def _tree_hash(root: Path) -> str:
     """Compatibility name for callers that previously used filesystem hashing."""
     return _git_tree_hash(root)
@@ -143,6 +169,7 @@ def generate_baseline_lock(
         context = Path(context_value).resolve()
         if not context.is_dir():
             raise ValueError(f"baseline {name} build context is not a directory: {context}")
+        context_hash, context_hash_kind = _build_context_hash(root, context)
         adapter_paths, contract_version = _adapter_bundle(spec)
 
         image = str(spec.get("image", ""))
@@ -157,16 +184,51 @@ def generate_baseline_lock(
         if inspect.returncode or not inspect.stdout.strip().startswith("sha256:"):
             raise ValueError(f"baseline {name} image is unavailable or unpinned")
 
-        entries.append(
-            {
+        labels_result = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{json .Config.Labels}}", image],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        image_labels: dict[str, Any] = {}
+        if labels_result.returncode == 0:
+            try:
+                parsed_labels = json.loads(labels_result.stdout.strip())
+                if isinstance(parsed_labels, Mapping):
+                    image_labels = dict(parsed_labels)
+            except json.JSONDecodeError:
+                # Older test doubles and Docker versions may only expose the ID.
+                image_labels = {}
+
+        input_hashes = spec.get("input_hashes")
+        if not isinstance(input_hashes, Mapping):
+            input_hashes = {}
+        normalized_input_hashes = {
+            str(key): str(value) for key, value in sorted(input_hashes.items())
+        }
+        dependency_lock_path = str(spec.get("dependency_lock_path", "")).strip()
+        dependency_lock_hash = ""
+        if dependency_lock_path:
+            dependency_lock = Path(dependency_lock_path).resolve()
+            if not dependency_lock.is_file():
+                raise ValueError(f"baseline {name} dependency lock is not a file: {dependency_lock}")
+            dependency_lock_hash = _sha256_file(dependency_lock)
+        os_packages = spec.get("os_package_requirements", [])
+        if not isinstance(os_packages, list) or any(not str(item).strip() for item in os_packages):
+            raise ValueError(f"baseline {name} os_package_requirements must be a list of non-empty strings")
+
+        entry: dict[str, Any] = {
                 "name": name,
                 "repo_url": expected_remote or remote,
                 "commit": commit,
                 "tree_hash": _git_tree_hash(root),
                 "tree_hash_kind": "git_tree_object",
-                "build_context_tree_hash": _git_tree_hash(root, context),
+                "build_context_tree_hash": context_hash,
+                "build_context_hash_kind": context_hash_kind,
                 "docker_recipe_hash": _sha256_file(recipe),
+                "recipe_hash": _sha256_file(recipe),
                 "image": image,
+                "image_id": inspect.stdout.strip(),
                 "image_digest": inspect.stdout.strip(),
                 "adapter_version": contract_version,
                 "adapter_contract_version": contract_version,
@@ -174,7 +236,14 @@ def generate_baseline_lock(
                     adapter_paths, contract_version
                 ),
             }
-        )
+        if normalized_input_hashes:
+            entry["input_hashes"] = normalized_input_hashes
+        if dependency_lock_hash:
+            entry["dependency_lock_hash"] = dependency_lock_hash
+        entry["os_package_requirements"] = [str(item) for item in os_packages]
+        if image_labels:
+            entry["image_labels"] = image_labels
+        entries.append(entry)
     lock = {"schema_version": "2.0.0", "baselines": entries}
     if output is not None:
         destination = Path(output)

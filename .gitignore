@@ -9,6 +9,14 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+!/build/
+!/build/baseline-target.json
+!/build/envelope-config.json
+!/build/dependency-envelopes/
+!/build/dependency-envelopes/**
+build/wheelhouse/
+build/baseline-build-contexts/
+build/baselines.inventory.json
 develop-eggs/
 dist/
 downloads/

@@ -107,6 +107,16 @@ def validate_baseline_lock(
             for field in ("docker_recipe_hash", "build_context_tree_hash"):
                 if not re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{40}", str(entry.get(field, ""))):
                     raise ValueError(f"baseline {name} requires a pinned {field}")
+            dependency_hash = str(entry.get("dependency_lock_hash", ""))
+            if not re.fullmatch(r"[0-9a-f]{64}", dependency_hash):
+                raise ValueError(f"baseline {name} requires a hashed dependency lock")
+            input_hashes = entry.get("input_hashes")
+            if not isinstance(input_hashes, Mapping) or not input_hashes:
+                raise ValueError(f"baseline {name} requires hashed dependency inputs")
+            if any(not re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in input_hashes.values()):
+                raise ValueError(f"baseline {name} contains an invalid input hash")
+            if not isinstance(entry.get("os_package_requirements"), list):
+                raise ValueError(f"baseline {name} requires OS-package metadata")
             if baseline_root is not None:
                 tree = Path(baseline_root) / name
                 state = git_state(tree)
