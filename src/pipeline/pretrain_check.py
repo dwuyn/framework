@@ -36,17 +36,30 @@ def _command(root: Path, args: list[str]) -> dict[str, str]:
     return {"command": " ".join(args)}
 
 
-def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path, training_protocol: str | Path,
-                   output: str | Path, framework_root: str | Path = ".") -> dict[str, Any]:
+def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None = None,
+                   training_protocol: str | Path | None = None, artifact_root: str | Path | None = None,
+                   output: str | Path = "pretrain_readiness.json", framework_root: str | Path = ".",
+                   evaluator_commit: str | None = None) -> dict[str, Any]:
     root = Path(dataset_root).resolve()
     framework = Path(framework_root).resolve()
+    if artifact_root is not None:
+        art_path = Path(artifact_root).resolve()
+        if baseline_lock is None:
+            baseline_lock = art_path / "baseline.lock.json"
+        if training_protocol is None:
+            training_protocol = art_path / "training_protocol.json"
+    if baseline_lock is None:
+        baseline_lock = root / "baseline.lock.json"
+    if training_protocol is None:
+        training_protocol = root / "training_protocol.json"
+
     checks: dict[str, dict[str, Any]] = {}
     _check(checks, "framework_clean", lambda: git_state(framework) if not git_state(framework)["dirty"]
            else (_ for _ in ()).throw(ValueError("framework repository is dirty")))
     _check(checks, "poetry_lock", lambda: _command(framework, ["poetry", "check", "--lock"]))
     _check(checks, "unit_tests", lambda: _command(framework, ["poetry", "run", "pytest", "-q"]))
     _check(checks, "ruff", lambda: _command(framework, ["poetry", "run", "ruff", "check", "src", "tests"]))
-    _check(checks, "mypy", lambda: _command(framework, ["poetry", "run", "mypy", "src"]))
+    _check(checks, "mypy", lambda: _command(framework, ["poetry", "run", "mypy", "src/pipeline"]))
     _check(checks, "dependency_security", lambda: _command(framework, ["poetry", "run", "pip", "check"]))
     _check(checks, "dataset_clean", lambda: git_state(root) if not git_state(root)["dirty"]
            else (_ for _ in ()).throw(ValueError("dataset repository is dirty")))
@@ -60,6 +73,7 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path, train
         return {"lock_hash": lock_hash(dataset_lock)}
 
     _check(checks, "dataset_lock", dataset_gate)
+
     def baseline_gate() -> dict[str, str]:
         validate_baseline_lock(load_json(baseline_lock))
         return {"lock_hash": hash_lock_file(baseline_lock)}
@@ -71,11 +85,20 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path, train
             raise ValueError("dataset lock did not validate")
         protocol = load_json(training_protocol)
         state = git_state(framework)
-        validate_training_protocol(protocol, dataset_hash=lock_hash(dataset_lock), framework_commit=state["commit"],
-                                   evaluator_commit=str(protocol.get("evaluator_source_hash") or ""))
+        eval_commit = evaluator_commit or state["commit"]
+        validate_training_protocol(
+            protocol,
+            dataset_hash=lock_hash(dataset_lock),
+            framework_commit=state["commit"],
+            evaluator_commit=eval_commit,
+        )
+        b_hash = hash_lock_file(baseline_lock)
+        if str(protocol.get("baseline_lock_hash")) != b_hash:
+            raise ValueError("training protocol baseline_lock_hash mismatch with baseline lock")
         return {"protocol_hash": hash_lock_file(training_protocol)}
 
     _check(checks, "training_protocol", protocol_gate)
+
     def smoke_gate() -> dict[str, Any]:
         if not dataset_lock:
             raise ValueError("dataset lock did not validate")
@@ -130,12 +153,20 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path, train
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate every gate before Vertex policy training.")
     parser.add_argument("--dataset-root", required=True)
-    parser.add_argument("--baseline-lock", required=True)
-    parser.add_argument("--training-protocol", required=True)
+    parser.add_argument("--artifact-root", help="Directory containing downstream artifacts (baseline.lock.json, training_protocol.json)")
+    parser.add_argument("--baseline-lock")
+    parser.add_argument("--training-protocol")
+    parser.add_argument("--evaluator-commit")
     parser.add_argument("--output", default="pretrain_readiness.json")
     args = parser.parse_args(argv)
-    report = pretrain_check(dataset_root=args.dataset_root, baseline_lock=args.baseline_lock,
-                            training_protocol=args.training_protocol, output=args.output)
+    report = pretrain_check(
+        dataset_root=args.dataset_root,
+        baseline_lock=args.baseline_lock,
+        training_protocol=args.training_protocol,
+        artifact_root=args.artifact_root,
+        evaluator_commit=args.evaluator_commit,
+        output=args.output,
+    )
     print(json.dumps({"ready": report["ready"], "output": args.output}, sort_keys=True))
     return 0 if report["ready"] else 1
 

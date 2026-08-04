@@ -120,7 +120,7 @@ def confirmation_cells(
 
 
 def _read_train_cases(dataset_root: Path, lock: Mapping[str, Any]) -> list[dict[str, str]]:
-    metadata = dataset_root / "hidden" / "train_case_metadata.json"
+    metadata = dataset_root / "sealed-train-metadata.json"
     if not metadata.exists():
         raise ValueError("sealed train metadata is missing")
     data = load_json(metadata)
@@ -131,6 +131,9 @@ def _read_train_cases(dataset_root: Path, lock: Mapping[str, Any]) -> list[dict[
     selected = [dict(case) for case in cases if str(case.get("case_id")) in expected]
     if {str(case.get("case_id")) for case in selected} != expected:
         raise ValueError("sealed train metadata does not match dataset train split")
+    for case in selected:
+        if not str(case.get("severity", "")).strip() or not str(case.get("capability", "")).strip():
+            raise ValueError(f"sealed train metadata record {case.get('case_id')} missing severity or capability")
     if any("test" in str(case) for case in selected):
         raise ValueError("training metadata contains a test path")
     return selected
