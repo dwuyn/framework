@@ -92,15 +92,16 @@ def validate_dataset_lock(
         "migration_report_hash", "replacement_fidelity_summary", "dataset_owned_smoke_evidence_hash",
         "sealed_train_metadata_hash",
     }
+    v32_fields = {
+        "dataset_freeze_evidence_path", "dataset_freeze_evidence_hash",
+        "snapshot_manifest_path", "case_tree_hash", "robustness_tree_hash",
+    }
     if strict:
-        required |= {
-            "dataset_freeze_evidence_path", "dataset_freeze_evidence_hash",
-            "snapshot_manifest_path", "case_tree_hash", "robustness_tree_hash",
-        }
+        required |= v32_fields
     missing = sorted(required.difference(lock))
     if missing:
         raise ValueError(f"dataset lock missing required field(s): {', '.join(missing)}")
-    unexpected = set(lock).difference(required | {"lock_hash"})
+    unexpected = set(lock).difference(required | v32_fields | {"lock_hash"})
     if unexpected:
         raise ValueError(f"dataset lock contains non-root field(s): {', '.join(sorted(unexpected))}")
     allowed_versions = {"3.1.0", "3.2.0"} if not strict else {"3.2.0"}
