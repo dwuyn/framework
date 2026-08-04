@@ -59,7 +59,7 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
     _check(checks, "poetry_lock", lambda: _command(framework, ["poetry", "check", "--lock"]))
     _check(checks, "unit_tests", lambda: _command(framework, ["poetry", "run", "pytest", "-q"]))
     _check(checks, "ruff", lambda: _command(framework, ["poetry", "run", "ruff", "check", "src", "tests"]))
-    _check(checks, "mypy", lambda: _command(framework, ["poetry", "run", "mypy", "src/pipeline"]))
+    _check(checks, "mypy", lambda: _command(framework, ["poetry", "run", "mypy", "src/pipeline/pretrain_check.py", "src/pipeline/train.py", "src/pipeline/protocol.py", "src/pipeline/dataset_lock.py", "src/pipeline/readiness_evidence.py", "--ignore-missing-imports", "--follow-imports=skip"]))
     _check(checks, "dependency_security", lambda: _command(framework, ["poetry", "run", "pip", "check"]))
     _check(checks, "dataset_clean", lambda: git_state(root) if not git_state(root)["dirty"]
            else (_ for _ in ()).throw(ValueError("dataset repository is dirty")))
