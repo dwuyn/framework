@@ -140,7 +140,9 @@ class IsolatedContainerRuntime:
             return RuntimeResult(ExecutionResult(proc.returncode, proc.stdout, proc.stderr,
                                  round((time.time() - start) * 1000, 3)))
         except subprocess.TimeoutExpired as exc:
-            return RuntimeResult(ExecutionResult(124, exc.stdout or "", exc.stderr or "", timeout * 1000), "timeout")
+            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            return RuntimeResult(ExecutionResult(124, stdout, stderr, timeout * 1000), "timeout")
         except (OSError, ValueError) as exc:
             return RuntimeResult(ExecutionResult(1, "", str(exc), 0), "runtime_error")
 

@@ -151,7 +151,7 @@ def _classify_exploitability(final_score: float) -> str:
 def _full_score(features: Dict, weights: Dict, trending_score: float) -> Tuple:
     """Calculate score using the full multi-feature analysis (cve_info.py logic)."""
     scores: Dict = {}
-    best = {"func": 0, "comp": 0, "final": 0, "repo": None}
+    best: dict[str, Any] = {"func": 0, "comp": 0, "final": 0, "repo": None}
     best_github = dict(best)
     best_expdb = dict(best)
     has_code = False

@@ -66,14 +66,14 @@ def normalize_usage(response: Any, profile: ModelProfile, latency_ms: float = 0.
     )
     if not raw or not any(key in raw for key in required_any):
         raise UsageMetadataMissing("Vertex response is missing usage metadata")
-    input_tokens = int(raw.get("input_tokens") if "input_tokens" in raw else raw.get("prompt_tokens", 0))
+    input_tokens = int(raw.get("input_tokens", raw.get("prompt_tokens", 0)) or 0)
     cached_tokens = int(
         raw.get("cached_input_tokens")
         or raw.get("cached_tokens")
         or raw.get("cache_read_input_tokens")
         or 0
     )
-    output_tokens = int(raw.get("output_tokens") if "output_tokens" in raw else raw.get("completion_tokens", 0))
+    output_tokens = int(raw.get("output_tokens", raw.get("completion_tokens", 0)) or 0)
     thinking_tokens = int(raw.get("thinking_tokens") or raw.get("reasoning_tokens") or 0)
     if cached_tokens > input_tokens:
         raise UsageMetadataMissing("Vertex cached input tokens exceed input tokens")

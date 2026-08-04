@@ -78,22 +78,34 @@ def _opaque_ids(values: Any, name: str, expected: int, split: str) -> list[str]:
     return ids
 
 
-def validate_dataset_lock(lock: Mapping[str, Any], *, dataset_root: str | Path | None = None) -> None:
-    """Validate the v3.1 root lock without permitting downstream references."""
+def validate_dataset_lock(
+    lock: Mapping[str, Any], *, dataset_root: str | Path | None = None, strict: bool = False,
+) -> None:
+    """Validate the root lock without permitting downstream references.
+
+    Historical v3.1 pilot locks remain readable.  Recovery/freeze gates use
+    ``strict=True`` and require the v3.2 evidence and snapshot pins.
+    """
     required = {
         "schema_version", "frozen_at", "source_snapshot_at", "content_tree_hash", "file_hashes",
         "train_cases", "validation_cases", "test_cases", "robustness_variants", "snapshot_manifest_hash",
         "migration_report_hash", "replacement_fidelity_summary", "dataset_owned_smoke_evidence_hash",
         "sealed_train_metadata_hash",
     }
+    if strict:
+        required |= {
+            "dataset_freeze_evidence_path", "dataset_freeze_evidence_hash",
+            "snapshot_manifest_path", "case_tree_hash", "robustness_tree_hash",
+        }
     missing = sorted(required.difference(lock))
     if missing:
         raise ValueError(f"dataset lock missing required field(s): {', '.join(missing)}")
-    unexpected = set(lock).difference(required)
+    unexpected = set(lock).difference(required | {"lock_hash"})
     if unexpected:
         raise ValueError(f"dataset lock contains non-root field(s): {', '.join(sorted(unexpected))}")
-    if str(lock["schema_version"]) != "3.1.0":
-        raise ValueError("dataset lock schema_version must be 3.1.0")
+    allowed_versions = {"3.1.0", "3.2.0"} if not strict else {"3.2.0"}
+    if str(lock["schema_version"]) not in allowed_versions:
+        raise ValueError("dataset lock schema_version must be 3.2.0")
     forbidden = {"policy_hash", "matrix_hash", "training_protocol_hash", "dataset_commit", "lock_hash"}.intersection(lock)
     if forbidden:
         raise ValueError(f"dataset lock must not reference downstream artifact(s): {', '.join(sorted(forbidden))}")
@@ -134,6 +146,13 @@ def validate_dataset_lock(lock: Mapping[str, Any], *, dataset_root: str | Path |
             raise ValueError("dataset tree hash does not match file hashes")
         if sha256_file(root / "sealed-train-metadata.json") != str(lock["sealed_train_metadata_hash"]):
             raise ValueError("sealed train metadata hash does not match dataset lock")
-        evidence = load_smoke_evidence(root / "readiness" / "smoke-evidence.json")
+        evidence_name = str(lock.get("dataset_freeze_evidence_path", "readiness/smoke-evidence.json"))
+        evidence = load_smoke_evidence(root / evidence_name)
         if dataset_owned_evidence_hash(evidence) != str(lock["dataset_owned_smoke_evidence_hash"]):
             raise ValueError("dataset-owned smoke evidence hash does not match dataset lock")
+        if strict:
+            if sha256_file(root / evidence_name) != str(lock["dataset_freeze_evidence_hash"]):
+                raise ValueError("dataset freeze evidence hash does not match its contents")
+            snapshot_path = root / str(lock["snapshot_manifest_path"])
+            if not snapshot_path.is_file():
+                raise ValueError("dataset lock snapshot manifest path does not exist")

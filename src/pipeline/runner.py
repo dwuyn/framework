@@ -141,7 +141,7 @@ class PipelineRunner:
     # ── Phases ─────────────────────────────────────────────────────────────────
     def recon(self) -> list[ReconObservation]:
         self.ledger.record(phase="recon", stage="applicability", detail="begin")
-        if self.hooks.recon:
+        if self.hooks.recon is not None:
             obs = self.hooks.recon(self) or []
         else:
             obs = []
@@ -272,7 +272,9 @@ class PipelineRunner:
                                           text=True, timeout=step.timeout_seconds, check=False)
                     return ExecutionResult(proc.returncode, proc.stdout, proc.stderr, 0.0)
                 except subprocess.TimeoutExpired as exc:
-                    return ExecutionResult(124, exc.stdout or "", exc.stderr or "timeout", 0.0)
+                    stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+                    stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "timeout")
+                    return ExecutionResult(124, stdout, stderr, 0.0)
             return ExecutionResult(1, "", "isolated runtime is not configured", 0.0)
         gateway = ExecutionGateway(
             runtime=IsolatedContainerRuntime(image=image, network=network,

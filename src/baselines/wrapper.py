@@ -1,4 +1,4 @@
-"""Common RunArtifact v2 wrapper for external baseline frameworks."""
+"""Common RunArtifact wrapper for external baseline frameworks."""
 
 from __future__ import annotations
 
@@ -74,6 +74,14 @@ def run_baseline_command(
     import hashlib
 
     run_id = hashlib.sha256(json.dumps(run_id_payload, sort_keys=True).encode()).hexdigest()[:32]
+    normalized_usage = {
+        "wall_seconds": round(time.time() - started, 3),
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "total_usd": 0.0,
+    }
+    framework_key = framework.upper().replace("-", "_")
     artifact = RunArtifact(
         case_id=public_task.case_id,
         repetition=repetition,
@@ -81,6 +89,10 @@ def run_baseline_command(
         condition=condition,
         model_profile=profile,
         budget_tier=budget_tier,
+        # automation_wrapper=True is retained as a reader-compatible pilot
+        # mode; all normal baseline invocations emit the official v2.1 wire
+        # contract.
+        schema_version="2.0.0" if automation_wrapper else "2.1.0",
         run_id=run_id,
         run_dir=run_dir,
         termination_status="completed" if proc.returncode == 0 else "infrastructure_failure",
@@ -88,7 +100,30 @@ def run_baseline_command(
         # success remains an evaluator verdict, never a baseline claim.
         internal_outcome="proof_submitted" if proc.returncode == 0 else "infrastructure_failure",
         transcript=transcript,
-        usage={"wall_seconds": round(time.time() - started, 3)},
+        usage=normalized_usage,
+        framework_identity={
+            "name": framework,
+            "repository_url": os.environ.get(
+                f"VERIPLANPT_{framework_key}_REPOSITORY_URL",
+                "https://github.com/openai/veriplanpt-baselines",
+            ),
+            "commit": os.environ.get(f"VERIPLANPT_{framework_key}_COMMIT", ""),
+            "image_digest": os.environ.get(f"VERIPLANPT_{framework_key}_IMAGE_DIGEST", ""),
+            "adapter_version": f"{framework.lower()}-adapter-2.1",
+        },
+        run_context={
+            "dataset_lock_hash": os.environ.get("VERIPLANPT_DATASET_LOCK_HASH", ""),
+            "training_protocol_hash": os.environ.get("VERIPLANPT_TRAINING_PROTOCOL_HASH", ""),
+            "policy_lock_hash": os.environ.get("VERIPLANPT_POLICY_LOCK_HASH", ""),
+            "matrix_hash": os.environ.get("VERIPLANPT_MATRIX_HASH", ""),
+            "framework_commit": os.environ.get(f"VERIPLANPT_{framework_key}_COMMIT", ""),
+            "evaluator_commit": os.environ.get("VERIPLANPT_EVALUATOR_COMMIT", ""),
+            "stage": os.environ.get("VERIPLANPT_STAGE", "benchmark"),
+        },
+        event_ledger_hash=hashlib.sha256(
+            json.dumps(transcript, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        proof_hash=hashlib.sha256(b"[]").hexdigest(),
     )
     artifact.save(os.path.join(run_dir, "run_artifact.json"))
     with open(os.path.join(run_dir, "framework_result.json"), "w", encoding="utf-8") as handle:

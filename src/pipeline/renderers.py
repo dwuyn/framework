@@ -65,7 +65,7 @@ def render_procedure(
                 f"Unresolved placeholders in {candidate.candidate_id} stage {step.stage}: {unresolved}")
         rendered.append(RenderedStep(
             stage=step.stage, argv=argv, timeout_seconds=step.timeout_seconds,
-            env={"MSF_CFGROOT_CONFIG": msf_cfgroot} if (msf_cfgroot and candidate.kind == "metasploit") else None,
+            env={"MSF_CFGROOT_CONFIG": msf_cfgroot} if (msf_cfgroot and candidate.kind == "metasploit") else {},
         ))
     return rendered
 

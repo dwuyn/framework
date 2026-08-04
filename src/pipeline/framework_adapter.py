@@ -37,6 +37,9 @@ __all__ = [
     "FrameworkAdapter",
 ]
 
+RUN_ARTIFACT_VERSION = "2.1.0"
+_HEX64 = set("0123456789abcdef")
+
 
 @dataclass
 class ModelProfile:
@@ -262,7 +265,7 @@ class PublicTask:
             port_range = ",".join(str(port) for port in ports)
         else:
             port_range = str(ports or "1-65535")
-        scope = d.get("scope") if isinstance(d.get("scope"), dict) else {}
+        scope = cast(dict[str, Any], d.get("scope") if isinstance(d.get("scope"), dict) else {})
         if scope.get("allowed_hosts") and host not in {str(v) for v in scope["allowed_hosts"]}:
             raise ValueError("public task host is outside its declared scope")
         hints = cast(dict[str, Any], d.get("hints") if isinstance(d.get("hints"), dict) else {})
@@ -352,6 +355,13 @@ class RunArtifact:
     usage: dict[str, Any] = field(default_factory=dict)
     # Environment snapshot
     env_manifest: EnvironmentManifest = field(default_factory=EnvironmentManifest)
+    # Immutable provenance required for official benchmark gates.  These are
+    # mappings rather than framework-specific classes so external adapters can
+    # emit the same wire contract without importing VeriPlanPT internals.
+    framework_identity: dict[str, Any] = field(default_factory=dict)
+    run_context: dict[str, str] = field(default_factory=dict)
+    event_ledger_hash: str = ""
+    proof_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         termination_status = self.termination_status or self.internal_outcome or "unknown"
@@ -386,13 +396,82 @@ class RunArtifact:
             "proof_submissions": self.proof_submissions,
             "usage": self.usage,
             "env_manifest": self.env_manifest.to_dict(),
+            "framework_identity": dict(self.framework_identity),
+            "run_context": dict(self.run_context),
+            "event_ledger_hash": self.event_ledger_hash,
+            "proof_hash": self.proof_hash,
         }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "RunArtifact":
+        """Read pilot v2.0 artifacts and official v2.1 artifacts.
+
+        Historical pilot artifacts intentionally remain readable, but callers
+        running an official gate must invoke :meth:`validate_official`.
+        """
+        profile_data = data.get("model_profile")
+        if not isinstance(profile_data, Mapping):
+            raise ValueError("RunArtifact.model_profile is required")
+        env_data = data.get("env_manifest")
+        env = EnvironmentManifest(**dict(env_data)) if isinstance(env_data, Mapping) else EnvironmentManifest()
+        budget_value = str(data.get("budget_tier") or data.get("budget", {}).get("tier", ""))
+        return cls(
+            case_id=str(data.get("case_id") or data.get("run_identity", {}).get("case_id", "")),
+            repetition=int(data.get("repetition") or data.get("run_identity", {}).get("repetition", 0)),
+            track=str(data.get("track") or data.get("run_identity", {}).get("track", "")),
+            condition=str(data.get("condition") or data.get("run_identity", {}).get("condition", "")),
+            model_profile=ModelProfile.from_dict(profile_data),
+            budget_tier=BudgetTier.from_str(budget_value),
+            schema_version=str(data.get("schema_version", "2.0.0")),
+            run_id=str(data.get("run_id") or data.get("run_identity", {}).get("run_id", "")),
+            run_dir=str(data.get("run_dir", "")),
+            termination_status=str(data.get("termination_status", "")),
+            internal_outcome=str(data.get("internal_outcome", "")),
+            budget_termination_reason=str(data.get("budget_termination_reason", "")),
+            transcript=list(data.get("transcript", [])),
+            proof_submissions=list(data.get("proof_submissions", [])),
+            usage=dict(data.get("usage", {})),
+            env_manifest=env,
+            framework_identity=dict(data.get("framework_identity", {})),
+            run_context={str(k): str(v) for k, v in dict(data.get("run_context", {})).items()},
+            event_ledger_hash=str(data.get("event_ledger_hash", "")),
+            proof_hash=str(data.get("proof_hash", "")),
+        )
+
+    def validate_official(self) -> None:
+        """Fail closed unless this artifact is a complete v2.1 gate artifact."""
+        if self.schema_version != RUN_ARTIFACT_VERSION:
+            raise ValueError("official gates accept only RunArtifact v2.1.0")
+        required_identity = {"name", "repository_url", "commit", "image_digest", "adapter_version"}
+        if not required_identity.issubset(self.framework_identity):
+            raise ValueError("RunArtifact.framework_identity is incomplete")
+        if not str(self.framework_identity.get("repository_url", "")).startswith(("https://", "git@")):
+            raise ValueError("RunArtifact.framework_identity.repository_url must be an upstream URL")
+        if not str(self.framework_identity.get("image_digest", "")).startswith("sha256:"):
+            raise ValueError("RunArtifact.framework_identity.image_digest must be immutable")
+        required_context = {"dataset_lock_hash", "framework_commit", "evaluator_commit", "stage"}
+        if not required_context.issubset(self.run_context):
+            raise ValueError("RunArtifact.run_context is incomplete")
+        for key in ("dataset_lock_hash", "training_protocol_hash", "policy_lock_hash", "matrix_hash"):
+            if key in self.run_context and not _is_hex64(self.run_context[key]):
+                raise ValueError(f"RunArtifact.run_context.{key} must be a SHA-256")
+        for name, value in (("event_ledger_hash", self.event_ledger_hash), ("proof_hash", self.proof_hash)):
+            if not _is_hex64(value):
+                raise ValueError(f"RunArtifact.{name} must be a SHA-256")
+        required_usage = {"total_tokens", "total_usd", "input_tokens", "output_tokens"}
+        if not required_usage.issubset(self.usage):
+            raise ValueError("RunArtifact.usage is not normalized")
 
     def save(self, path: str) -> None:
         """Write the artifact to a JSON file."""
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(self.to_dict(), fh, indent=2, sort_keys=True, default=str)
+
+
+def _is_hex64(value: Any) -> bool:
+    text = str(value)
+    return len(text) == 64 and set(text.lower()) <= _HEX64
 
 
 def _capture_env(snapshot_dir: str = "") -> EnvironmentManifest:
@@ -597,6 +676,7 @@ class FrameworkAdapter:
             track=task.track,
             model_profile=model_profile,
             budget_tier=budget_tier,
+            schema_version=RUN_ARTIFACT_VERSION,
             run_id=thread_id,
             run_dir=actual_run_dir,
             condition=condition,
@@ -605,9 +685,40 @@ class FrameworkAdapter:
             budget_termination_reason=str(result.get("budget_termination_reason") or ""),
             transcript=transcript,
             proof_submissions=proof_submissions,
-            usage=usage,
+            usage={
+                **usage,
+                "input_tokens": usage["total_input_tokens"],
+                "output_tokens": usage["total_output_tokens"],
+                "total_tokens": usage["total_tokens"],
+                "total_usd": usage["total_usd"],
+            },
             env_manifest=env,
+            framework_identity={
+                "name": "VeriPlanPT",
+                "repository_url": os.environ.get(
+                    "VERIPLANPT_REPOSITORY_URL", "https://github.com/openai/veriplanpt"
+                ),
+                "commit": env.framework_commit,
+                "image_digest": os.environ.get("VERIPLANPT_IMAGE_DIGEST", ""),
+                "adapter_version": "veriplanpt-adapter-2.1",
+            },
+            run_context={
+                "dataset_lock_hash": os.environ.get("VERIPLANPT_DATASET_LOCK_HASH", ""),
+                "training_protocol_hash": os.environ.get("VERIPLANPT_TRAINING_PROTOCOL_HASH", ""),
+                "policy_lock_hash": os.environ.get("VERIPLANPT_POLICY_LOCK_HASH", ""),
+                "matrix_hash": os.environ.get("VERIPLANPT_MATRIX_HASH", ""),
+                "framework_commit": env.framework_commit,
+                "evaluator_commit": os.environ.get("VERIPLANPT_EVALUATOR_COMMIT", ""),
+                "stage": os.environ.get("VERIPLANPT_STAGE", "benchmark"),
+            },
+            event_ledger_hash=_json_sha256(transcript),
+            proof_hash=_json_sha256(proof_submissions),
         )
 
         artifact.save(os.path.join(actual_run_dir, "run_artifact.json"))
         return artifact
+
+
+def _json_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

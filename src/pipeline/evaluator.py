@@ -91,7 +91,8 @@ class ResultRow:
 
 
 def _summarize(ledger: EventLedger) -> dict[str, Any]:
-    tokens_in = tokens_out = cost = 0
+    tokens_in = tokens_out = 0
+    cost = 0.0
     executed = invalid = 0
     for ev in ledger.events:
         tokens_in += ev.tokens_in

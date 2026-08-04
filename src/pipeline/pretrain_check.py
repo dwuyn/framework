@@ -8,7 +8,12 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from src.pipeline.dataset_lock import load_dataset_lock, lock_hash, validate_dataset_lock
+from src.pipeline.dataset_lock import (
+    load_dataset_lock,
+    lock_hash,
+    sha256_file,
+    validate_dataset_lock,
+)
 from src.pipeline.protocol import (
     git_state,
     hash_lock_file,
@@ -59,7 +64,10 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
     _check(checks, "poetry_lock", lambda: _command(framework, ["poetry", "check", "--lock"]))
     _check(checks, "unit_tests", lambda: _command(framework, ["poetry", "run", "pytest", "-q"]))
     _check(checks, "ruff", lambda: _command(framework, ["poetry", "run", "ruff", "check", "src", "tests"]))
-    _check(checks, "mypy", lambda: _command(framework, ["poetry", "run", "mypy", "src/pipeline/pretrain_check.py", "src/pipeline/train.py", "src/pipeline/protocol.py", "src/pipeline/dataset_lock.py", "src/pipeline/readiness_evidence.py", "--ignore-missing-imports", "--follow-imports=skip"]))
+    _check(checks, "mypy", lambda: _command(framework, [
+        "poetry", "run", "mypy", "src/pipeline", "src/planning", "src/scoring", "src/baselines",
+        "--ignore-missing-imports", "--follow-imports=skip",
+    ]))
     _check(checks, "dependency_security", lambda: _command(framework, ["poetry", "run", "pip", "check"]))
     _check(checks, "dataset_clean", lambda: git_state(root) if not git_state(root)["dirty"]
            else (_ for _ in ()).throw(ValueError("dataset repository is dirty")))
@@ -69,13 +77,13 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
     def dataset_gate() -> dict[str, Any]:
         nonlocal dataset_lock
         dataset_lock = load_dataset_lock(lock_path)
-        validate_dataset_lock(dataset_lock, dataset_root=root)
+        validate_dataset_lock(dataset_lock, dataset_root=root, strict=True)
         return {"lock_hash": lock_hash(dataset_lock)}
 
     _check(checks, "dataset_lock", dataset_gate)
 
     def baseline_gate() -> dict[str, str]:
-        validate_baseline_lock(load_json(baseline_lock))
+        validate_baseline_lock(load_json(baseline_lock), strict=True)
         return {"lock_hash": hash_lock_file(baseline_lock)}
 
     _check(checks, "baseline_lock", baseline_gate)
@@ -106,8 +114,35 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
         profiles = protocol.get("model_profiles")
         if not isinstance(profiles, list):
             raise ValueError("training protocol model_profiles is invalid")
+        evidence_root = Path(artifact_root).resolve() if artifact_root is not None else root
+        runtime_path = evidence_root / "readiness" / "runtime-smoke-evidence.json"
+        dataset_path = root / "readiness" / "dataset-freeze-evidence.json"
+        if runtime_path.exists() and dataset_path.exists():
+            dataset_summary = validate_smoke_evidence(
+                load_smoke_evidence(dataset_path),
+                base_case_ids=[
+                    *dataset_lock["train_cases"], *dataset_lock["validation_cases"], *dataset_lock["test_cases"]
+                ],
+                robustness_base_case_ids=dataset_lock["test_cases"], mode="dataset-freeze", artifact_root=root,
+            )
+            runtime_summary = validate_smoke_evidence(
+                load_smoke_evidence(runtime_path),
+                base_case_ids=[],
+                model_labels=[
+                    str(profile.get("logical_label") or profile.get("model_name") or "")
+                    for profile in profiles if isinstance(profile, dict)
+                ],
+                mode="runtime-smoke", artifact_root=evidence_root,
+            )
+            runtime = load_smoke_evidence(runtime_path)
+            if str(runtime.get("dataset_lock_hash")) != lock_hash(dataset_lock):
+                raise ValueError("runtime smoke dataset lock hash mismatch")
+            if str(runtime.get("dataset_evidence_hash")) != sha256_file(dataset_path):
+                raise ValueError("runtime smoke dataset evidence hash mismatch")
+            return {**dataset_summary, **runtime_summary}
+        evidence_path = root / "readiness" / "smoke-evidence.json"
         return validate_smoke_evidence(
-            load_smoke_evidence(root / "readiness" / "smoke-evidence.json"),
+            load_smoke_evidence(evidence_path),
             base_case_ids=[
                 *dataset_lock["train_cases"],
                 *dataset_lock["validation_cases"],
@@ -120,6 +155,7 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
             ],
             robustness_base_case_ids=dataset_lock["test_cases"],
             mode="pretrain",
+            artifact_root=None,
         )
 
     _check(checks, "smoke_evidence", smoke_gate)

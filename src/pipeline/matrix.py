@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -48,6 +49,7 @@ def generate_matrix(
     policy_lock_hash: str,
     evaluator_commit: str,
     repetitions: Iterable[int] = (1, 2, 3),
+    strict: bool = False,
 ) -> list[MatrixCell]:
     """Generate exactly 3,807 post-policy cells, refusing ambiguous inputs."""
     if not policy_lock_hash:
@@ -56,28 +58,45 @@ def generate_matrix(
         raise ValueError("matrix requires 27 clean test and 9 robustness cases")
     if len(frameworks) != 5 or len(models) != 3:
         raise ValueError("matrix requires five frameworks and three model profiles")
+    if strict:
+        if not re.fullmatch(r"[0-9a-f]{64}", dataset_lock_hash) or not re.fullmatch(r"[0-9a-f]{64}", policy_lock_hash):
+            raise ValueError("matrix requires real dataset and policy SHA-256 locks")
+        if not re.fullmatch(r"[0-9a-f]{40}", evaluator_commit):
+            raise ValueError("matrix requires a pinned evaluator commit")
+        for item in frameworks:
+            if not re.fullmatch(r"[0-9a-f]{40}", str(item.get("commit", ""))):
+                raise ValueError("matrix framework commits must be full Git SHAs")
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(item.get("image_digest", ""))):
+                raise ValueError("matrix framework images must be immutable digests")
+        for item in models:
+            if not str(item.get("resource_id", "")).strip() or not str(item.get("resource_revision", "")).strip():
+                raise ValueError("matrix models require resolved resource IDs and revisions")
+            if "latest" in str(item.get("resource_revision", "")).lower():
+                raise ValueError("matrix model revisions cannot use latest")
 
     cells: list[MatrixCell] = []
 
     def add(case_id: str, framework: Mapping[str, str], model: Mapping[str, str], budget: str,
             track: str, condition: str, repetition: int) -> None:
-        identity = {
-            "case_id": case_id,
-            "framework": str(framework["name"]),
+        identity: dict[str, Any] = {
+            "case_id": case_id, "framework": str(framework["name"]),
             "framework_commit": str(framework["commit"]),
             "framework_image_digest": str(framework["image_digest"]),
             "model_label": str(model["logical_label"]),
             "model_resource_id": str(model["resource_id"]),
             "model_revision": str(model["resource_revision"]),
-            "dataset_lock_hash": dataset_lock_hash,
-            "policy_lock_hash": policy_lock_hash,
-            "evaluator_commit": evaluator_commit,
-            "budget_tier": budget,
-            "track": track,
-            "condition": condition,
-            "repetition": repetition,
+            "dataset_lock_hash": dataset_lock_hash, "policy_lock_hash": policy_lock_hash,
+            "evaluator_commit": evaluator_commit, "budget_tier": budget, "track": track,
+            "condition": condition, "repetition": repetition,
         }
-        cells.append(MatrixCell(**identity, run_id=stable_run_id(identity)))
+        cells.append(MatrixCell(
+            case_id=case_id, framework=identity["framework"], framework_commit=identity["framework_commit"],
+            framework_image_digest=identity["framework_image_digest"], model_label=identity["model_label"],
+            model_resource_id=identity["model_resource_id"], model_revision=identity["model_revision"],
+            dataset_lock_hash=dataset_lock_hash, policy_lock_hash=policy_lock_hash,
+            evaluator_commit=evaluator_commit, budget_tier=budget, track=track, condition=condition,
+            repetition=repetition, run_id=stable_run_id(identity),
+        ))
 
     main_frameworks = list(frameworks)
     veriplan = next((item for item in frameworks if item["name"] == "VeriPlanPT"), None)
@@ -119,3 +138,15 @@ def write_matrix(cells: Sequence[MatrixCell], json_path: str | Path, csv_path: s
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]) if rows else [])
         writer.writeheader()
         writer.writerows(rows)
+
+
+def validate_matrix_files(json_path: str | Path, csv_path: str | Path) -> None:
+    """Ensure JSON and CSV are projections of the same canonical rows."""
+    rows = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("matrix JSON must contain non-empty rows")
+    with Path(csv_path).open(encoding="utf-8", newline="") as handle:
+        csv_rows = list(csv.DictReader(handle))
+    expected = [{str(key): str(value) for key, value in row.items()} for row in rows]
+    if csv_rows != expected:
+        raise ValueError("matrix JSON/CSV canonical rows differ")

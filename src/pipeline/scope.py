@@ -48,7 +48,7 @@ def default_resolver(hostname: str) -> list[str]:
         return []
     out: list[str] = []
     for info in infos:
-        addr = info[4][0]
+        addr = str(info[4][0])
         if addr not in out:
             out.append(addr)
     return out

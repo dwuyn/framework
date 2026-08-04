@@ -95,9 +95,13 @@ class PrioritySignal:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "PrioritySignal":
-        return cls(**{k: data.get(k, getattr(cls(), k)) for k in (
-            "cve_id", "in_kev", "kev_date_added", "epss_score", "epss_percentile",
-        )})
+        return cls(
+            cve_id=str(data.get("cve_id", "")),
+            in_kev=bool(data.get("in_kev", False)),
+            kev_date_added=float(data.get("kev_date_added", 0.0) or 0.0),
+            epss_score=float(data.get("epss_score", 0.0) or 0.0),
+            epss_percentile=float(data.get("epss_percentile", 0.0) or 0.0),
+        )
 
 
 # ── Backend statuses ──────────────────────────────────────────────────────────
@@ -634,7 +638,7 @@ def _record_mentions(rec: RawCveRecord, product: str, vendor: str) -> bool:
 class KEVAdapter(BaseAdapter):
     name = "kev"
 
-    def fetch(self, product: str, vendor: str, version: str) -> list[PrioritySignal]:
+    def fetch(self, product: str, vendor: str, version: str) -> list[PrioritySignal]:  # type: ignore[override]
         if self.mode in {"snapshot", "replay"} and self.snapshot_dir:
             path = os.path.join(self.snapshot_dir, "kev.json")
             if not os.path.exists(path):
@@ -662,7 +666,7 @@ class KEVAdapter(BaseAdapter):
 class EpssAdapter(BaseAdapter):
     name = "epss"
 
-    def fetch(self, product: str, vendor: str, version: str) -> list[PrioritySignal]:
+    def fetch(self, product: str, vendor: str, version: str) -> list[PrioritySignal]:  # type: ignore[override]
         if self.mode in {"snapshot", "replay"} and self.snapshot_dir:
             path = os.path.join(self.snapshot_dir, "epss.json")
             if not os.path.exists(path):
@@ -716,7 +720,7 @@ def write_snapshot(snapshot_dir: str, records: list[RawCveRecord]) -> str:
     }
     with open(os.path.join(snapshot_dir, "manifest.json"), "w") as fh:
         json.dump(manifest, fh, sort_keys=True, indent=2)
-    return manifest["snapshot_hash"]
+    return str(manifest["snapshot_hash"])
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────

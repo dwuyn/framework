@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -60,18 +61,78 @@ def require_clean_commit(repo: str | Path = ".") -> str:
     return str(state["commit"])
 
 
-def validate_baseline_lock(lock: Mapping[str, Any]) -> None:
+EXPECTED_BASELINE_COMMITS = {
+    "PentestAgent": "97ac5be7ba47377b235a7eebe64d53539084d229",
+    "PentestGPT": "8650718334ec97b3eba5fa55ec6c87153a21eb34",
+    "VulnBot": "951cbcc456e6ab972fe5015230e8ebf1bd9e32af",
+    "HackSynth": "48a41f795dda186df66561c4fd2b58ae84e3e4f8",
+}
+
+
+def validate_baseline_lock(
+    lock: Mapping[str, Any], *, strict: bool = False, baseline_root: str | Path | None = None,
+) -> None:
     entries = lock.get("baselines")
     if str(lock.get("schema_version")) != "2.0.0" or not isinstance(entries, list) or len(entries) != 4:
         raise ValueError("baseline lock must be v2 with exactly four baselines")
-    expected = {"PentestAgent", "PentestGPT", "VulnBot", "HackSynth"}
+    expected_names = {"PentestAgent", "PentestGPT", "VulnBot", "HackSynth"}
     names = {str(entry.get("name")) for entry in entries if isinstance(entry, Mapping)}
-    if names != expected:
+    if names != expected_names:
         raise ValueError("baseline lock must pin PentestAgent, PentestGPT, VulnBot, and HackSynth")
+    commits: set[str] = set()
     for entry in entries:
         required = {"repo_url", "commit", "image_digest", "adapter_version"}
         if not required.issubset(entry) or any(not str(entry[key]).strip() for key in required):
             raise ValueError("baseline entry missing immutable source or adapter data")
+        if strict:
+            name = str(entry.get("name"))
+            repo_url = str(entry["repo_url"])
+            commit = str(entry["commit"])
+            if not repo_url.startswith(("https://", "git@")) or "example.com" in repo_url:
+                raise ValueError(f"baseline {name} has an invalid upstream URL")
+            if not re.fullmatch(r"[0-9a-f]{40}", commit) or commit in commits:
+                raise ValueError("baseline commits must be unique full Git SHAs")
+            expected_commit = EXPECTED_BASELINE_COMMITS.get(name)
+            if expected_commit and commit != expected_commit:
+                raise ValueError(f"baseline {name} is not pinned to the recovery commit")
+            commits.add(commit)
+            image_digest = str(entry["image_digest"])
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest):
+                raise ValueError(f"baseline {name} requires a real image digest")
+            adapter_hash = str(entry.get("adapter_hash", ""))
+            if not re.fullmatch(r"[0-9a-f]{64}", adapter_hash):
+                raise ValueError(f"baseline {name} requires an adapter SHA-256")
+            if baseline_root is not None:
+                tree = Path(baseline_root) / name
+                state = git_state(tree)
+                if state["dirty"] or state["commit"] != commit:
+                    raise ValueError(f"baseline {name} detached worktree is not clean at the locked commit")
+                if entry.get("tree_hash"):
+                    tree_digest = hashlib.sha256()
+                    for path in sorted(p for p in tree.rglob("*") if p.is_file() and ".git" not in p.parts):
+                        tree_digest.update(path.relative_to(tree).as_posix().encode())
+                        tree_digest.update(path.read_bytes())
+                    if tree_digest.hexdigest() != str(entry["tree_hash"]):
+                        raise ValueError(f"baseline {name} tree hash mismatch")
+                image = str(entry.get("image", ""))
+                if image:
+                    inspected = subprocess.run(
+                        ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+                        capture_output=True, text=True, check=False,
+                    )
+                    if inspected.returncode or not inspected.stdout.strip().startswith("sha256:"):
+                        raise ValueError(f"baseline {name} Docker image is unavailable")
+                    if inspected.stdout.strip() != str(entry["image_digest"]):
+                        raise ValueError(f"baseline {name} Docker image digest mismatch")
+
+
+def validate_run_artifact(value: Mapping[str, Any], *, official: bool = True) -> None:
+    """Validate a serialized artifact without trusting self-reported outcomes."""
+    from src.pipeline.framework_adapter import RunArtifact
+
+    artifact = RunArtifact.from_dict(value)
+    if official:
+        artifact.validate_official()
 
 
 def validate_training_protocol(

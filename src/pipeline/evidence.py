@@ -107,9 +107,9 @@ class Fingerprint:
     protocol: str
 
     # Identity fields, each with explicit observation/inference metadata.
-    vendor: IdentityField = field(default_factory=IdentityField)
-    product: IdentityField = field(default_factory=IdentityField)
-    version: IdentityField = field(default_factory=IdentityField)
+    vendor: IdentityField = field(default_factory=lambda: IdentityField("", "", "", 0.0, False, "unknown", ""))
+    product: IdentityField = field(default_factory=lambda: IdentityField("", "", "", 0.0, False, "unknown", ""))
+    version: IdentityField = field(default_factory=lambda: IdentityField("", "", "", 0.0, False, "unknown", ""))
     observed_cpe: str = ""
     inferred_cpe_candidates: list[str] = field(default_factory=list)
     platform_hints: list[str] = field(default_factory=list)
