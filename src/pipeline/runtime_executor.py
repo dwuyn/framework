@@ -18,6 +18,7 @@ class RuntimeCellResult:
     """Evidence emitted by the real wrapper, evaluator, and Docker cleanup."""
     run_artifact: Mapping[str, Any]
     event_ledger: Mapping[str, Any]
+    proof: Mapping[str, Any]
     usage: Mapping[str, Any]
     cost: Mapping[str, Any]
     evaluator: Mapping[str, Any]
@@ -40,6 +41,7 @@ def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
                          profiles: Sequence[ModelProfile], training_protocol_hash: str,
                          baseline_lock_hash: str, pricing_snapshot_hash: str,
                          approval_hash: str, dataset_evidence_hash: str,
+                         framework_commit: str, evaluator_commit: str,
                          cell_executor: CellExecutor, cleanup: Cleanup) -> Path:
     """Run canaries sequentially then smokes; never manufacture evaluator/cleanup evidence."""
     root = Path(artifact_root).resolve()
@@ -65,25 +67,37 @@ def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
         if result.cleanup != cleanup_evidence:
             raise ValueError("cell executor cleanup evidence must be the coordinator cleanup result")
         profile = by_label[str(cell["model_label"])]
+        paths = {"run_artifact": run_dir / "run_artifact.json", "event_ledger": run_dir / "event-ledger.json",
+                 "proof": run_dir / "proof.json", "usage": run_dir / "usage.json", "cost": run_dir / "cost.json", "evaluator": run_dir / "evaluator.json", "cleanup": run_dir / "cleanup.json"}
+        ledger_hash, proof_hash = _write(paths["event_ledger"], result.event_ledger), _write(paths["proof"], result.proof)
         artifact = RunArtifact.from_dict(result.run_artifact)
         validate_run_artifact(result.run_artifact, official=True)
         if artifact.model_profile.profile_hash != profile.profile_hash or artifact.model_profile.resource_revision != profile.resource_revision:
             raise ValueError("RunArtifact profile or resource revision drift")
+        if artifact.event_ledger_hash != ledger_hash or artifact.proof_hash != proof_hash:
+            raise ValueError("RunArtifact ledger or proof hash does not match source evidence")
+        if artifact.framework_identity.get("image_digest") != cell["image_digest"]:
+            raise ValueError("RunArtifact framework image identity does not match cell")
+        expected_context = {"dataset_lock_hash": cell["dataset_lock_hash"], "training_protocol_hash": training_protocol_hash,
+                            "framework_commit": framework_commit, "evaluator_commit": evaluator_commit, "stage": "canary_smoke"}
+        if any(artifact.run_context.get(key) != value for key, value in expected_context.items()):
+            raise ValueError("RunArtifact run context does not match pinned runtime inputs")
         usage = dict(result.usage)
         if {"input_tokens", "output_tokens", "total_tokens", "usd"}.difference(usage):
             raise ValueError("runtime usage is incomplete")
         if float(result.cost.get("cost_usd", -1)) != float(usage["usd"]) or result.cost.get("billing_status") != "known":
             raise ValueError("runtime usage and cost evidence mismatch")
+        if any(float(artifact.usage[key]) != float(usage["usd"] if key == "total_usd" else usage[key]) for key in ("input_tokens", "output_tokens", "total_tokens", "total_usd")):
+            raise ValueError("RunArtifact usage does not match usage evidence")
         if result.evaluator.get("status") != "passed":
             raise RuntimeError("runtime stage halted by evaluator failure")
-        paths = {"run_artifact": run_dir / "run_artifact.json", "event_ledger": run_dir / "event-ledger.json",
-                 "usage": run_dir / "usage.json", "cost": run_dir / "cost.json", "evaluator": run_dir / "evaluator.json", "cleanup": run_dir / "cleanup.json"}
-        hashes = {"run_artifact": _write(paths["run_artifact"], result.run_artifact), "event_ledger": _write(paths["event_ledger"], result.event_ledger),
+        hashes = {"run_artifact": _write(paths["run_artifact"], result.run_artifact), "event_ledger": ledger_hash, "proof": proof_hash,
                   "usage": _write(paths["usage"], usage), "cost": _write(paths["cost"], result.cost), "evaluator": _write(paths["evaluator"], result.evaluator), "cleanup": _write(paths["cleanup"], cleanup_evidence)}
         record = {**dict(cell), "status": "passed", "plan_hash": plan["plan_hash"], "resource_id": profile.resource_id,
                   "resource_revision": profile.resource_revision, "resolution_mode": profile.resolution_mode,
                   "resolution_evidence_hash": profile.resolution_evidence_hash, "resolution_resolved_at": profile.resolution_resolved_at,
                   "artifact_path": str(paths["run_artifact"].relative_to(root)), "artifact_sha256": hashes["run_artifact"], "evidence_sha256": hashes["run_artifact"], "artifact_type": "run_artifact",
+                  "proof_path": str(paths["proof"].relative_to(root)), "proof_sha256": hashes["proof"],
                   "billing_status": result.billing_status, "oracle_status": result.oracle_status}
         for name in ("event_ledger", "usage", "cost", "evaluator", "cleanup"):
             record[f"{name}_path"] = str(paths[name].relative_to(root))

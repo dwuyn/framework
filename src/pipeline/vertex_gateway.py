@@ -8,7 +8,9 @@ short-lived gateway token, never Vertex credentials.
 from __future__ import annotations
 
 import json
+import os
 import re
+import socketserver
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -179,3 +181,20 @@ def serve_gateway(gateway: VertexGateway, *, host: str, port: int) -> ThreadingH
     if host not in {"127.0.0.1", "::1", "0.0.0.0"} or port < 1 or port > 65535:
         raise GatewayError("gateway bind address is invalid")
     return ThreadingHTTPServer((host, port), gateway_handler(gateway))
+
+
+class _ThreadingUnixGatewayServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+def serve_gateway_unix(gateway: VertexGateway, *, socket_path: str) -> socketserver.UnixStreamServer:
+    """Bind the host gateway only to a fresh owner-only Unix socket."""
+    path = os.path.abspath(socket_path)
+    if os.path.lexists(path):
+        raise GatewayError("gateway Unix socket path must be new and not a symlink")
+    parent = os.path.dirname(path)
+    if not os.path.isdir(parent):
+        raise GatewayError("gateway Unix socket parent directory is missing")
+    server = _ThreadingUnixGatewayServer(path, gateway_handler(gateway))
+    os.chmod(path, 0o600)
+    return server
