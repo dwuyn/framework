@@ -509,11 +509,14 @@ class ExperimentRunner:
                 if claimed is None:
                     if self._meta(connection, "stage_halt") is not None:
                         return
+                    query, values = "SELECT status, COUNT(*) AS count FROM runs", []
+                    if eligible_run_ids is not None:
+                        query += " WHERE run_id IN (" + ",".join("?" for _ in eligible_run_ids) + ")"
+                        values = sorted(eligible_run_ids)
+                    query += " GROUP BY status"
                     counts = {
                         str(row["status"]): int(row["count"])
-                        for row in connection.execute(
-                            "SELECT status, COUNT(*) AS count FROM runs GROUP BY status"
-                        ).fetchall()
+                        for row in connection.execute(query, values).fetchall()
                     }
                     if counts.get("running", 0):
                         time.sleep(0.02)
@@ -574,11 +577,11 @@ class ExperimentRunner:
             ),
             credential_validator=credential_validator,
         )
+        all_ids = {str(cell["run_id"]) for cell in plan["cells"]}
+        if eligible_run_ids is not None and (not eligible_run_ids or not eligible_run_ids.issubset(all_ids)):
+            raise ValueError("eligible_run_ids must be non-empty and belong to the approved plan")
         if gateway_start is not None:
             gateway_start()
-        all_ids = {str(cell["run_id"]) for cell in plan["cells"]}
-        if eligible_run_ids is not None and not eligible_run_ids.issubset(all_ids):
-            raise ValueError("eligible_run_ids must belong to the approved plan")
         expires_at = str(verified["expires_at"])
         threads = [
             threading.Thread(
@@ -600,20 +603,24 @@ class ExperimentRunner:
             thread.start()
         for thread in threads:
             thread.join()
-        return self.status()
+        return self.status(eligible_run_ids=eligible_run_ids)
 
-    def status(self) -> dict[str, Any]:
-        rows = self.db.execute(
-            "SELECT status, COUNT(*) AS count FROM runs GROUP BY status"
-        ).fetchall()
+    def status(self, *, eligible_run_ids: set[str] | None = None) -> dict[str, Any]:
+        query, values = "SELECT status, COUNT(*) AS count FROM runs", []
+        if eligible_run_ids is not None:
+            query += " WHERE run_id IN (" + ",".join("?" for _ in eligible_run_ids) + ")"
+            values = sorted(eligible_run_ids)
+        rows = self.db.execute(query + " GROUP BY status", values).fetchall()
         totals = self.db.execute(
             "SELECT COALESCE(SUM(cost_usd), 0) AS cost, "
             "COALESCE(SUM(reserved_cost_usd), 0) AS reserved FROM runs"
         ).fetchone()
         halted = self._meta(self.db, "stage_halt")
         halt_data = json.loads(halted) if halted else None
+        states = {row["status"]: row["count"] for row in rows}
         return {
-            "states": {row["status"]: row["count"] for row in rows},
+            "states": states, "selected": sum(states.values()), "completed": int(states.get("completed", 0)),
+            "failed": sum(int(states.get(key, 0)) for key in ("failed", "billing_unknown", "infrastructure_failure")),
             "accumulated_cost_usd": float(totals["cost"]),
             "reserved_cost_usd": float(totals["reserved"]),
             "halted": halt_data is not None,
