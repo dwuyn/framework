@@ -10,11 +10,18 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from src.pipeline.framework_adapter import ModelProfile
-from src.pipeline.vertex_runtime import GeminiExecutor, GemmaMaaSExecutor, InvocationResult
+from src.pipeline.vertex_runtime import (
+    GeminiExecutor,
+    GemmaMaaSExecutor,
+    GoogleGenAITransport,
+    InvocationResult,
+    OpenAICompatibleClientTransport,
+)
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -56,6 +63,7 @@ class VertexGateway:
         token: str,
         gemini: GeminiExecutor,
         gemma: GemmaMaaSExecutor,
+        token_expires_at: str = "",
     ) -> None:
         if not token:
             raise GatewayError("gateway token is required")
@@ -66,12 +74,24 @@ class VertexGateway:
             raise GatewayError("gateway requires safe approved run IDs")
         self.allowed_run_ids = set(allowed_run_ids)
         self.token = token
+        self.token_expires_at = token_expires_at
+        if token_expires_at:
+            try:
+                expiry = datetime.fromisoformat(token_expires_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise GatewayError("gateway token expiry is invalid") from exc
+            if expiry.tzinfo is None:
+                raise GatewayError("gateway token expiry must include a timezone")
         self.gemini = gemini
         self.gemma = gemma
 
     def invoke(self, request: Mapping[str, Any], *, token: str) -> InvocationResult:
         if token != self.token:
             raise GatewayError("gateway token is invalid")
+        if self.token_expires_at:
+            expiry = datetime.fromisoformat(self.token_expires_at.replace("Z", "+00:00"))
+            if datetime.now(UTC) >= expiry.astimezone(UTC):
+                raise GatewayError("gateway token has expired")
         parsed = GatewayRequest.from_dict(request)
         if parsed.run_id not in self.allowed_run_ids:
             raise GatewayError("gateway request run_id is not approved")
@@ -86,6 +106,39 @@ class VertexGateway:
         if len(messages) != len(parsed.contents):
             raise GatewayError("Gemma gateway messages must be objects")
         return self.gemma.invoke(profile, messages)
+
+
+def build_host_gateway(
+    *, profiles: Sequence[ModelProfile], allowed_run_ids: set[str], token: str,
+    token_expires_at: str, project: str,
+    gemini_client_factory: Callable[[str, str], Any],
+    gemma_client_factory: Callable[[str], Any],
+) -> VertexGateway:
+    """Build credential-owning transports from verified host-side metadata.
+
+    Factories are injected so verify-only tests never import an SDK or make a
+    request.  The Gemma endpoint is taken from its pinned profile; this
+    function has no endpoint constant to drift from Model Garden metadata.
+    """
+    if not project.strip():
+        raise GatewayError("host gateway requires a project")
+    gemini_profiles = [profile for profile in profiles if profile.logical_label.startswith("gemini-")]
+    gemma_profiles = [profile for profile in profiles if profile.logical_label == "gemma-4-26b-a4b-it"]
+    if len(gemini_profiles) != 2 or len(gemma_profiles) != 1:
+        raise GatewayError("host gateway requires exactly two Gemini and one Gemma profile")
+    gemini_client = gemini_client_factory(project, "global")
+    gemma_endpoint = gemma_profiles[0].endpoint_url
+    if not gemma_endpoint.startswith("https://") or "googleapis.com" not in gemma_endpoint:
+        raise GatewayError("Gemma endpoint is not a verified Google endpoint")
+    gemma_client = gemma_client_factory(gemma_endpoint)
+    return VertexGateway(
+        profiles=profiles,
+        allowed_run_ids=allowed_run_ids,
+        token=token,
+        token_expires_at=token_expires_at,
+        gemini=GeminiExecutor(GoogleGenAITransport(gemini_client)),
+        gemma=GemmaMaaSExecutor(OpenAICompatibleClientTransport(gemma_client)),
+    )
 
 
 def gateway_handler(gateway: VertexGateway) -> type[BaseHTTPRequestHandler]:

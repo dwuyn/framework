@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import UTC, datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -29,12 +30,26 @@ def _gateway_url() -> str:
 
 def request(payload: dict[str, object]) -> dict[str, object]:
     """Send one JSON request to the controlled provider gateway."""
-    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+    if any(os.environ.get(name) for name in (
+        "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_ADC", "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION", "GOOGLE_GENAI_USE_VERTEXAI",
+    )):
         raise ProviderShimError("Vertex credentials must not be present in a baseline container")
     if os.environ.get("VERIPLANPT_GATEWAY_LIVE", "").lower() == "true":
-        for name in ("VERIPLANPT_RUN_ID", "VERIPLANPT_MODEL_LABEL", "VERIPLANPT_PROFILE_HASH"):
+        for name in (
+            "VERIPLANPT_RUN_ID", "VERIPLANPT_MODEL_LABEL", "VERIPLANPT_PROFILE_HASH",
+            "VERIPLANPT_PROVIDER_TOKEN", "VERIPLANPT_PROVIDER_TOKEN_EXPIRES_AT",
+        ):
             if not os.environ.get(name):
                 raise ProviderShimError(f"{name} is required for the live gateway")
+        try:
+            expires = datetime.fromisoformat(
+                os.environ["VERIPLANPT_PROVIDER_TOKEN_EXPIRES_AT"].replace("Z", "+00:00")
+            ).astimezone(UTC)
+        except ValueError as exc:
+            raise ProviderShimError("gateway token expiry is invalid") from exc
+        if datetime.now(UTC) >= expires:
+            raise ProviderShimError("gateway token has expired")
         payload = {
             **payload,
             "run_id": os.environ["VERIPLANPT_RUN_ID"],

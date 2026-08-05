@@ -73,6 +73,35 @@ class CellResult:
 
 Executor = Callable[[Mapping[str, Any], Path, Mapping[str, str]], CellResult]
 CredentialValidator = Callable[[], bool]
+GatewayStarter = Callable[[], Any]
+
+
+def validate_runtime_preflight(
+    plan: Mapping[str, Any], *, profile_hashes: Mapping[str, str] | None = None,
+    reservation_ceiling_usd: float | None = None,
+    credential_validator: CredentialValidator | None = None,
+) -> dict[str, Any]:
+    """Check every non-provider precondition before a gateway can start."""
+    cells = plan.get("cells")
+    if not isinstance(cells, list) or not cells:
+        raise ValueError("runtime preflight requires a non-empty plan")
+    expected = dict(profile_hashes or {})
+    if expected:
+        for cell in cells:
+            label = str(cell.get("model_label", ""))
+            if str(cell.get("model_profile_hash", "")) != str(expected.get(label, "")):
+                raise ValueError(f"runtime preflight model-profile hash mismatch for {label}")
+    reserved = sum(_cell_worst_case_cost(cell) for cell in cells)
+    if reservation_ceiling_usd is not None and reserved > float(reservation_ceiling_usd) + 1e-12:
+        raise ValueError("runtime reservation ceiling is below the plan worst-case cost")
+    if credential_validator is not None:
+        try:
+            valid = bool(credential_validator())
+        except Exception as exc:
+            raise ValueError("ADC/service-account preflight failed") from exc
+        if not valid:
+            raise ValueError("ADC/service-account preflight failed")
+    return {"cell_count": len(cells), "reserved_cost_usd": reserved, "credentials_checked": credential_validator is not None}
 
 
 class ExperimentRunner:
@@ -513,6 +542,9 @@ class ExperimentRunner:
         public_key: str,
         executor: Executor,
         credential_validator: CredentialValidator | None = None,
+        profile_hashes: Mapping[str, str] | None = None,
+        gateway_start: GatewayStarter | None = None,
+        reservation_ceiling_usd: float | None = None,
     ) -> dict[str, Any]:
         """Execute cells after validating signed scope/hash/count before claiming."""
         self.register_plan(plan)
@@ -526,6 +558,17 @@ class ExperimentRunner:
             signature_path=signature_path,
             public_key=public_key,
         )
+        validate_runtime_preflight(
+            plan,
+            profile_hashes=profile_hashes,
+            reservation_ceiling_usd=(
+                float(verified["cost_ceiling_usd"])
+                if reservation_ceiling_usd is None else reservation_ceiling_usd
+            ),
+            credential_validator=credential_validator,
+        )
+        if gateway_start is not None:
+            gateway_start()
         expires_at = str(verified["expires_at"])
         threads = [
             threading.Thread(

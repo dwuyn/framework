@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -83,6 +84,12 @@ def normalize_usage(response: Any, profile: ModelProfile, latency_ms: float = 0.
     thinking_tokens = int(
         raw.get("thinking_tokens") or raw.get("reasoning_tokens") or raw.get("thoughts_token_count") or 0
     )
+    counts = {
+        "input": input_tokens, "cached_input": cached_tokens,
+        "output": output_tokens, "thinking": thinking_tokens,
+    }
+    if any(value < 0 for value in counts.values()):
+        raise UsageMetadataMissing("Vertex response contains negative token counts")
     if cached_tokens > input_tokens:
         raise UsageMetadataMissing("Vertex cached input tokens exceed input tokens")
     pricing = profile.pricing
@@ -103,6 +110,16 @@ def normalize_usage(response: Any, profile: ModelProfile, latency_ms: float = 0.
             + output_tokens * pricing["output_per_million"]
             + thinking_tokens * pricing["thinking_per_million"]
         ) / 1_000_000
+    reported_total = raw.get("total_tokens")
+    if reported_total is not None:
+        try:
+            reported_total_value = int(reported_total)
+        except (TypeError, ValueError) as exc:
+            raise UsageMetadataMissing("Vertex total token count is invalid") from exc
+        if reported_total_value != total_tokens:
+            raise UsageMetadataMissing("Vertex total token count is inconsistent")
+    if not math.isfinite(usd) or usd < 0:
+        raise UsageMetadataMissing("Vertex response produced an invalid cost")
     return NormalizedUsage(
         input_tokens=input_tokens,
         cached_input_tokens=cached_tokens,

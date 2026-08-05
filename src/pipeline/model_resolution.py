@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from src.pipeline.framework_adapter import ModelProfile
-from src.pipeline.vertex_runtime import VertexContractError, validate_resolution_fields
+from src.pipeline.vertex_runtime import (
+    LOCKED_MODEL_INVOCATIONS,
+    VertexContractError,
+    validate_resolution_fields,
+)
 
 
 def _hash_file(path: Path) -> str:
@@ -25,10 +31,16 @@ def _relative(value: Any, name: str) -> Path:
 
 def validate_resolution_lock(
     lock: Mapping[str, Any], *, profiles: Sequence[ModelProfile], artifact_root: str | Path,
+    strict: bool = False,
 ) -> None:
     """Rehash each selected provider catalog record and bind it to its profile."""
-    if lock.get("schema_version") != "1.0.0" or not str(lock.get("generated_at", "")).endswith("Z"):
+    allowed_schemas = {"1.0.0", "2.0.0"} if not strict else {"2.0.0"}
+    if lock.get("schema_version") not in allowed_schemas or not str(lock.get("generated_at", "")).endswith("Z"):
         raise ValueError("model resolution lock schema or timestamp is invalid")
+    if strict:
+        dataset_hash = str(lock.get("dataset_lock_hash", ""))
+        if not re.fullmatch(r"[0-9a-f]{64}", dataset_hash):
+            raise ValueError("model resolution lock requires dataset_lock_hash")
     entries = lock.get("models")
     if not isinstance(entries, list) or len(entries) != len(profiles):
         raise ValueError("model resolution lock must contain one record per profile")
@@ -57,5 +69,43 @@ def validate_resolution_lock(
         evidence_path = root / _relative(entry.get("metadata_path"), "metadata_path")
         if not evidence_path.is_file():
             raise ValueError(f"model resolution metadata is missing for {profile.logical_label}")
-        if _hash_file(evidence_path) != profile.resolution_evidence_hash:
+        metadata_file_hash = _hash_file(evidence_path)
+        expected_file_hash = str(entry.get("metadata_sha256", profile.resolution_evidence_hash))
+        if metadata_file_hash != expected_file_hash:
             raise ValueError(f"model resolution metadata hash mismatch for {profile.logical_label}")
+        if strict:
+            try:
+                metadata = json.loads(evidence_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"model resolution metadata is not valid JSON for {profile.logical_label}") from exc
+            if not isinstance(metadata, Mapping):
+                raise ValueError(f"model resolution metadata must be an object for {profile.logical_label}")
+            if str(metadata.get("logical_label", "")) != profile.logical_label:
+                raise ValueError(f"model resolution metadata label mismatch for {profile.logical_label}")
+            expected_model = LOCKED_MODEL_INVOCATIONS[profile.logical_label]
+            if str(metadata.get("model_id", "")) != expected_model["model_id"]:
+                raise ValueError(f"model resolution metadata model ID mismatch for {profile.logical_label}")
+            if str(metadata.get("api_family", "")) != expected_model["api_family"]:
+                raise ValueError(f"model resolution metadata provider surface mismatch for {profile.logical_label}")
+            for key, expected in (
+                ("resource_id", profile.resource_id),
+                ("resource_revision", profile.resource_revision),
+                ("location", profile.location),
+            ):
+                if str(metadata.get(key, "")) != expected:
+                    raise ValueError(f"model resolution metadata {profile.logical_label}.{key} mismatch")
+            if profile.logical_label == "gemma-4-26b-a4b-it":
+                if profile.resource_revision != "001":
+                    raise ValueError("Gemma MaaS must be pinned to immutable revision @001")
+                if not profile.endpoint_url.startswith("https://") or "googleapis.com" not in profile.endpoint_url:
+                    raise ValueError("Gemma MaaS endpoint must come from verified metadata")
+            supplied_metadata_hash = metadata.get("metadata_hash")
+            if supplied_metadata_hash is not None:
+                canonical = {key: value for key, value in metadata.items() if key != "metadata_hash"}
+                expected_hash = hashlib.sha256(
+                    json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+                ).hexdigest()
+                if str(supplied_metadata_hash) != expected_hash:
+                    raise ValueError(f"model resolution metadata canonical hash mismatch for {profile.logical_label}")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(entry.get("metadata_sha256", ""))):
+                raise ValueError(f"model resolution lock requires metadata_sha256 for {profile.logical_label}")

@@ -154,6 +154,7 @@ def validate_run_artifact(value: Mapping[str, Any], *, official: bool = True) ->
 
 def validate_training_protocol(
     protocol: Mapping[str, Any], *, dataset_hash: str, framework_commit: str, evaluator_commit: str,
+    artifact_root: str | Path | None = None, strict_runtime: bool = False,
 ) -> None:
     required = {
         "schema_version", "dataset_repository_commit", "dataset_lock_hash", "framework_commit",
@@ -204,6 +205,53 @@ def validate_training_protocol(
     cv = protocol["cv"]
     if cv != {"seed": 20260801, "folds": 5, "cases_per_fold": 8, "track": "blind", "budget_tier": "medium"}:
         raise ValueError("training protocol CV contract mismatch")
+    if strict_runtime:
+        if artifact_root is None:
+            raise ValueError("strict runtime protocol validation requires artifact_root")
+        from src.pipeline.runtime_contract import validate_lock_reference, validate_runtime_profile
+        from src.pipeline.vertex_runtime import PricingSnapshot
+
+        runtime_required = {
+            "dataset_freeze_manifest", "model_resolution_lock", "pricing_snapshot",
+            "alias_exception", "canary_smoke_plan", "approval_canary_smoke",
+            "native_identity", "vertex_project", "impersonate_service_account", "runtime_budgets",
+        }
+        missing_runtime = sorted(runtime_required.difference(protocol))
+        if missing_runtime:
+            raise ValueError(f"runtime training protocol missing field(s): {', '.join(missing_runtime)}")
+        if not str(protocol["vertex_project"]).strip():
+            raise ValueError("runtime training protocol requires vertex_project")
+        if not str(protocol["impersonate_service_account"]).strip():
+            raise ValueError("runtime training protocol requires impersonate_service_account")
+        budgets = protocol["runtime_budgets"]
+        if not isinstance(budgets, Mapping) or not budgets:
+            raise ValueError("runtime training protocol runtime_budgets is invalid")
+        for name in ("max_input_tokens", "max_output_tokens", "reservation_ceiling_usd"):
+            if name not in budgets or float(budgets[name]) <= 0:
+                raise ValueError(f"runtime budget {name} must be positive")
+        for item in profiles:
+            validate_runtime_profile(ModelProfile.from_dict(item), strict=True)
+        freeze_ref = protocol["dataset_freeze_manifest"]
+        if Path(str(freeze_ref.get("artifact_path", ""))).name != "FREEZE-MANIFEST.json":
+            raise ValueError("dataset_freeze_manifest must reference FREEZE-MANIFEST.json")
+        validate_lock_reference(freeze_ref, name="dataset_freeze_manifest", artifact_root=artifact_root)
+        resolution_path = Path(artifact_root).resolve() / Path(str(protocol["model_resolution_lock"]["artifact_path"]))
+        validate_lock_reference(protocol["model_resolution_lock"], name="model_resolution_lock", artifact_root=artifact_root)
+        validate_lock_reference(protocol["native_identity"], name="native_identity", artifact_root=artifact_root)
+        validate_lock_reference(protocol["pricing_snapshot"], name="pricing_snapshot", artifact_root=artifact_root)
+        validate_lock_reference(protocol["alias_exception"], name="alias_exception", artifact_root=artifact_root)
+        validate_lock_reference(protocol["canary_smoke_plan"], name="canary_smoke_plan", artifact_root=artifact_root)
+        validate_lock_reference(protocol["approval_canary_smoke"], name="approval_canary_smoke", artifact_root=artifact_root)
+        pricing = PricingSnapshot.from_dict(load_json(
+            Path(artifact_root).resolve() / Path(str(protocol["pricing_snapshot"]["artifact_path"]))
+        ))
+        for item in profiles:
+            profile = ModelProfile.from_dict(item)
+            expected = pricing.pricing_for(profile.logical_label)
+            if any(float(profile.pricing.get(key, 0.0)) != float(value) for key, value in expected.items()):
+                raise ValueError(f"runtime pricing does not match profile {profile.logical_label}")
+        if not resolution_path.is_file():
+            raise ValueError("runtime model-resolution lock is missing")
 
 
 def validate_experiment_lock(lock: Mapping[str, Any], *, dataset_hash: str, baseline_hash: str,

@@ -57,6 +57,7 @@ class ModelProfile:
     resolution_mode: str = "immutable"
     resolution_evidence_hash: str = ""
     resolution_resolved_at: str = ""
+    endpoint_url: str = ""
     # Compatibility-only runtime input. It is intentionally not serialized;
     # benchmark project selection comes from Vertex environment credentials.
     project: str = field(default="", repr=False)
@@ -153,6 +154,7 @@ class ModelProfile:
             resolution_mode=str(data.get("resolution_mode", "immutable")),
             resolution_evidence_hash=str(data.get("resolution_evidence_hash", "")),
             resolution_resolved_at=str(data.get("resolution_resolved_at", "")),
+            endpoint_url=str(data.get("endpoint_url", "")),
             location=str(data.get("location", "")),
             resource_id=str(data.get("resource_id", "")),
             resource_revision=str(data.get("resource_revision") or data.get("endpoint_id") or ""),
@@ -177,6 +179,7 @@ class ModelProfile:
             "resolution_mode": self.resolution_mode,
             "resolution_evidence_hash": self.resolution_evidence_hash,
             "resolution_resolved_at": self.resolution_resolved_at,
+            "endpoint_url": self.endpoint_url,
             "resource_id": self.resource_id,
             "resource_revision": self.resource_revision,
             "location": self.location,
@@ -196,6 +199,7 @@ class ModelProfile:
             "resolution_mode": self.resolution_mode,
             "resolution_evidence_hash": self.resolution_evidence_hash,
             "resolution_resolved_at": self.resolution_resolved_at,
+            "endpoint_url": self.endpoint_url,
             "resource_id": self.resource_id,
             "resource_revision": self.resource_revision,
             "location": self.location,

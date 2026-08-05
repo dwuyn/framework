@@ -13,7 +13,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ARTIFACT_ROOT = ROOT.parent / "veriplanpt-artifacts"
-IGNORE = shutil.ignore_patterns(".git", ".venv", "venv", "env", "cyber_venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache", "logs", "data", "data_test", "results")
+IGNORE = shutil.ignore_patterns(
+    ".git", ".venv", "venv", "env", "cyber_venv", "__pycache__", ".pytest_cache",
+    ".ruff_cache", ".mypy_cache", ".tox", "logs", "data", "Data", "data_test", "results",
+    "cases", "hidden", "target", "node_modules", "references", "architecture", "build",
+)
 
 
 def copy_clean(source: Path, destination: Path) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
@@ -39,6 +40,38 @@ _NON_PINNED_REVISIONS = {"", "latest", "unknown", "benchmark-pinned"}
 
 class VertexContractError(ValueError):
     """The model or provider response cannot be safely admitted."""
+
+
+class RetryExhausted(RuntimeError):
+    """A provider transport exhausted its bounded retry policy."""
+
+
+def invoke_with_retry(
+    operation: Any, *, max_attempts: int = 2, backoff_seconds: float = 0.0,
+    sleep: Any = time.sleep,
+) -> Any:
+    """Retry only transient provider failures; never retry auth failures."""
+    if max_attempts < 1:
+        raise ValueError("retry policy max_attempts must be positive")
+    last: BaseException | None = None
+    for attempt in range(max_attempts):
+        try:
+            return operation()
+        except Exception as exc:  # transport implementations expose status_code when available
+            last = exc
+            status = getattr(exc, "status_code", getattr(exc, "code", None))
+            try:
+                status_value = int(status) if status is not None else None
+            except (TypeError, ValueError):
+                status_value = None
+            if status_value in {401, 403}:
+                raise
+            transient = status_value in {408, 425, 429, 500, 502, 503, 504} or status_value is None
+            if not transient or attempt + 1 >= max_attempts:
+                break
+            if backoff_seconds > 0:
+                sleep(backoff_seconds * (2 ** attempt))
+    raise RetryExhausted(f"provider retry policy exhausted after {max_attempts} attempts") from last
 
 
 def _canonical_hash(value: Mapping[str, Any]) -> str:
@@ -83,26 +116,52 @@ class PricingSnapshot:
     retrieved_at: str
     effective_at: str
     model_prices: Mapping[str, Mapping[str, float]]
+    region: str = "global"
+    package: str = "Standard"
+    unit: str = "USD/token"
+    billing_semantics: str = "reasoning_billed_once_with_output"
+    thinking_enabled: Mapping[str, bool] | None = None
 
     REQUIRED_KEYS = frozenset({
         "input_per_million",
         "cached_input_per_million",
         "output_per_million",
     })
+    TOKEN_KEYS = frozenset({
+        "input_usd_per_token",
+        "cached_input_usd_per_token",
+        "output_usd_per_token",
+    })
 
     def __post_init__(self) -> None:
         if not self.source_url.strip() or not self.retrieved_at.strip() or not self.effective_at.strip():
             raise VertexContractError("pricing snapshot requires source and timestamps")
+        if self.region != "global" or self.package != "Standard" or self.unit != "USD/token":
+            raise VertexContractError("pricing snapshot must be global Standard USD/token")
+        if self.billing_semantics != "reasoning_billed_once_with_output":
+            raise VertexContractError("pricing snapshot billing semantics are unsupported")
         if not self.model_prices:
             raise VertexContractError("pricing snapshot must contain model prices")
         for label, prices in self.model_prices.items():
-            missing = self.REQUIRED_KEYS.difference(prices)
-            if missing:
+            names = set(prices)
+            if self.REQUIRED_KEYS <= names:
+                normalized = {key: float(prices[key]) for key in self.REQUIRED_KEYS}
+            elif self.TOKEN_KEYS <= names:
+                normalized = {
+                    key.replace("_usd_per_token", "_per_million"): float(prices[key]) * 1_000_000
+                    for key in self.TOKEN_KEYS
+                }
+            else:
+                missing = self.REQUIRED_KEYS.difference(names)
                 raise VertexContractError(
                     f"pricing for {label} is missing: {', '.join(sorted(missing))}"
                 )
-            if any(float(prices[key]) <= 0 for key in self.REQUIRED_KEYS):
-                raise VertexContractError(f"pricing for {label} must be positive")
+            if any(not math.isfinite(value) or value <= 0 for value in normalized.values()):
+                raise VertexContractError(f"pricing for {label} must be positive and finite")
+            if self.thinking_enabled and label not in self.thinking_enabled:
+                raise VertexContractError(f"pricing thinking_enabled is missing {label}")
+            if self.thinking_enabled and label == "gemma-4-26b-a4b-it" and self.thinking_enabled[label]:
+                raise VertexContractError("Gemma thinking must be disabled")
 
     @property
     def snapshot_hash(self) -> str:
@@ -111,7 +170,36 @@ class PricingSnapshot:
     def pricing_for(self, logical_label: str) -> dict[str, float]:
         if logical_label not in self.model_prices:
             raise VertexContractError(f"pricing snapshot has no entry for {logical_label}")
-        return {key: float(value) for key, value in self.model_prices[logical_label].items()}
+        prices = self.model_prices[logical_label]
+        if self.REQUIRED_KEYS <= set(prices):
+            return {key: float(prices[key]) for key in prices}
+        return {
+            key.replace("_usd_per_token", "_per_million"): float(prices[key]) * 1_000_000
+            for key in prices
+            if key in self.TOKEN_KEYS
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "PricingSnapshot":
+        raw_prices = value.get("model_prices")
+        if not isinstance(raw_prices, Mapping):
+            raise VertexContractError("pricing snapshot model_prices must be an object")
+        thinking = value.get("thinking_enabled")
+        return cls(
+            source_url=str(value.get("source_url", "")),
+            retrieved_at=str(value.get("retrieved_at", "")),
+            effective_at=str(value.get("effective_at", "")),
+            model_prices={
+                str(label): {str(key): float(price) for key, price in dict(prices).items()}
+                for label, prices in raw_prices.items() if isinstance(prices, Mapping)
+            },
+            region=str(value.get("region", "global")),
+            package=str(value.get("package", "Standard")),
+            unit=str(value.get("unit", "USD/token")),
+            billing_semantics=str(value.get("billing_semantics", "reasoning_billed_once_with_output")),
+            thinking_enabled={str(label): bool(enabled) for label, enabled in dict(thinking).items()}
+            if isinstance(thinking, Mapping) else None,
+        )
 
     def to_dict(self, *, include_hash: bool = True) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -119,9 +207,21 @@ class PricingSnapshot:
             "source_url": self.source_url,
             "retrieved_at": self.retrieved_at,
             "effective_at": self.effective_at,
+            "region": self.region,
+            "package": self.package,
             "currency": "USD",
-            "billing_basis": "per_million_tokens",
-            "model_prices": {label: dict(prices) for label, prices in self.model_prices.items()},
+            "billing_basis": "per_token",
+            "unit": self.unit,
+            "billing_semantics": self.billing_semantics,
+            "thinking_enabled": dict(self.thinking_enabled or {}),
+            "model_prices": {
+                label: {
+                    key.replace("_per_million", "_usd_per_token"): float(value) / 1_000_000
+                    for key, value in self.pricing_for(label).items()
+                    if key in self.REQUIRED_KEYS
+                }
+                for label in self.model_prices
+            },
         }
         if include_hash:
             result["snapshot_hash"] = self.snapshot_hash
@@ -142,6 +242,7 @@ class ResolvedModel:
     resolution_mode: str
     resolution_evidence_hash: str
     resolution_resolved_at: str
+    endpoint_url: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -155,6 +256,7 @@ class ResolvedModel:
             "resolution_mode": self.resolution_mode,
             "resolution_evidence_hash": self.resolution_evidence_hash,
             "resolution_resolved_at": self.resolution_resolved_at,
+            "endpoint_url": self.endpoint_url,
         }
 
     def to_model_profile(self, pricing: Mapping[str, float], *, pricing_effective_at: str) -> ModelProfile:
@@ -171,6 +273,7 @@ class ResolvedModel:
                 "resolution_mode": self.resolution_mode,
                 "resolution_evidence_hash": self.resolution_evidence_hash,
                 "resolution_resolved_at": self.resolution_resolved_at,
+                "endpoint_url": self.endpoint_url,
                 "pricing": dict(pricing),
                 "pricing_effective_at": pricing_effective_at,
                 "usage_semantics": {
@@ -200,6 +303,7 @@ class ModelResolver:
         resolution_mode = str(metadata.get("resolution_mode") or "immutable")
         resolution_evidence_hash = str(metadata.get("resolution_evidence_hash") or "")
         resolution_resolved_at = str(metadata.get("resolution_resolved_at") or "")
+        endpoint_url = str(metadata.get("endpoint_url") or metadata.get("inference_endpoint") or "")
         missing = [
             name for name, value in (
                 ("model_id", model_id),
@@ -261,6 +365,7 @@ class ModelResolver:
             resolution_mode=resolution_mode,
             resolution_evidence_hash=resolution_evidence_hash,
             resolution_resolved_at=resolution_resolved_at,
+            endpoint_url=endpoint_url,
         )
 
     def resolve_all(self, inventory: Mapping[str, Mapping[str, Any]]) -> list[ResolvedModel]:

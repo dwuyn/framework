@@ -3,16 +3,23 @@ from __future__ import annotations
 import pytest
 
 from src.pipeline.framework_adapter import ModelProfile
-from src.pipeline.llm_budget import normalize_usage
+from src.pipeline.llm_budget import UsageMetadataMissing, normalize_usage
 from src.pipeline.model_resolution import validate_resolution_lock
 from src.pipeline.runtime_readiness import build_canary_smoke_plan
-from src.pipeline.vertex_gateway import GatewayError, VertexGateway, serve_gateway
+from src.pipeline.vertex_gateway import (
+    GatewayError,
+    VertexGateway,
+    build_host_gateway,
+    serve_gateway,
+)
 from src.pipeline.vertex_runtime import (
     GeminiExecutor,
     GemmaMaaSExecutor,
     ModelResolver,
     PricingSnapshot,
+    RetryExhausted,
     VertexContractError,
+    invoke_with_retry,
 )
 
 
@@ -264,3 +271,86 @@ def test_gateway_refuses_non_local_bind_address() -> None:
     )
     with pytest.raises(GatewayError, match="bind address"):
         serve_gateway(gateway, host="example.test", port=8080)
+
+
+def test_retry_policy_never_retries_auth_and_bounds_429() -> None:
+    class StatusError(RuntimeError):
+        def __init__(self, status_code: int) -> None:
+            super().__init__(str(status_code))
+            self.status_code = status_code
+
+    auth_calls = 0
+
+    def unauthorized() -> None:
+        nonlocal auth_calls
+        auth_calls += 1
+        raise StatusError(401)
+
+    with pytest.raises(StatusError):
+        invoke_with_retry(unauthorized, max_attempts=3)
+    assert auth_calls == 1
+
+    forbidden_calls = 0
+
+    def forbidden() -> None:
+        nonlocal forbidden_calls
+        forbidden_calls += 1
+        raise StatusError(403)
+
+    with pytest.raises(StatusError):
+        invoke_with_retry(forbidden, max_attempts=3)
+    assert forbidden_calls == 1
+
+    throttled_calls = 0
+
+    def throttled() -> None:
+        nonlocal throttled_calls
+        throttled_calls += 1
+        raise StatusError(429)
+
+    with pytest.raises(RetryExhausted):
+        invoke_with_retry(throttled, max_attempts=3)
+    assert throttled_calls == 3
+
+
+def test_usage_rejects_negative_and_inconsistent_provider_counts() -> None:
+    profile = _profile("gemini-3.6-flash")
+    with pytest.raises(UsageMetadataMissing, match="negative"):
+        normalize_usage({"usage": {"input_tokens": -1, "output_tokens": 1}}, profile)
+    with pytest.raises(UsageMetadataMissing, match="inconsistent"):
+        normalize_usage({"usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 99}}, profile)
+
+
+def test_gateway_rejects_expired_short_lived_token() -> None:
+    profile = _profile("gemini-3.6-flash")
+    gateway = VertexGateway(
+        profiles=[profile], allowed_run_ids={"run-1"}, token="test-token",
+        token_expires_at="2000-01-01T00:00:00Z",
+        gemini=GeminiExecutor(_GeminiTransport()), gemma=GemmaMaaSExecutor(_GemmaTransport()),
+    )
+    with pytest.raises(GatewayError, match="expired"):
+        gateway.invoke({
+            "run_id": "run-1", "model_label": profile.logical_label,
+            "profile_hash": profile.profile_hash, "contents": "ping",
+        }, token="test-token")
+
+
+def test_host_gateway_uses_pinned_gemma_endpoint() -> None:
+    profiles = [_profile("gemini-3.5-flash"), _profile("gemini-3.6-flash")]
+    gemma = ModelProfile.from_dict({
+        **_profile("gemma-4-26b-a4b-it").to_dict(),
+        "resource_revision": "001",
+        "endpoint_url": "https://global-aiplatform.googleapis.com/v1/projects/p",
+    })
+    seen: list[tuple[str, ...]] = []
+    gateway = build_host_gateway(
+        profiles=[*profiles, gemma], allowed_run_ids={"run-1"}, token="token",
+        token_expires_at="2099-01-01T00:00:00Z", project="project",
+        gemini_client_factory=lambda project, location: seen.append(("gemini", project, location)) or object(),
+        gemma_client_factory=lambda endpoint: seen.append(("gemma", endpoint)) or object(),
+    )
+    assert isinstance(gateway, VertexGateway)
+    assert seen == [
+        ("gemini", "project", "global"),
+        ("gemma", "https://global-aiplatform.googleapis.com/v1/projects/p"),
+    ]

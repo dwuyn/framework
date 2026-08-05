@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -11,6 +12,7 @@ from typing import Any, Mapping, Sequence
 from src.pipeline.vertex_runtime import VertexContractError, validate_resolution_fields
 
 SCHEMA_VERSION = "2.0.0"
+RUNTIME_SCHEMA_VERSION = "2.1.0"
 BASE_CASE_COUNT = 94
 ROBUSTNESS_COUNT = 9
 VERTEX_CANARY_COUNT = 3
@@ -105,6 +107,75 @@ def _passed(record: Mapping[str, Any], name: str, *, artifact_root: str | Path |
                 raise ValueError(f"{name}.artifact is not a valid official RunArtifact") from exc
 
 
+def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str | Path) -> None:
+    """Verify the complete source-backed v2 runtime cell evidence."""
+    required = {
+        "status", "run_id", "model_label", "plan_hash", "dataset_lock_hash",
+        "baseline_identity_hash", "native_identity_hash", "model_profile_hash",
+        "model_resolution_lock_hash", "evaluator_hash", "oracle_hash", "image_digest",
+        "max_input_tokens", "max_output_tokens", "retry_policy", "artifact_path",
+        "artifact_sha256", "artifact_type", "event_ledger_path", "event_ledger_sha256",
+        "usage_path", "usage_sha256", "cost_path", "cost_sha256", "evaluator_path",
+        "evaluator_sha256", "cleanup_path", "cleanup_sha256", "billing_status",
+        "oracle_status",
+    }
+    missing = sorted(required.difference(record))
+    if missing:
+        raise ValueError(f"{name} is missing runtime evidence field(s): {', '.join(missing)}")
+    _passed(record, name, artifact_root=artifact_root)
+    if record.get("artifact_type") != "run_artifact":
+        raise ValueError(f"{name}.artifact_type must be run_artifact")
+    if not str(record.get("image_digest", "")).startswith("sha256:"):
+        raise ValueError(f"{name}.image_digest must be immutable")
+    for key in (
+        "plan_hash", "dataset_lock_hash", "baseline_identity_hash", "native_identity_hash",
+        "model_profile_hash", "model_resolution_lock_hash", "evaluator_hash", "oracle_hash",
+    ):
+        _digest(record[key], f"{name}.{key}")
+    if int(record["max_input_tokens"]) <= 0 or int(record["max_output_tokens"]) <= 0:
+        raise ValueError(f"{name} token caps must be positive")
+    if record.get("billing_status") != "known" or record.get("oracle_status") != "passed":
+        raise ValueError(f"{name} billing and oracle status must be known/passed")
+    policy = record["retry_policy"]
+    if not isinstance(policy, Mapping) or int(policy.get("max_attempts", 0)) < 1:
+        raise ValueError(f"{name}.retry_policy is invalid")
+    root = Path(artifact_root).resolve()
+    paths = {
+        "event_ledger": (record["event_ledger_path"], record["event_ledger_sha256"]),
+        "usage": (record["usage_path"], record["usage_sha256"]),
+        "cost": (record["cost_path"], record["cost_sha256"]),
+        "evaluator": (record["evaluator_path"], record["evaluator_sha256"]),
+        "cleanup": (record["cleanup_path"], record["cleanup_sha256"]),
+    }
+    for label, (path, digest) in paths.items():
+        rehash_artifact({"artifact_path": path, "artifact_sha256": digest}, artifact_root=root, name=f"{name}.{label}")
+    try:
+        usage = json.loads((root / _relative_artifact_path(record["usage_path"], name)).read_text(encoding="utf-8"))
+        cost = json.loads((root / _relative_artifact_path(record["cost_path"], name)).read_text(encoding="utf-8"))
+        evaluator = json.loads((root / _relative_artifact_path(record["evaluator_path"], name)).read_text(encoding="utf-8"))
+        cleanup = json.loads((root / _relative_artifact_path(record["cleanup_path"], name)).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{name} runtime evidence contains invalid JSON") from exc
+    if not isinstance(usage, Mapping) or not all(str(key) in usage for key in ("input_tokens", "output_tokens", "total_tokens", "usd")):
+        raise ValueError(f"{name} usage record lacks complete token/cost data")
+    counts = [usage[key] for key in ("input_tokens", "output_tokens", "total_tokens")]
+    if any(not isinstance(value, int) or value < 0 for value in counts):
+        raise ValueError(f"{name} usage token counts are abnormal")
+    if not isinstance(usage["usd"], (int, float)) or not math.isfinite(float(usage["usd"])) or float(usage["usd"]) < 0:
+        raise ValueError(f"{name} usage cost is abnormal")
+    if not isinstance(cost, Mapping) or cost.get("billing_status") != "known":
+        raise ValueError(f"{name} cost record is not known")
+    if abs(float(cost.get("cost_usd", -1)) - float(usage["usd"])) > 1e-8:
+        raise ValueError(f"{name} usage/cost records do not match")
+    if not isinstance(evaluator, Mapping) or evaluator.get("status") != "passed":
+        raise ValueError(f"{name} evaluator did not pass")
+    if not isinstance(cleanup, Mapping) or cleanup.get("success") is not True:
+        raise ValueError(f"{name} cleanup did not pass")
+    resources = cleanup.get("resources", {})
+    if isinstance(resources, Mapping) and any(record.get("ids") for record in resources.values() if isinstance(record, Mapping)):
+        raise ValueError(f"{name} cleanup left Docker resources")
+
+
 def _validate_control(
     case: Mapping[str, Any], name: str, *, oracle_status: str,
     artifact_root: str | Path | None = None,
@@ -146,11 +217,26 @@ def validate_smoke_evidence(
         missing_runtime = sorted(required_runtime.difference(evidence))
         if missing_runtime:
             raise ValueError(f"runtime smoke evidence missing field(s): {', '.join(missing_runtime)}")
-        unexpected_runtime = sorted(set(evidence).difference(required_runtime))
+        strict_runtime_fields = {
+            "plan_hash", "training_protocol_hash", "baseline_lock_hash",
+            "model_resolution_lock_hash", "pricing_snapshot_hash", "approval_hash",
+        }
+        unexpected_runtime = sorted(set(evidence).difference(required_runtime | strict_runtime_fields))
         if unexpected_runtime:
             raise ValueError(f"runtime smoke evidence has unexpected field(s): {', '.join(unexpected_runtime)}")
-        if evidence["schema_version"] != SCHEMA_VERSION or not str(evidence["generated_at"]).endswith("Z"):
+        runtime_strict = evidence["schema_version"] == RUNTIME_SCHEMA_VERSION
+        if evidence["schema_version"] not in {SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION} or not str(evidence["generated_at"]).endswith("Z"):
             raise ValueError("runtime smoke evidence schema or timestamp is invalid")
+        if runtime_strict:
+            strict_required = {
+                "plan_hash", "training_protocol_hash", "baseline_lock_hash",
+                "model_resolution_lock_hash", "pricing_snapshot_hash", "approval_hash",
+            }
+            missing_strict = sorted(strict_required.difference(evidence))
+            if missing_strict:
+                raise ValueError(f"runtime smoke evidence missing strict field(s): {', '.join(missing_strict)}")
+            for key in strict_required:
+                _digest(evidence[key], f"runtime.{key}")
         _digest(evidence["dataset_lock_hash"], "runtime.dataset_lock_hash")
         _digest(evidence["dataset_evidence_hash"], "runtime.dataset_evidence_hash")
         expected_models = set(model_labels)
@@ -160,7 +246,13 @@ def validate_smoke_evidence(
         if {str(record.get("model_label", "")) for record in canary_records} != expected_models:
             raise ValueError("Vertex canaries must cover exactly the locked model labels")
         for record in canary_records:
-            _passed(record, f"Vertex canary {record.get('model_label', '')}", artifact_root=artifact_root)
+            name = f"Vertex canary {record.get('model_label', '')}"
+            if runtime_strict:
+                if artifact_root is None:
+                    raise ValueError("strict runtime evidence requires artifact_root")
+                _runtime_record(record, name, artifact_root=artifact_root)
+            else:
+                _passed(record, name, artifact_root=artifact_root)
             if not str(record.get("resource_id", "")).strip() or not str(record.get("resource_revision", "")).strip():
                 raise ValueError("Vertex canary requires a pinned resource_id and resource_revision")
             try:
@@ -183,7 +275,13 @@ def validate_smoke_evidence(
             if not str(record.get("smoke_id", "")).strip() or pair in runtime_pairs:
                 raise ValueError("framework-model smoke pairs must be unique and named")
             runtime_pairs.add(pair)
-            _passed(record, f"framework-model smoke {framework}/{model}", artifact_root=artifact_root)
+            name = f"framework-model smoke {framework}/{model}"
+            if runtime_strict:
+                if artifact_root is None:
+                    raise ValueError("strict runtime evidence requires artifact_root")
+                _runtime_record(record, name, artifact_root=artifact_root)
+            else:
+                _passed(record, name, artifact_root=artifact_root)
         if runtime_pairs != expected_pairs:
             raise ValueError("framework-model smokes must cover exactly every framework/model pair")
         return {
