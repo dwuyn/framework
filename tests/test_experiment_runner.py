@@ -177,3 +177,39 @@ def test_stage_health_halts_expired_approval_and_invalid_credentials(tmp_path) -
     assert runner.status()["halt_reason"] == "approval_expired"
     connection.close()
     runner.close()
+
+
+def test_execute_two_subsets_share_full_plan_reservation(tmp_path, monkeypatch) -> None:
+    import src.pipeline.experiment_runner as coordinator
+
+    plan = {"cell_count": 18, "cells": [
+        {"run_id": f"canary-{index}", "cell_worst_case_cost_usd": 0.01}
+        for index in range(3)
+    ] + [
+        {"run_id": f"smoke-{index}", "cell_worst_case_cost_usd": 0.01}
+        for index in range(15)
+    ]}
+    monkeypatch.setattr(coordinator, "verify_approval", lambda *_args, **_kwargs: {
+        "cost_ceiling_usd": 1.0, "expires_at": "2099-01-01T00:00:00Z",
+    })
+    runner = ExperimentRunner(artifact_root=tmp_path, workers=2)
+    monkeypatch.setattr(runner, "cleanup_labeled_docker_resources", lambda run_id, *, stage="": {
+        "run_id": run_id, "stage": stage, "success": True, "resources": {},
+    })
+    calls: list[str] = []
+
+    def execute(cell, _path, _labels):
+        calls.append(cell["run_id"])
+        return CellResult("completed", cost_usd=0.005)
+
+    approval = {"cost_ceiling_usd": 1.0}
+    canary_ids = {f"canary-{index}" for index in range(3)}
+    first = runner.execute(plan=plan, approval=approval, signature_path=tmp_path / "sig", stage="canary_smoke", public_key="key", executor=execute, eligible_run_ids=canary_ids)
+    assert not first["halted"] and first["completed"] == 3 and first["selected"] == 3
+    assert set(calls) == canary_ids
+    smoke_ids = {f"smoke-{index}" for index in range(15)}
+    second = runner.execute(plan=plan, approval=approval, signature_path=tmp_path / "sig", stage="canary_smoke", public_key="key", executor=execute, eligible_run_ids=smoke_ids)
+    assert not second["halted"] and second["completed"] == 15 and second["selected"] == 15
+    assert runner.status()["states"] == {"completed": 18}
+    assert runner.status()["accumulated_cost_usd"] == 0.09
+    runner.close()
