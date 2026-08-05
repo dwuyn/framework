@@ -28,7 +28,8 @@ from src.pipeline.runtime_readiness import _canonical_hash, validate_canary_smok
 
 
 def runtime_preflight(*, dataset_root: str | Path, artifact_root: str | Path,
-                      approver_public_key: str, project: str | None = None) -> dict[str, Any]:
+                      approver_public_key: str, evaluator_commit: str, evaluator_bundle_hash: str,
+                      oracle_bundle_hash: str, project: str | None = None) -> dict[str, Any]:
     root, artifacts = Path(dataset_root).resolve(), Path(artifact_root).resolve()
     lock = load_dataset_lock(root / "dataset.lock.json")
     validate_dataset_lock(lock, dataset_root=root, strict=True)
@@ -38,8 +39,10 @@ def runtime_preflight(*, dataset_root: str | Path, artifact_root: str | Path,
         raise ValueError("runtime preflight requires a clean framework worktree")
     validate_training_protocol(
         protocol, dataset_hash=lock_hash(lock), framework_commit=str(state["commit"]),
-        evaluator_commit=str(protocol["evaluator_commit"]), artifact_root=artifacts, strict_runtime=True,
+        evaluator_commit=evaluator_commit, artifact_root=artifacts, strict_runtime=True,
     )
+    if str(protocol["evaluator_bundle_hash"]) != evaluator_bundle_hash or str(protocol["oracle_bundle_hash"]) != oracle_bundle_hash:
+        raise ValueError("observed evaluator or oracle bundle hash does not match training protocol")
     baseline_path = artifacts / "baseline.lock.json"
     validate_baseline_lock(load_json(baseline_path), strict=True)
     if hash_lock_file(baseline_path) != str(protocol["baseline_lock_hash"]):
@@ -81,6 +84,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--approver-public-key", required=True)
+    parser.add_argument("--evaluator-commit", required=True)
+    parser.add_argument("--evaluator-bundle-hash", required=True)
+    parser.add_argument("--oracle-bundle-hash", required=True)
     parser.add_argument("--project")
     args = parser.parse_args(argv)
     try:

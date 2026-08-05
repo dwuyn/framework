@@ -99,6 +99,10 @@ def validate_resolution_lock(
                     raise ValueError("Gemma MaaS must be pinned to immutable revision @001")
                 if not profile.endpoint_url.startswith("https://") or "googleapis.com" not in profile.endpoint_url:
                     raise ValueError("Gemma MaaS endpoint must come from verified metadata")
+                for key in ("endpoint_snapshot", "endpoint_source"):
+                    path = root / _relative(entry.get(f"{key}_path"), f"{key}_path")
+                    if not path.is_file() or _hash_file(path) != str(entry.get(f"{key}_sha256", "")):
+                        raise ValueError(f"Gemma MaaS {key} evidence hash mismatch")
             supplied_metadata_hash = metadata.get("metadata_hash")
             if supplied_metadata_hash is not None:
                 canonical = {key: value for key, value in metadata.items() if key != "metadata_hash"}

@@ -120,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"metadata snapshot must be an object for {label}")
         metadata[label] = value
         _copy(source, model_dir / source.name)
+    for name in ("gemma-maas-endpoint.json", "gemma-maas-endpoint.source"):
+        _copy(metadata_root / name, model_dir / name)
 
     resolved = ModelResolver().resolve_all(metadata)
     pricing_source = Path(args.pricing_snapshot).resolve()
@@ -140,6 +142,13 @@ def main(argv: list[str] | None = None) -> int:
             "metadata_path": f"models/{item.logical_label}.json",
             "metadata_sha256": sha256_file(metadata_path),
         })
+        if item.logical_label == "gemma-4-26b-a4b-it":
+            resolution_entries[-1].update({
+                "endpoint_snapshot_path": "models/gemma-maas-endpoint.json",
+                "endpoint_snapshot_sha256": sha256_file(model_dir / "gemma-maas-endpoint.json"),
+                "endpoint_source_path": "models/gemma-maas-endpoint.source",
+                "endpoint_source_sha256": sha256_file(model_dir / "gemma-maas-endpoint.source"),
+            })
     resolution = {
         "schema_version": "2.0.0",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),

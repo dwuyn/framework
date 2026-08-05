@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,10 +36,10 @@ def _list_models(project: str, service_account: str) -> list[dict[str, Any]]:
     return values
 
 
-def _select(records: list[dict[str, Any]], *, model_id: str, version: str) -> dict[str, Any]:
-    matches = [record for record in records if str(record.get("name", "")) == model_id and str(record.get("versionId", "")) == version]
+def _select(records: list[dict[str, Any]], *, catalog_name: str, version: str) -> dict[str, Any]:
+    matches = [record for record in records if str(record.get("name", "")) == catalog_name and str(record.get("versionId", "")) == version]
     if len(matches) != 1:
-        raise RuntimeError(f"Model Garden must contain exactly one name/versionId record for {model_id}@{version}")
+        raise RuntimeError(f"Model Garden must contain exactly one name/versionId record for {catalog_name}@{version}")
     return matches[0]
 
 
@@ -53,7 +52,7 @@ def _resource(template: Any, *, project: str, model_id: str) -> str:
     return value
 
 
-def _gemma_endpoint_snapshot(path: Path) -> dict[str, Any]:
+def _gemma_endpoint_snapshot(path: Path, document: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -65,8 +64,9 @@ def _gemma_endpoint_snapshot(path: Path) -> dict[str, Any]:
         raise RuntimeError("Gemma MaaS endpoint snapshot model ID mismatch")
     if not str(value["endpoint_url"]).startswith("https://") or "googleapis.com" not in str(value["endpoint_url"]):
         raise RuntimeError("Gemma MaaS endpoint snapshot is not a verified Google endpoint")
-    if not re.fullmatch(r"[0-9a-f]{64}", str(value["source_sha256"])):
-        raise RuntimeError("Gemma MaaS endpoint snapshot source hash is invalid")
+    actual = hashlib.sha256(document.read_bytes()).hexdigest()
+    if str(value["source_sha256"]) != actual:
+        raise RuntimeError("Gemma MaaS endpoint snapshot does not match raw source document")
     return value
 
 
@@ -76,20 +76,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--impersonate-service-account", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--gemma-endpoint-snapshot", required=True)
+    parser.add_argument("--gemma-endpoint-document", required=True)
     args = parser.parse_args(argv)
     output = Path(args.output_dir).resolve()
     if output.exists() and any(output.iterdir()):
         raise SystemExit("metadata output directory must be new and empty")
     output.mkdir(parents=True, exist_ok=True)
-    endpoint = _gemma_endpoint_snapshot(Path(args.gemma_endpoint_snapshot).resolve())
+    raw_document = Path(args.gemma_endpoint_document).resolve()
+    if not raw_document.is_file():
+        raise SystemExit("Gemma MaaS raw endpoint document is missing")
+    endpoint = _gemma_endpoint_snapshot(Path(args.gemma_endpoint_snapshot).resolve(), raw_document)
     endpoint_path = output / "gemma-maas-endpoint.json"
     endpoint_path.write_text(json.dumps(endpoint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    raw_output = output / "gemma-maas-endpoint.source"
+    raw_output.write_bytes(raw_document.read_bytes())
     records = _list_models(args.project, args.impersonate_service_account)
     retrieved_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     for label in LOCKED_MODEL_LABELS:
         expected = LOCKED_MODEL_INVOCATIONS[label]
         version = "001" if label == "gemma-4-26b-a4b-it" else "default"
-        source = _select(records, model_id=expected["model_id"], version=version)
+        source = _select(records, catalog_name=expected["catalog_name"], version=version)
         resource_id = _resource(source.get("publisherModelTemplate"), project=args.project, model_id=expected["model_id"])
         record: dict[str, Any] = {
             "logical_label": label, "model_id": expected["model_id"], "resource_id": resource_id,
@@ -103,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         if label == "gemma-4-26b-a4b-it":
             record["endpoint_url"] = endpoint["endpoint_url"]
             record["endpoint_snapshot_sha256"] = hashlib.sha256(endpoint_path.read_bytes()).hexdigest()
+            record["endpoint_source_sha256"] = hashlib.sha256(raw_output.read_bytes()).hexdigest()
         record["metadata_hash"] = _hash(record)
         destination = output / f"{label}.json"
         destination.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")

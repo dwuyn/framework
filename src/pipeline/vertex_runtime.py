@@ -21,16 +21,19 @@ LOCKED_MODEL_INVOCATIONS: dict[str, dict[str, str]] = {
     "gemini-3.5-flash": {
         "api_family": "google_genai",
         "model_id": "gemini-3.5-flash",
+        "catalog_name": "publishers/google/models/gemini-3.5-flash",
         "location": "global",
     },
     "gemini-3.6-flash": {
         "api_family": "google_genai",
         "model_id": "gemini-3.6-flash",
+        "catalog_name": "publishers/google/models/gemini-3.6-flash",
         "location": "global",
     },
     "gemma-4-26b-a4b-it": {
         "api_family": "vertex_openai_compatible",
         "model_id": "google/gemma-4-26b-a4b-it-maas",
+        "catalog_name": "publishers/google/models/google/gemma-4-26b-a4b-it-maas",
         "location": "global",
     },
 }

@@ -24,12 +24,13 @@ def _profile(label: str) -> ModelProfile:
 
 def test_model_garden_selection_requires_exact_name_and_version() -> None:
     records = [
-        {"name": "gemini-3.5-flash", "versionId": "default"},
-        {"name": "gemini-3.5-flash", "versionId": "002"},
+        {"name": "publishers/google/models/gemini-3.5-flash", "versionId": "default"},
+        {"name": "publishers/google/models/gemini-3.5-flash-lite", "versionId": "default"},
+        {"name": "publishers/google/models/gemini-3.5-flash", "versionId": "002"},
     ]
-    assert _select(records, model_id="gemini-3.5-flash", version="default") == records[0]
+    assert _select(records, catalog_name="publishers/google/models/gemini-3.5-flash", version="default") == records[0]
     with pytest.raises(RuntimeError, match="exactly one"):
-        _select(records, model_id="gemini-3.5-flash", version="001")
+        _select(records, catalog_name="publishers/google/models/gemini-3.5-flash", version="001")
 
 
 def test_publisher_template_becomes_global_project_resource() -> None:
