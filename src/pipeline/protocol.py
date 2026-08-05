@@ -143,13 +143,15 @@ def validate_baseline_lock(
                         raise ValueError(f"baseline {name} Docker image digest mismatch")
 
 
-def validate_run_artifact(value: Mapping[str, Any], *, official: bool = True) -> None:
+def validate_run_artifact(
+    value: Mapping[str, Any], *, official: bool = True, strict_runtime: bool = False,
+) -> None:
     """Validate a serialized artifact without trusting self-reported outcomes."""
     from src.pipeline.framework_adapter import RunArtifact
 
     artifact = RunArtifact.from_dict(value)
     if official:
-        artifact.validate_official()
+        artifact.validate_official(strict_runtime=strict_runtime)
 
 
 def validate_training_protocol(
@@ -165,7 +167,11 @@ def validate_training_protocol(
     missing = sorted(required.difference(protocol))
     if missing:
         raise ValueError(f"training protocol missing required field(s): {', '.join(missing)}")
-    if str(protocol["schema_version"]) != "3.0.0":
+    protocol_version = str(protocol["schema_version"])
+    if strict_runtime:
+        if protocol_version != "3.1.0":
+            raise ValueError("runtime training protocol schema_version must be 3.1.0")
+    elif protocol_version != "3.0.0":
         raise ValueError("training protocol schema_version must be 3.0.0")
     if str(protocol["dataset_lock_hash"]) != dataset_hash:
         raise ValueError("training protocol dataset hash mismatch")
@@ -209,7 +215,11 @@ def validate_training_protocol(
     if strict_runtime:
         if artifact_root is None:
             raise ValueError("strict runtime protocol validation requires artifact_root")
-        from src.pipeline.runtime_contract import validate_lock_reference, validate_runtime_profile
+        from src.pipeline.runtime_contract import (
+            validate_gateway_relay_lock,
+            validate_lock_reference,
+            validate_runtime_profile,
+        )
         from src.pipeline.vertex_runtime import PricingSnapshot
 
         runtime_required = {
@@ -217,6 +227,7 @@ def validate_training_protocol(
             "alias_exception", "canary_smoke_plan", "approval_canary_smoke",
             "native_identity", "vertex_project", "impersonate_service_account", "runtime_budgets",
             "evaluator_commit", "evaluator_bundle_hash", "oracle_bundle_hash",
+            "gateway_relay_lock", "gateway_relay_lock_hash",
         }
         missing_runtime = sorted(runtime_required.difference(protocol))
         if missing_runtime:
@@ -249,6 +260,14 @@ def validate_training_protocol(
         validate_lock_reference(protocol["alias_exception"], name="alias_exception", artifact_root=artifact_root)
         validate_lock_reference(protocol["canary_smoke_plan"], name="canary_smoke_plan", artifact_root=artifact_root)
         validate_lock_reference(protocol["approval_canary_smoke"], name="approval_canary_smoke", artifact_root=artifact_root)
+        validate_lock_reference(protocol["gateway_relay_lock"], name="gateway_relay_lock", artifact_root=artifact_root)
+        relay_path = Path(artifact_root).resolve() / Path(str(protocol["gateway_relay_lock"]["artifact_path"]))
+        validate_gateway_relay_lock(load_json(relay_path), artifact_root=artifact_root, strict=True)
+        relay_hash = str(protocol["gateway_relay_lock_hash"])
+        if not re.fullmatch(r"[0-9a-f]{64}", relay_hash):
+            raise ValueError("runtime training protocol requires gateway_relay_lock_hash")
+        if relay_hash != str(protocol["gateway_relay_lock"].get("sha256")):
+            raise ValueError("gateway relay lock hash does not match its artifact reference")
         pricing = PricingSnapshot.from_dict(load_json(
             Path(artifact_root).resolve() / Path(str(protocol["pricing_snapshot"]["artifact_path"]))
         ))

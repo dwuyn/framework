@@ -25,7 +25,11 @@ from src.pipeline.protocol import (
     validate_baseline_lock,
     write_json_atomically,
 )
-from src.pipeline.runtime_contract import LOCKED_MODEL_LABELS, sha256_file
+from src.pipeline.runtime_contract import (
+    LOCKED_MODEL_LABELS,
+    sha256_file,
+    validate_gateway_relay_lock,
+)
 from src.pipeline.runtime_readiness import build_canary_smoke_plan
 from src.pipeline.vertex_runtime import ModelResolver, PricingSnapshot
 
@@ -59,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pricing-snapshot", required=True, help="official Google pricing snapshot")
     parser.add_argument("--baseline-lock", required=True)
     parser.add_argument("--native-identity", required=True)
+    parser.add_argument("--gateway-relay-lock", required=True)
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--project", required=True)
     parser.add_argument("--impersonate-service-account", required=True)
@@ -106,6 +111,28 @@ def main(argv: list[str] | None = None) -> int:
     native_hash = sha256_file(artifact_root / "native-veriplanpt-identity.json")
     image_digests = {str(item["name"]): str(item["image_digest"]) for item in baseline["baselines"]}
     image_digests["VeriPlanPT"] = str(native_identity["image"]["image_digest"])
+
+    relay_source = Path(args.gateway_relay_lock).resolve()
+    relay_lock = json.loads(relay_source.read_text(encoding="utf-8"))
+    if not isinstance(relay_lock, dict):
+        raise SystemExit("gateway relay lock must be a JSON object")
+    validate_gateway_relay_lock(relay_lock, strict=True)
+    relay_ref_files: list[tuple[Path, Path]] = []
+    relay_section = relay_lock.get("relay", {})
+    for section_name in ("recipe", "source"):
+        section = relay_section.get(section_name, {}) if isinstance(relay_section, dict) else {}
+        source_path = Path(str(section.get("path", "")))
+        if not source_path.is_absolute():
+            source_path = relay_source.parent / source_path
+        destination = artifact_root / "relay" / source_path.name
+        _copy(source_path, destination)
+        relay_ref_files.append((source_path, destination))
+    for section_name, (_source_path, destination) in zip(("recipe", "source"), relay_ref_files):
+        relay_lock.setdefault("relay", {}).setdefault(section_name, {})["path"] = str(destination.relative_to(artifact_root))
+    relay_lock_path = artifact_root / "gateway-relay.lock.json"
+    write_json_atomically(relay_lock_path, relay_lock, refuse_existing=True)
+    validate_gateway_relay_lock(relay_lock, artifact_root=artifact_root, strict=True)
+    relay_hash = sha256_file(relay_lock_path)
 
     metadata_root = Path(args.metadata_dir).resolve()
     metadata: dict[str, dict[str, Any]] = {}
@@ -176,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         dataset_lock_hash=dataset_hash, baseline_identity_hash=baseline_hash,
         model_resolution_lock_hash=resolution_hash, evaluator_hash=args.evaluator_bundle_hash,
         oracle_hash=args.oracle_bundle_hash, image_digests=image_digests, native_identity_hash=native_hash,
+        gateway_relay_lock_hash=relay_hash,
         max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens,
         retry_policy={"max_attempts": 2, "retryable": ["408", "429", "500", "502", "503", "504"]}, strict=True,
     )
@@ -195,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     framework_state = git_state(ROOT)
     dataset_commit = _git_commit(dataset_root)
     protocol = {
-        "schema_version": "3.0.0", "dataset_repository_commit": dataset_commit,
+        "schema_version": "3.1.0", "dataset_repository_commit": dataset_commit,
         "dataset_lock_hash": dataset_hash, "framework_commit": framework_state["commit"],
         "evaluator_commit": args.evaluator_commit, "evaluator_bundle_hash": args.evaluator_bundle_hash,
         "oracle_bundle_hash": args.oracle_bundle_hash, "evaluator_image_digest": args.evaluator_image_digest,
@@ -215,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
             "artifact_path": "approval-canary-smoke.json", "sha256": sha256_file(artifact_root / "approval-canary-smoke.json"),
             "signature_path": "signatures/approval-canary-smoke.json.minisig",
         },
+        "gateway_relay_lock": {"artifact_path": "gateway-relay.lock.json", "sha256": relay_hash},
+        "gateway_relay_lock_hash": relay_hash,
         "vertex_project": args.project, "impersonate_service_account": args.impersonate_service_account,
         "runtime_budgets": {
             "max_input_tokens": args.max_input_tokens, "max_output_tokens": args.max_output_tokens,
@@ -226,6 +256,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({
         "artifact_root": str(artifact_root), "dataset_lock_hash": dataset_hash,
         "model_resolution_lock_sha256": resolution_hash, "canary_plan_hash": plan_hash,
+        "gateway_relay_lock_sha256": relay_hash,
         "approval": "unsigned-pending-cloud-admin", "vertex_calls": 0,
     }, sort_keys=True))
     return 0

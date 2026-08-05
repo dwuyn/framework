@@ -25,6 +25,10 @@ available only as the frozen variant 1 baseline under the
 | `runner.py`                  | Top-level pipeline runner                                            |
 | `benchmark.py`               | Benchmark manifests, metrics-from-events, reporting                  |
 | `vertex_runtime.py`          | Pinned model identity, pricing snapshot, and fakeable Vertex transports |
+| `gateway_relay.py`           | Dependency-free HTTP-to-Unix-socket relay; no provider credentials      |
+| `runtime_topology.py`        | Label-owned canary/smoke Docker lifecycle and topology evidence          |
+| `runtime_runner.py`          | Relay-gated 3-canary then 15-smoke production coordinator               |
+| `runtime_ledger.py`          | Thread-safe host-observed request/response and billing ledger           |
 
 Gemini 3.5/3.6 currently resolve through Google's `default` publisher alias.
 Profiles may use `resolution_mode=provider_alias` only with a resolution

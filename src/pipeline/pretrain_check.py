@@ -25,6 +25,7 @@ from src.pipeline.protocol import (
 )
 from src.pipeline.readiness_evidence import load_smoke_evidence, validate_smoke_evidence
 from src.pipeline.runtime_contract import (
+    validate_gateway_relay_lock,
     validate_lock_reference,
     verify_alias_exception,
     verify_impersonated_adc,
@@ -184,6 +185,16 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
         native = load_json(native_path)
         native_image = str(native.get("image", {}).get("image_digest", ""))
         native_hash = sha256_file(native_path)
+        relay_ref = protocol.get("gateway_relay_lock")
+        if not isinstance(relay_ref, dict):
+            raise ValueError("training protocol gateway_relay_lock reference is invalid")
+        validate_lock_reference(relay_ref, name="gateway_relay_lock", artifact_root=art_root)
+        relay_path = art_root / Path(str(relay_ref["artifact_path"]))
+        relay_lock = load_json(relay_path)
+        validate_gateway_relay_lock(relay_lock, artifact_root=art_root, strict=True)
+        relay_hash = sha256_file(relay_path)
+        if str(protocol.get("gateway_relay_lock_hash")) != relay_hash or str(relay_ref.get("sha256")) != relay_hash:
+            raise ValueError("gateway relay lock hash is not pinned consistently")
         expected_common = {
             "dataset_lock_hash": lock_hash(dataset_lock),
             "baseline_identity_hash": hash_lock_file(baseline_lock),
@@ -191,6 +202,7 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
             "model_resolution_lock_hash": str(protocol["model_resolution_lock"]["sha256"]),
             "evaluator_hash": str(protocol["evaluator_bundle_hash"]),
             "oracle_hash": str(protocol["oracle_bundle_hash"]),
+            "gateway_relay_lock_hash": relay_hash,
         }
         profile_by_label = {profile.logical_label: profile for profile in profiles}
         for cell in plan["cells"]:
@@ -204,6 +216,8 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
             expected_image = native_image if cell["kind"] == "vertex_canary" else baseline_images.get(framework, "")
             if str(cell["image_digest"]) != expected_image:
                 raise ValueError(f"canary smoke image digest mismatch for {cell['run_id']}")
+            if str(cell.get("gateway_relay_lock_hash")) != relay_hash:
+                raise ValueError("canary smoke gateway relay lock hash mismatch")
             budgets = protocol["runtime_budgets"]
             if int(cell["max_input_tokens"]) != int(budgets["max_input_tokens"]):
                 raise ValueError("canary smoke input-token cap mismatch")
@@ -267,7 +281,7 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
                 raise ValueError("runtime smoke dataset lock hash mismatch")
             if str(runtime.get("dataset_evidence_hash")) != sha256_file(dataset_path):
                 raise ValueError("runtime smoke dataset evidence hash mismatch")
-            if runtime.get("schema_version") == "2.1.0":
+            if runtime.get("schema_version") in {"2.1.0", "2.2.0"}:
                 protocol_hash = hash_lock_file(training_protocol)
                 protocol = load_json(training_protocol)
                 if str(runtime.get("training_protocol_hash")) != protocol_hash:
@@ -286,6 +300,10 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
                     )
                     if str(runtime.get(field)) != expected:
                         raise ValueError(f"runtime smoke {field} mismatch")
+                if runtime.get("schema_version") == "2.2.0":
+                    relay_hash = str(protocol.get("gateway_relay_lock_hash", ""))
+                    if str(runtime.get("gateway_relay_lock_hash")) != relay_hash:
+                        raise ValueError("runtime smoke gateway relay lock hash mismatch")
             return {**dataset_summary, **runtime_summary}
         evidence_path = root / "readiness" / "smoke-evidence.json"
         return validate_smoke_evidence(

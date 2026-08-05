@@ -20,11 +20,13 @@ from typing import Any, Mapping
 from src.pipeline.framework_adapter import ModelProfile
 
 ALIAS_EXCEPTION_SCHEMA = "1.0.0"
+GATEWAY_RELAY_LOCK_SCHEMA = "1.0.0"
 LOCKED_MODEL_LABELS = tuple(sorted(ModelProfile.ALLOWED_MODELS))
 ALIAS_EXCEPTION_KEYS = frozenset({
     "schema_version", "project", "dataset_lock_hash", "model_labels", "expires_at", "reason",
 })
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def sha256_file(path: str | Path) -> str:
@@ -172,3 +174,59 @@ def validate_lock_reference(value: Any, *, name: str, artifact_root: str | Path)
     if actual != expected:
         raise ValueError(f"{name} artifact hash mismatch")
     return actual
+
+
+def validate_gateway_relay_lock(
+    lock: Mapping[str, Any], *, artifact_root: str | Path | None = None,
+    observed_image_digest: str = "", strict: bool = True,
+) -> None:
+    """Validate the immutable host-gateway/relay boundary.
+
+    The relay is intentionally described as data rather than inferred from a
+    compose file at runtime.  This makes a changed socket mount, network mode,
+    UID policy, or image fail the same hash gate as any other runtime input.
+    ``strict=False`` is reserved for reading historical lock files.
+    """
+    if str(lock.get("schema_version")) != GATEWAY_RELAY_LOCK_SCHEMA:
+        raise ValueError("gateway relay lock schema_version must be 1.0.0")
+    relay = lock.get("relay")
+    socket = lock.get("socket")
+    network = lock.get("network")
+    if not isinstance(relay, Mapping) or not isinstance(socket, Mapping) or not isinstance(network, Mapping):
+        raise ValueError("gateway relay lock requires relay, socket, and network objects")
+    image_digest = str(relay.get("image_digest", ""))
+    if not IMAGE_DIGEST.fullmatch(image_digest):
+        raise ValueError("gateway relay lock requires an immutable relay image digest")
+    if observed_image_digest and observed_image_digest != image_digest:
+        raise ValueError("gateway relay image digest does not match the locked digest")
+    for section, label in ((relay.get("recipe"), "relay recipe"), (relay.get("source"), "relay source")):
+        if not isinstance(section, Mapping) or not str(section.get("path", "")).strip() or not SHA256.fullmatch(str(section.get("sha256", ""))):
+            raise ValueError(f"gateway relay lock requires a hashed {label}")
+        section_path = Path(str(section["path"]))
+        if section_path.is_absolute() or ".." in section_path.parts:
+            raise ValueError(f"gateway relay {label} path must stay relative")
+        if artifact_root is not None:
+            path = Path(artifact_root).resolve() / section_path
+            if not path.is_file() or sha256_file(path) != str(section["sha256"]):
+                raise ValueError(f"gateway relay {label} hash mismatch")
+    if strict and str(lock.get("uid_policy")) != "host_euid_nonroot":
+        raise ValueError("gateway relay UID policy must be host_euid_nonroot")
+    if str(socket.get("path")) != "/run/veriplanpt-gateway/gateway.sock":
+        raise ValueError("gateway relay socket path is not the pinned gateway.sock")
+    if str(socket.get("mode")) not in {"0600", "0o600"}:
+        raise ValueError("gateway relay socket must use mode 0600")
+    if str(socket.get("parent_mode", "0700")) not in {"0700", "0o700"}:
+        raise ValueError("gateway relay socket parent must use mode 0700")
+    if socket.get("mount_read_only") is not True:
+        raise ValueError("gateway relay socket mount must be read-only")
+    if str(network.get("mode")) != "internal":
+        raise ValueError("gateway relay network must be internal-only")
+    if str(relay.get("alias")) != "gateway-relay":
+        raise ValueError("gateway relay alias is not pinned to gateway-relay")
+    if str(relay.get("endpoint")) != "http://gateway-relay:8080/v1/generate":
+        raise ValueError("gateway relay endpoint is not the pinned internal endpoint")
+    if strict:
+        if relay.get("run_as") != "host_uid_gid_nonroot":
+            raise ValueError("gateway relay must run as the host non-root UID/GID")
+        if lock.get("baseline_socket_mount") is not False or lock.get("baseline_credentials") is not False:
+            raise ValueError("baseline containers must not receive the gateway socket or credentials")

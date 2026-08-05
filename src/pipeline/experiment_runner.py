@@ -261,7 +261,8 @@ class ExperimentRunner:
                     "SELECT COALESCE(SUM(cost_usd + reserved_cost_usd), 0) AS cost FROM runs"
                 ).fetchone()["cost"]
             )
-            where, values = "status='pending' AND cost_usd + reserved_cost_usd + worst_case_cost_usd <= ?", [ceiling]
+            where = "status='pending' AND cost_usd + reserved_cost_usd + worst_case_cost_usd <= ?"
+            values: list[Any] = [ceiling]
             if eligible_run_ids is not None:
                 if not eligible_run_ids:
                     connection.commit()
@@ -555,13 +556,14 @@ class ExperimentRunner:
         gateway_start: GatewayStarter | None = None,
         reservation_ceiling_usd: float | None = None,
         eligible_run_ids: set[str] | None = None,
+        approval_scope: str | None = None,
     ) -> dict[str, Any]:
         """Execute cells after validating signed scope/hash/count before claiming."""
         self.register_plan(plan)
         plan_hash = _canonical_hash(plan)
         verified = verify_approval(
             approval,
-            scope=stage,
+            scope=approval_scope or stage,
             plan_hash=plan_hash,
             cell_count=len(plan["cells"]),
             cost_ceiling_usd=float(approval.get("cost_ceiling_usd", 0)),

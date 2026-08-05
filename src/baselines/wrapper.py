@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import time
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from src.pipeline.budget import BudgetTier
 from src.pipeline.data_bridge import _load_model_profile
@@ -176,6 +176,7 @@ def run_baseline_command(
         run_context={
             "dataset_lock_hash": os.environ.get("VERIPLANPT_DATASET_LOCK_HASH", ""),
             "training_protocol_hash": os.environ.get("VERIPLANPT_TRAINING_PROTOCOL_HASH", ""),
+            "gateway_relay_lock_hash": os.environ.get("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH", ""),
             "policy_lock_hash": os.environ.get("VERIPLANPT_POLICY_LOCK_HASH", ""),
             "matrix_hash": os.environ.get("VERIPLANPT_MATRIX_HASH", ""),
             "framework_commit": os.environ.get(f"VERIPLANPT_{framework_key}_COMMIT", ""),
@@ -204,6 +205,36 @@ def run_baseline_command(
             "proof_submissions": proof_submissions,
             "automation_wrapper": automation_wrapper,
         }, handle, indent=2, sort_keys=True)
+    return artifact
+
+
+def normalize_runtime_artifact(
+    artifact: RunArtifact,
+    *,
+    observed_usage: Mapping[str, Any],
+    event_ledger_hash: str,
+    proof_hash: str,
+    gateway_relay_lock_hash: str,
+) -> RunArtifact:
+    """Bind a Docker wrapper result to host-observed usage and proof hashes.
+
+    Baseline self-reported token/cost fields are deliberately ignored.  The
+    caller supplies values collected from the host gateway ledger.
+    """
+    required = {"input_tokens", "output_tokens", "total_tokens", "usd"}
+    if required.difference(observed_usage):
+        raise ValueError("observed runtime usage is incomplete")
+    artifact.usage = {
+        **artifact.usage,
+        "input_tokens": int(observed_usage["input_tokens"]),
+        "output_tokens": int(observed_usage["output_tokens"]),
+        "total_tokens": int(observed_usage["total_tokens"]),
+        "total_usd": float(observed_usage["usd"]),
+    }
+    artifact.event_ledger_hash = event_ledger_hash
+    artifact.proof_hash = proof_hash
+    artifact.run_context["gateway_relay_lock_hash"] = gateway_relay_lock_hash
+    artifact.validate_official(strict_runtime=True)
     return artifact
 
 

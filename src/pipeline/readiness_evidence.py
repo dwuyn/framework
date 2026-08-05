@@ -12,7 +12,8 @@ from typing import Any, Mapping, Sequence
 from src.pipeline.vertex_runtime import VertexContractError, validate_resolution_fields
 
 SCHEMA_VERSION = "2.0.0"
-RUNTIME_SCHEMA_VERSION = "2.1.0"
+LEGACY_RUNTIME_SCHEMA_VERSION = "2.1.0"
+RUNTIME_SCHEMA_VERSION = "2.2.0"
 BASE_CASE_COUNT = 94
 ROBUSTNESS_COUNT = 9
 VERTEX_CANARY_COUNT = 3
@@ -90,7 +91,10 @@ def _digest(value: Any, name: str) -> None:
         raise ValueError(f"{name} must be a SHA-256 digest")
 
 
-def _passed(record: Mapping[str, Any], name: str, *, artifact_root: str | Path | None = None) -> None:
+def _passed(
+    record: Mapping[str, Any], name: str, *, artifact_root: str | Path | None = None,
+    production: bool = False,
+) -> None:
     if record.get("status") != "passed":
         raise ValueError(f"{name} must have status='passed'")
     digest_value = record.get("evidence_sha256", record.get("artifact_sha256"))
@@ -102,12 +106,15 @@ def _passed(record: Mapping[str, Any], name: str, *, artifact_root: str | Path |
             try:
                 payload = json.loads((Path(artifact_root).resolve() / path).read_text(encoding="utf-8"))
                 from src.pipeline.protocol import validate_run_artifact
-                validate_run_artifact(payload, official=True)
+                validate_run_artifact(payload, official=True, strict_runtime=production)
             except (OSError, json.JSONDecodeError, ValueError) as exc:
                 raise ValueError(f"{name}.artifact is not a valid official RunArtifact") from exc
 
 
-def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str | Path) -> None:
+def _runtime_record(
+    record: Mapping[str, Any], name: str, *, artifact_root: str | Path,
+    production: bool = False,
+) -> None:
     """Verify the complete source-backed v2 runtime cell evidence."""
     required = {
         "status", "run_id", "model_label", "plan_hash", "dataset_lock_hash",
@@ -120,10 +127,13 @@ def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str 
         "evaluator_sha256", "cleanup_path", "cleanup_sha256", "billing_status",
         "oracle_status",
     }
+    if production:
+        required.add("gateway_relay_lock_hash")
+        required.update({"invocation_ledger_path", "invocation_ledger_sha256"})
     missing = sorted(required.difference(record))
     if missing:
         raise ValueError(f"{name} is missing runtime evidence field(s): {', '.join(missing)}")
-    _passed(record, name, artifact_root=artifact_root)
+    _passed(record, name, artifact_root=artifact_root, production=production)
     if record.get("artifact_type") != "run_artifact":
         raise ValueError(f"{name}.artifact_type must be run_artifact")
     if not str(record.get("image_digest", "")).startswith("sha256:"):
@@ -133,6 +143,8 @@ def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str 
         "model_profile_hash", "model_resolution_lock_hash", "evaluator_hash", "oracle_hash",
     ):
         _digest(record[key], f"{name}.{key}")
+    if production:
+        _digest(record["gateway_relay_lock_hash"], f"{name}.gateway_relay_lock_hash")
     if int(record["max_input_tokens"]) <= 0 or int(record["max_output_tokens"]) <= 0:
         raise ValueError(f"{name} token caps must be positive")
     if record.get("billing_status") != "known" or record.get("oracle_status") != "passed":
@@ -149,8 +161,19 @@ def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str 
         "evaluator": (record["evaluator_path"], record["evaluator_sha256"]),
         "cleanup": (record["cleanup_path"], record["cleanup_sha256"]),
     }
+    if production:
+        paths["invocation_ledger"] = (record["invocation_ledger_path"], record["invocation_ledger_sha256"])
     for label, (path, digest) in paths.items():
         rehash_artifact({"artifact_path": path, "artifact_sha256": digest}, artifact_root=root, name=f"{name}.{label}")
+    if production:
+        try:
+            ledger = json.loads((root / _relative_artifact_path(record["invocation_ledger_path"], name)).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{name} invocation ledger is not valid JSON") from exc
+        if not isinstance(ledger, Mapping) or ledger.get("gateway_relay_lock_hash") != record["gateway_relay_lock_hash"]:
+            raise ValueError(f"{name} invocation ledger relay binding mismatch")
+        if not any(isinstance(item, Mapping) and item.get("run_id") == record["run_id"] for item in ledger.get("invocations", [])):
+            raise ValueError(f"{name} invocation ledger has no observed request")
     try:
         usage = json.loads((root / _relative_artifact_path(record["usage_path"], name)).read_text(encoding="utf-8"))
         cost = json.loads((root / _relative_artifact_path(record["cost_path"], name)).read_text(encoding="utf-8"))
@@ -191,6 +214,8 @@ def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str 
         raise ValueError(f"{name} RunArtifact usage mismatch")
     if str(run_artifact.framework_identity.get("image_digest", "")) != str(record["image_digest"]):
         raise ValueError(f"{name} RunArtifact framework image mismatch")
+    if production and str(run_artifact.run_context.get("gateway_relay_lock_hash")) != str(record["gateway_relay_lock_hash"]):
+        raise ValueError(f"{name} RunArtifact relay lock mismatch")
 
 
 def _validate_control(
@@ -237,12 +262,15 @@ def validate_smoke_evidence(
         strict_runtime_fields = {
             "plan_hash", "training_protocol_hash", "baseline_lock_hash",
             "model_resolution_lock_hash", "pricing_snapshot_hash", "approval_hash",
+            "gateway_relay_lock_hash", "runtime_topology_evidence_path",
+            "runtime_topology_evidence_sha256",
         }
         unexpected_runtime = sorted(set(evidence).difference(required_runtime | strict_runtime_fields))
         if unexpected_runtime:
             raise ValueError(f"runtime smoke evidence has unexpected field(s): {', '.join(unexpected_runtime)}")
-        runtime_strict = evidence["schema_version"] == RUNTIME_SCHEMA_VERSION
-        if evidence["schema_version"] not in {SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION} or not str(evidence["generated_at"]).endswith("Z"):
+        runtime_strict = evidence["schema_version"] in {LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION}
+        production_runtime = evidence["schema_version"] == RUNTIME_SCHEMA_VERSION
+        if evidence["schema_version"] not in {SCHEMA_VERSION, LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION} or not str(evidence["generated_at"]).endswith("Z"):
             raise ValueError("runtime smoke evidence schema or timestamp is invalid")
         if runtime_strict:
             strict_required = {
@@ -254,6 +282,34 @@ def validate_smoke_evidence(
                 raise ValueError(f"runtime smoke evidence missing strict field(s): {', '.join(missing_strict)}")
             for key in strict_required:
                 _digest(evidence[key], f"runtime.{key}")
+        if production_runtime:
+            for key in ("gateway_relay_lock_hash", "runtime_topology_evidence_sha256"):
+                _digest(evidence.get(key), f"runtime.{key}")
+            if artifact_root is None:
+                raise ValueError("production runtime evidence requires artifact_root")
+            topology_path = _relative_artifact_path(
+                evidence.get("runtime_topology_evidence_path"), "runtime_topology_evidence"
+            )
+            topology_file = Path(artifact_root).resolve() / topology_path
+            if not topology_file.is_file():
+                raise ValueError("production runtime evidence requires runtime-topology-evidence.json")
+            actual_topology_hash = hashlib.sha256(topology_file.read_bytes()).hexdigest()
+            if actual_topology_hash != str(evidence["runtime_topology_evidence_sha256"]):
+                raise ValueError("runtime topology evidence hash mismatch")
+            try:
+                topology = json.loads(topology_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError("runtime topology evidence is not valid JSON") from exc
+            if isinstance(topology, Mapping):
+                from src.pipeline.runtime_topology import validate_runtime_topology_evidence
+                try:
+                    validate_runtime_topology_evidence(topology)
+                except ValueError as exc:
+                    raise ValueError("runtime topology lifecycle evidence is invalid") from exc
+            if not isinstance(topology, Mapping) or topology.get("success") is not True:
+                raise ValueError("runtime topology lifecycle did not succeed")
+            if topology.get("gateway_relay_lock_hash") != evidence.get("gateway_relay_lock_hash"):
+                raise ValueError("runtime topology relay lock binding mismatch")
         _digest(evidence["dataset_lock_hash"], "runtime.dataset_lock_hash")
         _digest(evidence["dataset_evidence_hash"], "runtime.dataset_evidence_hash")
         expected_models = set(model_labels)
@@ -264,10 +320,12 @@ def validate_smoke_evidence(
             raise ValueError("Vertex canaries must cover exactly the locked model labels")
         for record in canary_records:
             name = f"Vertex canary {record.get('model_label', '')}"
+            if production_runtime and str(record.get("gateway_relay_lock_hash")) != str(evidence["gateway_relay_lock_hash"]):
+                raise ValueError(f"{name} gateway relay lock binding mismatch")
             if runtime_strict:
                 if artifact_root is None:
                     raise ValueError("strict runtime evidence requires artifact_root")
-                _runtime_record(record, name, artifact_root=artifact_root)
+                _runtime_record(record, name, artifact_root=artifact_root, production=production_runtime)
             else:
                 _passed(record, name, artifact_root=artifact_root)
             if not str(record.get("resource_id", "")).strip() or not str(record.get("resource_revision", "")).strip():
@@ -293,10 +351,12 @@ def validate_smoke_evidence(
                 raise ValueError("framework-model smoke pairs must be unique and named")
             runtime_pairs.add(pair)
             name = f"framework-model smoke {framework}/{model}"
+            if production_runtime and str(record.get("gateway_relay_lock_hash")) != str(evidence["gateway_relay_lock_hash"]):
+                raise ValueError(f"{name} gateway relay lock binding mismatch")
             if runtime_strict:
                 if artifact_root is None:
                     raise ValueError("strict runtime evidence requires artifact_root")
-                _runtime_record(record, name, artifact_root=artifact_root)
+                _runtime_record(record, name, artifact_root=artifact_root, production=production_runtime)
             else:
                 _passed(record, name, artifact_root=artifact_root)
         if runtime_pairs != expected_pairs:

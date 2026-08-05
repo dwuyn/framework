@@ -20,7 +20,7 @@ class ProviderShimError(RuntimeError):
 
 
 def _gateway_url() -> str:
-    value = os.environ.get("VERIPLANPT_PROVIDER_URL", "http://provider-gateway:8080/v1/generate")
+    value = os.environ.get("VERIPLANPT_PROVIDER_URL", "http://gateway-relay:8080/v1/generate")
     if value.startswith("https://aiplatform.googleapis.com") or "googleapis.com" in value:
         raise ProviderShimError("direct Vertex endpoints are forbidden in baseline containers")
     if not value.startswith(("http://", "https://")):

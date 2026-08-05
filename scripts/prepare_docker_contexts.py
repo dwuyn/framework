@@ -84,6 +84,17 @@ def main() -> int:
             "dependency_lock": str(context / "envelope" / lock.name),
             "wheelhouse": str(context / "wheelhouse"),
         }
+    relay_context = artifact_root / "gateway-relay-context"
+    if relay_context.exists():
+        raise SystemExit(f"refusing to overwrite staged relay context: {relay_context}")
+    (relay_context / "relay").mkdir(parents=True, exist_ok=False)
+    shutil.copyfile(ROOT / "docker/relay/relay.py", relay_context / "relay/relay.py")
+    shutil.copyfile(ROOT / "docker/gateway-relay.Dockerfile", relay_context / "Dockerfile")
+    manifest["contexts"]["gateway-relay"] = {
+        "path": str(relay_context),
+        "recipe": str(relay_context / "Dockerfile"),
+        "source": str(relay_context / "relay/relay.py"),
+    }
     output = artifact_root / "baseline-build-contexts" / "context-manifest.json"
     output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"output": str(output), "contexts": len(manifest["contexts"])}, sort_keys=True))

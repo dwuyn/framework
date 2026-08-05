@@ -38,6 +38,7 @@ def build_canary_smoke_plan(
     dataset_lock_hash: str = "", baseline_identity_hash: str = "",
     model_resolution_lock_hash: str = "", evaluator_hash: str = "", oracle_hash: str = "",
     image_digests: Mapping[str, str] | None = None, native_identity_hash: str = "",
+    gateway_relay_lock_hash: str = "",
     max_input_tokens: int = 0, max_output_tokens: int = 0,
     retry_policy: Mapping[str, Any] | None = None, strict: bool = False,
 ) -> dict[str, Any]:
@@ -69,6 +70,8 @@ def build_canary_smoke_plan(
             for name in FRAMEWORKS
         ):
             raise ValueError("strict runtime plan requires immutable framework image digests")
+        if gateway_relay_lock_hash and not re.fullmatch(r"[0-9a-f]{64}", gateway_relay_lock_hash):
+            raise ValueError("gateway relay lock hash must be a SHA-256")
     retry = dict(retry_policy or {"max_attempts": 1, "retryable": ["infrastructure_failure"]})
     attempts = int(retry["max_attempts"])
     if not strict and (framework_costs is None or canary_cost is None):
@@ -102,6 +105,8 @@ def build_canary_smoke_plan(
             "retry_policy": retry,
             "cell_worst_case_cost_usd": float(cost),
         }
+        if gateway_relay_lock_hash:
+            record["gateway_relay_lock_hash"] = gateway_relay_lock_hash
         return record
 
     for label in labels:
@@ -113,7 +118,12 @@ def build_canary_smoke_plan(
             cell = identity(kind="framework_model_smoke", label=label, framework=framework)
             cell.update({"run_id": f"smoke-{framework.lower()}-{label}", "framework": framework})
             cells.append(cell)
-    plan = {"schema_version": "1.0.0", "stage": "canary_smoke", "cell_count": len(cells), "cells": cells}
+    plan = {
+        "schema_version": "1.1.0" if gateway_relay_lock_hash else "1.0.0",
+        "stage": "canary_smoke", "cell_count": len(cells), "cells": cells,
+    }
+    if gateway_relay_lock_hash:
+        plan["gateway_relay_lock_hash"] = gateway_relay_lock_hash
     plan["plan_hash"] = _canonical_hash(plan)
     if strict:
         validate_canary_smoke_plan(plan, profiles=profiles, strict=True)
@@ -158,6 +168,12 @@ def validate_canary_smoke_plan(
         for cell in cells:
             if not required.issubset(cell):
                 raise ValueError("strict canary smoke cell is missing an immutable pin")
+            production_plan = str(plan.get("schema_version")) == "1.1.0"
+            if production_plan:
+                if not re.fullmatch(r"[0-9a-f]{64}", str(plan.get("gateway_relay_lock_hash", ""))):
+                    raise ValueError("production canary smoke plan requires gateway_relay_lock_hash")
+                if str(cell.get("gateway_relay_lock_hash")) != str(plan["gateway_relay_lock_hash"]):
+                    raise ValueError("canary smoke gateway relay lock binding mismatch")
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(cell["image_digest"])):
                 raise ValueError("strict canary smoke cell requires an immutable image digest")
             for key in ("dataset_lock_hash", "baseline_identity_hash", "native_identity_hash",
@@ -194,12 +210,17 @@ def write_runtime_smoke_evidence(
     canaries: Sequence[Mapping[str, Any]], smokes: Sequence[Mapping[str, Any]], output: str = "readiness/runtime-smoke-evidence.json",
     plan_hash: str = "", training_protocol_hash: str = "", baseline_lock_hash: str = "",
     model_resolution_lock_hash: str = "", pricing_snapshot_hash: str = "", approval_hash: str = "",
+    gateway_relay_lock_hash: str = "", runtime_topology_evidence_path: str = "",
+    runtime_topology_evidence_hash: str = "",
 ) -> Path:
     """Write only source-backed readiness evidence, then rehash it immediately."""
     root = Path(artifact_root).resolve()
     strict = bool(plan_hash or training_protocol_hash or baseline_lock_hash or model_resolution_lock_hash or pricing_snapshot_hash or approval_hash)
+    production = bool(gateway_relay_lock_hash or runtime_topology_evidence_path or runtime_topology_evidence_hash)
+    if production and not all((gateway_relay_lock_hash, runtime_topology_evidence_path, runtime_topology_evidence_hash)):
+        raise ValueError("production runtime evidence requires relay lock and topology evidence bindings")
     evidence = {
-        "schema_version": "2.1.0" if strict else "2.0.0",
+        "schema_version": "2.2.0" if production else ("2.1.0" if strict else "2.0.0"),
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "dataset_lock_hash": dataset_lock_hash,
         "dataset_evidence_hash": dataset_evidence_hash,
@@ -212,6 +233,12 @@ def write_runtime_smoke_evidence(
             "baseline_lock_hash": baseline_lock_hash,
             "model_resolution_lock_hash": model_resolution_lock_hash,
             "pricing_snapshot_hash": pricing_snapshot_hash, "approval_hash": approval_hash,
+        })
+    if production:
+        evidence.update({
+            "gateway_relay_lock_hash": gateway_relay_lock_hash,
+            "runtime_topology_evidence_path": runtime_topology_evidence_path,
+            "runtime_topology_evidence_sha256": runtime_topology_evidence_hash,
         })
     validate_smoke_evidence(evidence, base_case_ids=[], model_labels=[
         str(record.get("model_label", "")) for record in canaries

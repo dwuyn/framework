@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ IMAGES = {
     "HackSynth": "veriplanpt/hacksynth:locked",
     "VeriPlanPT": "veriplanpt/veriplanpt:locked",
 }
+RELAY_IMAGE = "veriplanpt/gateway-relay:locked"
 
 
 def _sha(path: Path) -> str:
@@ -59,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--staging-root", required=True)
     parser.add_argument("--output-baseline-lock", required=True)
     parser.add_argument("--output-native-identity", required=True)
+    parser.add_argument("--output-relay-lock", default="")
     args = parser.parse_args(argv)
     staging_root = Path(args.staging_root).resolve()
     if shutil.disk_usage(staging_root).free < 50 * 1024 ** 3:
@@ -127,10 +130,47 @@ def main(argv: list[str] | None = None) -> int:
                 "adapter_bundle": {"common": str(adapter_paths["common"]), "framework": str(adapter_paths["framework"]),
                                    "wrapper": str(adapter_paths["wrapper"]), "contract_version": "adapter-2.1"},
             })
+    relay_context = Path(str(contexts["gateway-relay"]["path"])).resolve()
+    relay_recipe = relay_context / "Dockerfile"
+    relay_source = relay_context / "relay/relay.py"
+    relay_recipe_hash = _sha(relay_recipe)
+    relay_source_hash = _sha(relay_source)
+    relay_build = [
+        "docker", "build", "--network=none", "--tag", RELAY_IMAGE,
+        "--file", str(relay_recipe), "--build-arg", f"HOST_UID={os.geteuid()}",
+        "--build-arg", f"HOST_GID={os.getegid()}",
+        "--build-arg", f"RECIPE_HASH={relay_recipe_hash}",
+        "--build-arg", f"SOURCE_HASH={relay_source_hash}", str(relay_context),
+    ]
+    relay_result = subprocess.run(relay_build, capture_output=True, text=True, check=False)
+    if relay_result.returncode:
+        raise RuntimeError(f"Docker build failed for gateway relay: {(relay_result.stderr or relay_result.stdout).strip()[-4000:]}")
+    relay_digest, _relay_labels = _inspect(RELAY_IMAGE)
+    relay_lock_path = Path(args.output_relay_lock or (staging_root / "gateway-relay.lock.json"))
+    relay_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    relay_lock = {
+        "schema_version": "1.0.0",
+        "uid_policy": "host_euid_nonroot",
+        "relay": {
+            "image": RELAY_IMAGE, "image_digest": relay_digest,
+            "alias": "gateway-relay", "endpoint": "http://gateway-relay:8080/v1/generate",
+            "run_as": "host_uid_gid_nonroot",
+            "recipe": {"path": str(relay_recipe.relative_to(staging_root)), "sha256": relay_recipe_hash},
+            "source": {"path": str(relay_source.relative_to(staging_root)), "sha256": relay_source_hash},
+        },
+        "socket": {
+            "path": "/run/veriplanpt-gateway/gateway.sock", "mode": "0600",
+            "parent_mode": "0700", "mount_read_only": True,
+        },
+        "network": {"mode": "internal", "alias": "gateway-relay"},
+        "baseline_socket_mount": False,
+        "baseline_credentials": False,
+    }
+    relay_lock_path.write_text(json.dumps(relay_lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     Path(args.output_native_identity).write_text(json.dumps(native, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     inventory = Path(args.output_baseline_lock).with_suffix(".inventory.json")
     inventory.write_text(json.dumps({"schema_version": "1.0.0", "baselines": observed}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"images": len(IMAGES), "inventory": str(inventory), "native_identity": str(args.output_native_identity)}))
+    print(json.dumps({"images": len(IMAGES) + 1, "inventory": str(inventory), "native_identity": str(args.output_native_identity), "relay_lock": str(relay_lock_path)}))
     return 0
 
 

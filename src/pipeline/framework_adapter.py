@@ -477,8 +477,12 @@ class RunArtifact:
             proof_hash=str(data.get("proof_hash", "")),
         )
 
-    def validate_official(self) -> None:
-        """Fail closed unless this artifact is a complete v2.1 gate artifact."""
+    def validate_official(self, *, strict_runtime: bool = False) -> None:
+        """Fail closed unless this artifact is a complete official artifact.
+
+        Historical v2.1 artifacts remain readable.  A production runtime call
+        opts into the stricter relay-bound contract explicitly.
+        """
         if self.schema_version != RUN_ARTIFACT_VERSION:
             raise ValueError("official gates accept only RunArtifact v2.1.0")
         required_identity = {"name", "repository_url", "commit", "image_digest", "adapter_version"}
@@ -489,9 +493,16 @@ class RunArtifact:
         if not str(self.framework_identity.get("image_digest", "")).startswith("sha256:"):
             raise ValueError("RunArtifact.framework_identity.image_digest must be immutable")
         required_context = {"dataset_lock_hash", "framework_commit", "evaluator_commit", "stage"}
+        if strict_runtime:
+            required_context.add("gateway_relay_lock_hash")
         if not required_context.issubset(self.run_context):
             raise ValueError("RunArtifact.run_context is incomplete")
-        for key in ("dataset_lock_hash", "training_protocol_hash", "policy_lock_hash", "matrix_hash"):
+        for key in (
+            "dataset_lock_hash", "training_protocol_hash", "policy_lock_hash", "matrix_hash",
+            "gateway_relay_lock_hash",
+        ):
+            if key == "gateway_relay_lock_hash" and not self.run_context.get(key):
+                continue
             if key in self.run_context and not _is_hex64(self.run_context[key]):
                 raise ValueError(f"RunArtifact.run_context.{key} must be a SHA-256")
         for name, value in (("event_ledger_hash", self.event_ledger_hash), ("proof_hash", self.proof_hash)):
@@ -744,6 +755,7 @@ class FrameworkAdapter:
             run_context={
                 "dataset_lock_hash": os.environ.get("VERIPLANPT_DATASET_LOCK_HASH", ""),
                 "training_protocol_hash": os.environ.get("VERIPLANPT_TRAINING_PROTOCOL_HASH", ""),
+                "gateway_relay_lock_hash": os.environ.get("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH", ""),
                 "policy_lock_hash": os.environ.get("VERIPLANPT_POLICY_LOCK_HASH", ""),
                 "matrix_hash": os.environ.get("VERIPLANPT_MATRIX_HASH", ""),
                 "framework_commit": env.framework_commit,
