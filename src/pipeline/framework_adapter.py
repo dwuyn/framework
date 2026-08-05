@@ -72,7 +72,7 @@ class ModelProfile:
         "gemma-4-26b-a4b-it",
     })
     REQUIRED_PRICING_KEYS: ClassVar[frozenset[str]] = frozenset({
-        "input_per_million", "cached_input_per_million", "output_per_million", "thinking_per_million",
+        "input_per_million", "cached_input_per_million", "output_per_million",
     })
 
     def __post_init__(self) -> None:
@@ -125,8 +125,14 @@ class ModelProfile:
             raise ValueError(f"ModelProfile usage_semantics missing key(s): {', '.join(sorted(missing_usage))}")
         if self.usage_semantics["input_includes_cached"] != "true":
             raise ValueError("ModelProfile usage must declare input_includes_cached=true")
-        if self.usage_semantics["total_formula"] != "input+output+thinking":
-            raise ValueError("ModelProfile usage total_formula must be input+output+thinking")
+        total_formula = self.usage_semantics["total_formula"]
+        if total_formula not in {"input+output", "input+output+thinking"}:
+            raise ValueError("ModelProfile usage total_formula is unsupported")
+        if total_formula == "input+output":
+            if self.usage_semantics.get("output_includes_reasoning") != "true":
+                raise ValueError("ModelProfile input+output usage must include reasoning in output")
+        elif float(self.pricing.get("thinking_per_million", 0.0)) <= 0.0:
+            raise ValueError("legacy input+output+thinking usage requires thinking_per_million")
 
     @property
     def logical_label(self) -> str:

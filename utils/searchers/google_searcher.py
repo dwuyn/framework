@@ -19,7 +19,19 @@ from utils.model_manager import get_model
 
 dotenv.load_dotenv()
 
-nlp = spacy.load("en_core_web_sm")
+_nlp = None
+
+
+def _sentence_model():
+    """Load the optional English model lazily; tests do not need model data."""
+    global _nlp
+    if _nlp is None:
+        try:
+            _nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            _nlp = spacy.blank("en")
+            _nlp.add_pipe("sentencizer")
+    return _nlp
 
 def google_search(query, api_key, cse_id, num=10, **kwargs):
     """
@@ -64,7 +76,7 @@ class GoogleSearcher:
             return None
 
     def translate_text(self, text, source='auto', target='en', max_length=5000):
-        doc = nlp(text)
+        doc = _sentence_model()(text)
         parts = []
         current_part = ""
         

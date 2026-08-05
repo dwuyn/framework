@@ -191,6 +191,14 @@ def validate_training_protocol(
         if item.get("profile_hash") != profile.profile_hash:
             raise ValueError("training protocol model profile hash mismatch")
         labels.add(profile.logical_label)
+        if profile.resolution_mode == "provider_alias":
+            resolution = protocol.get("model_resolution_lock")
+            if not isinstance(resolution, Mapping):
+                raise ValueError("provider alias profiles require model_resolution_lock")
+            if not isinstance(resolution.get("artifact_path"), str) or not re.fullmatch(
+                r"[0-9a-f]{64}", str(resolution.get("sha256", ""))
+            ):
+                raise ValueError("model_resolution_lock requires an artifact path and SHA-256")
     if labels != ModelProfile.ALLOWED_MODELS:
         raise ValueError("training protocol does not contain the locked model labels")
     cv = protocol["cv"]

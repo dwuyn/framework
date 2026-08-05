@@ -88,7 +88,6 @@ class PricingSnapshot:
         "input_per_million",
         "cached_input_per_million",
         "output_per_million",
-        "thinking_per_million",
     })
 
     def __post_init__(self) -> None:
@@ -176,7 +175,8 @@ class ResolvedModel:
                 "pricing_effective_at": pricing_effective_at,
                 "usage_semantics": {
                     "input_includes_cached": "true",
-                    "total_formula": "input+output+thinking",
+                    "total_formula": "input+output",
+                    "output_includes_reasoning": "true",
                 },
             }
         )

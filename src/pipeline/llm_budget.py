@@ -62,29 +62,47 @@ def _usage_mapping(response: Any) -> Mapping[str, Any]:
 def normalize_usage(response: Any, profile: ModelProfile, latency_ms: float = 0.0) -> NormalizedUsage:
     raw = _usage_mapping(response)
     required_any = (
-        "input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "total_tokens",
+        "input_tokens", "prompt_tokens", "prompt_token_count", "output_tokens",
+        "completion_tokens", "candidates_token_count", "total_tokens",
     )
     if not raw or not any(key in raw for key in required_any):
         raise UsageMetadataMissing("Vertex response is missing usage metadata")
-    input_tokens = int(raw.get("input_tokens", raw.get("prompt_tokens", 0)) or 0)
+    input_tokens = int(
+        raw.get("input_tokens", raw.get("prompt_tokens", raw.get("prompt_token_count", 0))) or 0
+    )
     cached_tokens = int(
         raw.get("cached_input_tokens")
         or raw.get("cached_tokens")
         or raw.get("cache_read_input_tokens")
+        or raw.get("cached_content_token_count")
         or 0
     )
-    output_tokens = int(raw.get("output_tokens", raw.get("completion_tokens", 0)) or 0)
-    thinking_tokens = int(raw.get("thinking_tokens") or raw.get("reasoning_tokens") or 0)
+    output_tokens = int(
+        raw.get("output_tokens", raw.get("completion_tokens", raw.get("candidates_token_count", 0))) or 0
+    )
+    thinking_tokens = int(
+        raw.get("thinking_tokens") or raw.get("reasoning_tokens") or raw.get("thoughts_token_count") or 0
+    )
     if cached_tokens > input_tokens:
         raise UsageMetadataMissing("Vertex cached input tokens exceed input tokens")
-    total_tokens = input_tokens + output_tokens + thinking_tokens
     pricing = profile.pricing
-    usd = (
-        (input_tokens - cached_tokens) * pricing["input_per_million"]
-        + cached_tokens * pricing["cached_input_per_million"]
-        + output_tokens * pricing["output_per_million"]
-        + thinking_tokens * pricing["thinking_per_million"]
-    ) / 1_000_000
+    formula = profile.usage_semantics["total_formula"]
+    if formula == "input+output":
+        output_tokens += thinking_tokens
+        total_tokens = input_tokens + output_tokens
+        usd = (
+            (input_tokens - cached_tokens) * pricing["input_per_million"]
+            + cached_tokens * pricing["cached_input_per_million"]
+            + output_tokens * pricing["output_per_million"]
+        ) / 1_000_000
+    else:
+        total_tokens = input_tokens + output_tokens + thinking_tokens
+        usd = (
+            (input_tokens - cached_tokens) * pricing["input_per_million"]
+            + cached_tokens * pricing["cached_input_per_million"]
+            + output_tokens * pricing["output_per_million"]
+            + thinking_tokens * pricing["thinking_per_million"]
+        ) / 1_000_000
     return NormalizedUsage(
         input_tokens=input_tokens,
         cached_input_tokens=cached_tokens,
@@ -145,7 +163,11 @@ class BudgetedLLM:
                 input_tokens=usage.input_tokens,
                 cached_input_tokens=usage.cached_input_tokens,
                 output_tokens=usage.output_tokens,
-                thinking_tokens=usage.thinking_tokens,
+                thinking_tokens=(
+                    usage.thinking_tokens
+                    if self.model_profile.usage_semantics["total_formula"] == "input+output+thinking"
+                    else 0
+                ),
                 usd=usage.usd,
             )
         except BudgetExceeded as exc:

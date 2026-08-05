@@ -3,6 +3,10 @@ from __future__ import annotations
 import pytest
 
 from src.pipeline.framework_adapter import ModelProfile
+from src.pipeline.llm_budget import normalize_usage
+from src.pipeline.model_resolution import validate_resolution_lock
+from src.pipeline.runtime_readiness import build_canary_smoke_plan
+from src.pipeline.vertex_gateway import GatewayError, VertexGateway, serve_gateway
 from src.pipeline.vertex_runtime import (
     GeminiExecutor,
     GemmaMaaSExecutor,
@@ -162,6 +166,101 @@ def test_gemma_executor_normalizes_openai_response() -> None:
     assert result.model_id == "google/gemma-4-26b-a4b-it-maas"
 
 
+def test_standard_pricing_counts_reasoning_once_in_billable_output() -> None:
+    profile = ModelProfile.from_dict({
+        **_profile("gemini-3.6-flash").to_dict(),
+        "usage_semantics": {
+            "input_includes_cached": "true",
+            "total_formula": "input+output",
+            "output_includes_reasoning": "true",
+        },
+        "pricing": {
+            "input_per_million": 1.5,
+            "cached_input_per_million": 0.15,
+            "output_per_million": 7.5,
+        },
+    })
+    usage = normalize_usage({
+        "usage_metadata": {
+            "prompt_token_count": 10,
+            "cached_content_token_count": 2,
+            "candidates_token_count": 3,
+            "thoughts_token_count": 4,
+        },
+    }, profile)
+    assert usage.output_tokens == 7
+    assert usage.thinking_tokens == 4
+    assert usage.total_tokens == 17
+    assert usage.usd == pytest.approx(((8 * 1.5) + (2 * 0.15) + (7 * 7.5)) / 1_000_000)
+
+
+def test_resolution_lock_rehashes_alias_catalog_evidence(tmp_path) -> None:
+    metadata = tmp_path / "models/gemini-3.6-flash.json"
+    metadata.parent.mkdir()
+    metadata.write_text('{"name":"gemini-3.6-flash"}\n', encoding="utf-8")
+    digest = __import__("hashlib").sha256(metadata.read_bytes()).hexdigest()
+    profile = ModelProfile.from_dict({
+        **_profile("gemini-3.6-flash").to_dict(),
+        "resource_revision": "default",
+        "resolution_mode": "provider_alias",
+        "resolution_resolved_at": "2026-08-05T00:00:00Z",
+        "resolution_evidence_hash": digest,
+    })
+    lock = {
+        "schema_version": "1.0.0", "generated_at": "2026-08-05T00:00:00Z",
+        "models": [{
+            "logical_label": profile.logical_label,
+            "resource_id": profile.resource_id,
+            "resource_revision": profile.resource_revision,
+            "resolution_mode": profile.resolution_mode,
+            "resolution_evidence_hash": digest,
+            "resolution_resolved_at": profile.resolution_resolved_at,
+            "metadata_path": "models/gemini-3.6-flash.json",
+        }],
+    }
+    validate_resolution_lock(lock, profiles=[profile], artifact_root=tmp_path)
+    metadata.write_text('{"name":"tampered"}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="metadata hash"):
+        validate_resolution_lock(lock, profiles=[profile], artifact_root=tmp_path)
+
+
 def test_executor_rejects_wrong_provider_surface() -> None:
     with pytest.raises(VertexContractError, match="Gemini"):
         GeminiExecutor(_GeminiTransport()).invoke(_profile("gemma-4-26b-a4b-it"), "ping")
+
+
+def test_gateway_rejects_unapproved_run_and_profile() -> None:
+    profile = _profile("gemini-3.6-flash")
+    gateway = VertexGateway(
+        profiles=[profile], allowed_run_ids={"run-1"}, token="test-token",
+        gemini=GeminiExecutor(_GeminiTransport()), gemma=GemmaMaaSExecutor(_GemmaTransport()),
+    )
+    result = gateway.invoke({
+        "run_id": "run-1", "model_label": profile.logical_label,
+        "profile_hash": profile.profile_hash, "contents": "ping",
+    }, token="test-token")
+    assert result.text == "pong"
+    with pytest.raises(GatewayError, match="not approved"):
+        gateway.invoke({
+            "run_id": "run-2", "model_label": profile.logical_label,
+            "profile_hash": profile.profile_hash, "contents": "ping",
+        }, token="test-token")
+
+
+def test_runtime_readiness_plan_has_exactly_eighteen_cells() -> None:
+    profiles = [_profile(label) for label in sorted(ModelProfile.ALLOWED_MODELS)]
+    costs = {name: 0.1 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")}
+    plan = build_canary_smoke_plan(profiles=profiles, framework_costs=costs, canary_cost=0.01)
+    assert plan["cell_count"] == 18
+    assert len(plan["cells"]) == 18
+    assert len({cell["run_id"] for cell in plan["cells"]}) == 18
+
+
+def test_gateway_refuses_non_local_bind_address() -> None:
+    profile = _profile("gemini-3.6-flash")
+    gateway = VertexGateway(
+        profiles=[profile], allowed_run_ids={"run-1"}, token="test-token",
+        gemini=GeminiExecutor(_GeminiTransport()), gemma=GemmaMaaSExecutor(_GemmaTransport()),
+    )
+    with pytest.raises(GatewayError, match="bind address"):
+        serve_gateway(gateway, host="example.test", port=8080)

@@ -14,6 +14,8 @@ from src.pipeline.dataset_lock import (
     sha256_file,
     validate_dataset_lock,
 )
+from src.pipeline.framework_adapter import ModelProfile
+from src.pipeline.model_resolution import validate_resolution_lock
 from src.pipeline.protocol import (
     git_state,
     hash_lock_file,
@@ -103,6 +105,22 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
         b_hash = hash_lock_file(baseline_lock)
         if str(protocol.get("baseline_lock_hash")) != b_hash:
             raise ValueError("training protocol baseline_lock_hash mismatch with baseline lock")
+        profiles = [ModelProfile.from_dict(item) for item in protocol["model_profiles"]]
+        if any(profile.resolution_mode == "provider_alias" for profile in profiles):
+            if artifact_root is None:
+                raise ValueError("provider alias profiles require --artifact-root")
+            resolution_ref = protocol["model_resolution_lock"]
+            if not isinstance(resolution_ref, dict):
+                raise ValueError("model_resolution_lock is invalid")
+            relative = Path(str(resolution_ref.get("artifact_path", "")))
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("model_resolution_lock artifact path is unsafe")
+            resolution_path = Path(artifact_root).resolve() / relative
+            if not resolution_path.is_file() or sha256_file(resolution_path) != resolution_ref.get("sha256"):
+                raise ValueError("model_resolution_lock artifact hash mismatch")
+            validate_resolution_lock(
+                load_json(resolution_path), profiles=profiles, artifact_root=artifact_root,
+            )
         return {"protocol_hash": hash_lock_file(training_protocol)}
 
     _check(checks, "training_protocol", protocol_gate)

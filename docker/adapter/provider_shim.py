@@ -31,6 +31,17 @@ def request(payload: dict[str, object]) -> dict[str, object]:
     """Send one JSON request to the controlled provider gateway."""
     if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
         raise ProviderShimError("Vertex credentials must not be present in a baseline container")
+    if os.environ.get("VERIPLANPT_GATEWAY_LIVE", "").lower() == "true":
+        for name in ("VERIPLANPT_RUN_ID", "VERIPLANPT_MODEL_LABEL", "VERIPLANPT_PROFILE_HASH"):
+            if not os.environ.get(name):
+                raise ProviderShimError(f"{name} is required for the live gateway")
+        payload = {
+            **payload,
+            "run_id": os.environ["VERIPLANPT_RUN_ID"],
+            "model_label": os.environ["VERIPLANPT_MODEL_LABEL"],
+            "profile_hash": os.environ["VERIPLANPT_PROFILE_HASH"],
+            "contents": payload.get("contents", payload.get("prompt")),
+        }
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
     headers = {"Content-Type": "application/json", "X-VeriPlanPT-Provider-Shim": "1"}
     token = os.environ.get("VERIPLANPT_PROVIDER_TOKEN", "")
