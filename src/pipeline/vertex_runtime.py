@@ -33,7 +33,7 @@ LOCKED_MODEL_INVOCATIONS: dict[str, dict[str, str]] = {
     "gemma-4-26b-a4b-it": {
         "api_family": "vertex_openai_compatible",
         "model_id": "google/gemma-4-26b-a4b-it-maas",
-        "catalog_name": "publishers/google/models/google/gemma-4-26b-a4b-it-maas",
+        "catalog_name": "publishers/google/models/gemma-4-26b-a4b-it-maas",
         "location": "global",
     },
 }
