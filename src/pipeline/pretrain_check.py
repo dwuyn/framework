@@ -243,6 +243,8 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
         art_root = evidence_root
         runtime_path = evidence_root / "readiness" / "runtime-smoke-evidence.json"
         dataset_path = root / "readiness" / "dataset-freeze-evidence.json"
+        if artifact_root is not None and (not runtime_path.is_file() or not dataset_path.is_file()):
+            raise ValueError("runtime pretrain requires completed dataset and 18-cell runtime smoke evidence")
         if runtime_path.exists() and dataset_path.exists():
             dataset_summary = validate_smoke_evidence(
                 load_smoke_evidence(dataset_path),
