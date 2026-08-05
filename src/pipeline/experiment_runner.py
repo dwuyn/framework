@@ -245,6 +245,7 @@ class ExperimentRunner:
         ceiling: float,
         lease_seconds: float = 900,
         *,
+        eligible_run_ids: set[str] | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> sqlite3.Row | None:
         """Atomically reserve one cell using a connection owned by one worker."""
@@ -260,12 +261,16 @@ class ExperimentRunner:
                     "SELECT COALESCE(SUM(cost_usd + reserved_cost_usd), 0) AS cost FROM runs"
                 ).fetchone()["cost"]
             )
+            where, values = "status='pending' AND cost_usd + reserved_cost_usd + worst_case_cost_usd <= ?", [ceiling]
+            if eligible_run_ids is not None:
+                if not eligible_run_ids:
+                    connection.commit()
+                    return None
+                where += " AND run_id IN (" + ",".join("?" for _ in eligible_run_ids) + ")"
+                values.extend(sorted(eligible_run_ids))
             row = connection.execute(
-                """SELECT run_id, cell_json, attempts, worst_case_cost_usd
-                   FROM runs WHERE status='pending'
-                   AND cost_usd + reserved_cost_usd + worst_case_cost_usd <= ?
-                   ORDER BY run_id LIMIT 1""",
-                (ceiling,),
+                "SELECT run_id, cell_json, attempts, worst_case_cost_usd FROM runs WHERE " + where + " ORDER BY run_id LIMIT 1",
+                values,
             ).fetchone()
             if row is None:
                 connection.commit()
@@ -487,6 +492,7 @@ class ExperimentRunner:
         expires_at: str,
         credential_validator: CredentialValidator | None,
         executor: Executor,
+        eligible_run_ids: set[str] | None = None,
     ) -> None:
         connection = self._connect()
         try:
@@ -498,7 +504,7 @@ class ExperimentRunner:
                 ):
                     return
                 claimed = self._claim(
-                    worker_id, ceiling, connection=connection
+                    worker_id, ceiling, eligible_run_ids=eligible_run_ids, connection=connection
                 )
                 if claimed is None:
                     if self._meta(connection, "stage_halt") is not None:
@@ -545,6 +551,7 @@ class ExperimentRunner:
         profile_hashes: Mapping[str, str] | None = None,
         gateway_start: GatewayStarter | None = None,
         reservation_ceiling_usd: float | None = None,
+        eligible_run_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Execute cells after validating signed scope/hash/count before claiming."""
         self.register_plan(plan)
@@ -569,6 +576,9 @@ class ExperimentRunner:
         )
         if gateway_start is not None:
             gateway_start()
+        all_ids = {str(cell["run_id"]) for cell in plan["cells"]}
+        if eligible_run_ids is not None and not eligible_run_ids.issubset(all_ids):
+            raise ValueError("eligible_run_ids must belong to the approved plan")
         expires_at = str(verified["expires_at"])
         threads = [
             threading.Thread(
@@ -580,6 +590,7 @@ class ExperimentRunner:
                     "expires_at": expires_at,
                     "credential_validator": credential_validator,
                     "executor": executor,
+                    "eligible_run_ids": eligible_run_ids,
                 },
                 name=f"veriplanpt-worker-{index:02d}",
             )
