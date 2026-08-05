@@ -158,7 +158,7 @@ def validate_training_protocol(
 ) -> None:
     required = {
         "schema_version", "dataset_repository_commit", "dataset_lock_hash", "framework_commit",
-        "evaluator_source_hash", "evaluator_image_digest", "model_profiles", "feature_schema_hash",
+        "evaluator_image_digest", "model_profiles", "feature_schema_hash",
         "budget_tiers", "cv", "baseline_lock_hash", "selection_rules", "expected_training_cells",
         "snapshot_mode", "cost_estimate_usd", "pricing_snapshot",
     }
@@ -171,7 +171,8 @@ def validate_training_protocol(
         raise ValueError("training protocol dataset hash mismatch")
     if not str(protocol["dataset_repository_commit"]).strip():
         raise ValueError("training protocol requires the downstream dataset repository commit")
-    if str(protocol["framework_commit"]) != framework_commit or str(protocol["evaluator_source_hash"]) != evaluator_commit:
+    protocol_evaluator_commit = str(protocol.get("evaluator_commit") or protocol.get("evaluator_source_hash") or "")
+    if str(protocol["framework_commit"]) != framework_commit or protocol_evaluator_commit != evaluator_commit:
         raise ValueError("training protocol code commit mismatch")
     if not str(protocol["evaluator_image_digest"]).startswith("sha256:"):
         raise ValueError("training protocol requires an evaluator image digest")
@@ -215,6 +216,7 @@ def validate_training_protocol(
             "dataset_freeze_manifest", "model_resolution_lock", "pricing_snapshot",
             "alias_exception", "canary_smoke_plan", "approval_canary_smoke",
             "native_identity", "vertex_project", "impersonate_service_account", "runtime_budgets",
+            "evaluator_commit", "evaluator_bundle_hash", "oracle_bundle_hash",
         }
         missing_runtime = sorted(runtime_required.difference(protocol))
         if missing_runtime:
@@ -223,6 +225,11 @@ def validate_training_protocol(
             raise ValueError("runtime training protocol requires vertex_project")
         if not str(protocol["impersonate_service_account"]).strip():
             raise ValueError("runtime training protocol requires impersonate_service_account")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(protocol["evaluator_commit"])):
+            raise ValueError("runtime training protocol requires evaluator_commit")
+        for name in ("evaluator_bundle_hash", "oracle_bundle_hash"):
+            if not re.fullmatch(r"[0-9a-f]{64}", str(protocol[name])):
+                raise ValueError(f"runtime training protocol requires {name}")
         budgets = protocol["runtime_budgets"]
         if not isinstance(budgets, Mapping) or not budgets:
             raise ValueError("runtime training protocol runtime_budgets is invalid")

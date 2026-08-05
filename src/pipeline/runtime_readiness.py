@@ -19,8 +19,22 @@ def _canonical_hash(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def worst_case_cost_usd(
+    profile: ModelProfile, *, max_input_tokens: int, max_output_tokens: int, max_attempts: int,
+) -> float:
+    """Return the conservative reservation from the pinned profile price."""
+    if max_input_tokens <= 0 or max_output_tokens <= 0 or not 1 <= max_attempts <= 3:
+        raise ValueError("runtime cost requires positive token caps and one to three attempts")
+    per_attempt = (
+        max_input_tokens * float(profile.pricing["input_per_million"])
+        + max_output_tokens * float(profile.pricing["output_per_million"])
+    ) / 1_000_000
+    return per_attempt * max_attempts
+
+
 def build_canary_smoke_plan(
-    *, profiles: Sequence[ModelProfile], framework_costs: Mapping[str, float], canary_cost: float,
+    *, profiles: Sequence[ModelProfile], framework_costs: Mapping[str, float] | None = None,
+    canary_cost: float | None = None,
     dataset_lock_hash: str = "", baseline_identity_hash: str = "",
     model_resolution_lock_hash: str = "", evaluator_hash: str = "", oracle_hash: str = "",
     image_digests: Mapping[str, str] | None = None, native_identity_hash: str = "",
@@ -29,12 +43,10 @@ def build_canary_smoke_plan(
 ) -> dict[str, Any]:
     """Make exactly 3 canaries plus the 15 required framework/model smokes."""
     labels = sorted(profile.logical_label for profile in profiles)
-    if len(labels) != 3 or len(set(labels)) != 3 or set(framework_costs) != FRAMEWORKS:
-        raise ValueError("runtime readiness requires three profiles and all five frameworks")
-    if not math.isfinite(float(canary_cost)) or canary_cost <= 0 or any(
-        not math.isfinite(float(value)) or float(value) <= 0 for value in framework_costs.values()
-    ):
-        raise ValueError("runtime readiness costs must be positive")
+    if len(labels) != 3 or len(set(labels)) != 3:
+        raise ValueError("runtime readiness requires exactly three model profiles")
+    if framework_costs is not None and set(framework_costs) != FRAMEWORKS:
+        raise ValueError("runtime readiness requires all five framework costs")
     if strict:
         required_digests = {
             "dataset_lock_hash": dataset_lock_hash,
@@ -50,21 +62,34 @@ def build_canary_smoke_plan(
             raise ValueError("strict runtime plan requires positive token caps")
         if not retry_policy or not 1 <= int(retry_policy.get("max_attempts", 0)) <= 3:
             raise ValueError("strict runtime plan requires a retry policy")
+        if framework_costs is not None or canary_cost is not None:
+            raise ValueError("strict runtime plan derives reservation from pinned pricing and token caps")
         if not image_digests or any(
             not re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_digests.get(name, "")))
             for name in FRAMEWORKS
         ):
             raise ValueError("strict runtime plan requires immutable framework image digests")
     retry = dict(retry_policy or {"max_attempts": 1, "retryable": ["infrastructure_failure"]})
+    attempts = int(retry["max_attempts"])
+    if not strict and (framework_costs is None or canary_cost is None):
+        raise ValueError("non-strict runtime plan requires explicit legacy costs")
+    legacy_framework_costs = framework_costs or {}
+    legacy_canary_cost = float(canary_cost or 0.0)
     images = dict(image_digests or {})
     cells: list[dict[str, Any]] = []
 
-    def identity(*, kind: str, label: str, cost: float, framework: str = "") -> dict[str, Any]:
+    def identity(*, kind: str, label: str, framework: str = "") -> dict[str, Any]:
+        profile = next(profile for profile in profiles if profile.logical_label == label)
+        cost = (
+            worst_case_cost_usd(profile, max_input_tokens=max_input_tokens,
+                                max_output_tokens=max_output_tokens, max_attempts=attempts)
+            if strict else (legacy_canary_cost if not framework else float(legacy_framework_costs[framework]))
+        )
         record: dict[str, Any] = {
             "kind": kind, "model_label": label,
-            "model_profile_hash": next(profile.profile_hash for profile in profiles if profile.logical_label == label),
-            "model_resource_id": next(profile.resource_id for profile in profiles if profile.logical_label == label),
-            "model_revision": next(profile.resource_revision for profile in profiles if profile.logical_label == label),
+            "model_profile_hash": profile.profile_hash,
+            "model_resource_id": profile.resource_id,
+            "model_revision": profile.resource_revision,
             "dataset_lock_hash": dataset_lock_hash,
             "baseline_identity_hash": baseline_identity_hash,
             "native_identity_hash": native_identity_hash,
@@ -80,13 +105,12 @@ def build_canary_smoke_plan(
         return record
 
     for label in labels:
-        cell = identity(kind="vertex_canary", label=label, cost=canary_cost)
+        cell = identity(kind="vertex_canary", label=label)
         cell.update({"run_id": f"canary-{label}"})
         cells.append(cell)
     for framework in sorted(FRAMEWORKS):
         for label in labels:
-            cell = identity(kind="framework_model_smoke", label=label, framework=framework,
-                            cost=framework_costs[framework])
+            cell = identity(kind="framework_model_smoke", label=label, framework=framework)
             cell.update({"run_id": f"smoke-{framework.lower()}-{label}", "framework": framework})
             cells.append(cell)
     plan = {"schema_version": "1.0.0", "stage": "canary_smoke", "cell_count": len(cells), "cells": cells}
@@ -156,6 +180,13 @@ def validate_canary_smoke_plan(
             cost = float(cell["cell_worst_case_cost_usd"])
             if not math.isfinite(cost) or cost <= 0:
                 raise ValueError("strict canary smoke cell cost must be positive and finite")
+            expected_cost = worst_case_cost_usd(
+                profile, max_input_tokens=int(cell["max_input_tokens"]),
+                max_output_tokens=int(cell["max_output_tokens"]),
+                max_attempts=int(policy["max_attempts"]),
+            )
+            if abs(cost - expected_cost) > 1e-12:
+                raise ValueError("strict canary smoke cell reservation does not match pinned pricing")
 
 
 def write_runtime_smoke_evidence(

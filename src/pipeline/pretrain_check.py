@@ -189,8 +189,8 @@ def pretrain_check(*, dataset_root: str | Path, baseline_lock: str | Path | None
             "baseline_identity_hash": hash_lock_file(baseline_lock),
             "native_identity_hash": native_hash,
             "model_resolution_lock_hash": str(protocol["model_resolution_lock"]["sha256"]),
-            "evaluator_hash": str(protocol["evaluator_source_hash"]),
-            "oracle_hash": str(protocol["evaluator_source_hash"]),
+            "evaluator_hash": str(protocol["evaluator_bundle_hash"]),
+            "oracle_hash": str(protocol["oracle_bundle_hash"]),
         }
         profile_by_label = {profile.logical_label: profile for profile in profiles}
         for cell in plan["cells"]:

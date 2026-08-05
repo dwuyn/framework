@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -52,20 +51,6 @@ def _git_commit(path: Path) -> str:
     return result.stdout.strip()
 
 
-def _parse_costs(values: list[str]) -> dict[str, float]:
-    result: dict[str, float] = {}
-    for value in values:
-        if "=" not in value:
-            raise ValueError("framework cost must be NAME=USD")
-        name, cost = value.split("=", 1)
-        if name not in FRAMEWORKS or not math.isfinite(float(cost)) or float(cost) <= 0:
-            raise ValueError(f"invalid framework cost: {value}")
-        result[name] = float(cost)
-    if set(result) != set(FRAMEWORKS):
-        raise ValueError("one positive cost is required for each framework")
-    return result
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", required=True)
@@ -77,24 +62,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--project", required=True)
     parser.add_argument("--impersonate-service-account", required=True)
-    parser.add_argument("--evaluator-hash", required=True)
+    parser.add_argument("--evaluator-commit", required=True)
+    parser.add_argument("--evaluator-bundle-hash", required=True)
+    parser.add_argument("--oracle-bundle-hash", required=True)
     parser.add_argument("--evaluator-image-digest", required=True)
     parser.add_argument("--feature-schema-hash", required=True)
-    parser.add_argument("--framework-cost", action="append", default=[])
-    parser.add_argument("--canary-cost", type=float, required=True)
     parser.add_argument("--max-input-tokens", type=int, default=4096)
     parser.add_argument("--max-output-tokens", type=int, default=1024)
     parser.add_argument("--reservation-ceiling-usd", type=float, required=True)
     args = parser.parse_args(argv)
 
-    costs = _parse_costs(args.framework_cost)
-    reserved_cost = (3.0 * float(args.canary_cost)) + sum(costs.values())
-    if not math.isfinite(float(args.canary_cost)) or float(args.canary_cost) <= 0:
-        raise SystemExit("canary cost must be positive and finite")
-    if not math.isfinite(float(args.reservation_ceiling_usd)) or float(args.reservation_ceiling_usd) <= 0:
-        raise SystemExit("reservation ceiling must be positive and finite")
-    if abs(reserved_cost - float(args.reservation_ceiling_usd)) > 1e-12:
-        raise SystemExit("reservation ceiling must equal the exact 18-cell worst-case reservation")
+    import re
+    if not re.fullmatch(r"[0-9a-f]{40}", args.evaluator_commit):
+        raise SystemExit("evaluator commit must be a full Git SHA")
+    if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in (args.evaluator_bundle_hash, args.oracle_bundle_hash)):
+        raise SystemExit("evaluator and oracle bundle hashes must be SHA-256")
     dataset_root = Path(args.dataset_root).resolve()
     artifact_root = Path(args.artifact_root).resolve()
     if artifact_root.exists() and any(artifact_root.iterdir()):
@@ -181,13 +163,16 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     plan = build_canary_smoke_plan(
-        profiles=profiles, framework_costs=costs, canary_cost=args.canary_cost,
+        profiles=profiles,
         dataset_lock_hash=dataset_hash, baseline_identity_hash=baseline_hash,
-        model_resolution_lock_hash=resolution_hash, evaluator_hash=args.evaluator_hash,
-        oracle_hash=args.evaluator_hash, image_digests=image_digests, native_identity_hash=native_hash,
+        model_resolution_lock_hash=resolution_hash, evaluator_hash=args.evaluator_bundle_hash,
+        oracle_hash=args.oracle_bundle_hash, image_digests=image_digests, native_identity_hash=native_hash,
         max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens,
         retry_policy={"max_attempts": 2, "retryable": ["408", "429", "500", "502", "503", "504"]}, strict=True,
     )
+    reserved_cost = sum(float(cell["cell_worst_case_cost_usd"]) for cell in plan["cells"])
+    if abs(reserved_cost - float(args.reservation_ceiling_usd)) > 1e-12:
+        raise SystemExit("reservation ceiling must equal the pricing-derived 18-cell reservation")
     write_json_atomically(artifact_root / "canary-smoke-plan.json", plan, refuse_existing=True)
     plan_hash = str(plan["plan_hash"])
     approval = {
@@ -203,7 +188,8 @@ def main(argv: list[str] | None = None) -> int:
     protocol = {
         "schema_version": "3.0.0", "dataset_repository_commit": dataset_commit,
         "dataset_lock_hash": dataset_hash, "framework_commit": framework_state["commit"],
-        "evaluator_source_hash": args.evaluator_hash, "evaluator_image_digest": args.evaluator_image_digest,
+        "evaluator_commit": args.evaluator_commit, "evaluator_bundle_hash": args.evaluator_bundle_hash,
+        "oracle_bundle_hash": args.oracle_bundle_hash, "evaluator_image_digest": args.evaluator_image_digest,
         "feature_schema_hash": args.feature_schema_hash, "model_profiles": [profile.to_dict() for profile in profiles],
         "budget_tiers": ["low", "medium", "high"],
         "cv": {"seed": 20260801, "folds": 5, "cases_per_fold": 8, "track": "blind", "budget_tier": "medium"},

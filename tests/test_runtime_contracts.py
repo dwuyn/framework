@@ -68,13 +68,12 @@ def test_strict_profiles_and_plan_pin_runtime_identities() -> None:
     profiles = [_profile(label) for label in LOCKED_MODEL_LABELS]
     for profile in profiles:
         validate_runtime_profile(profile, strict=True)
-    costs = {name: 0.1 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")}
     plan = build_canary_smoke_plan(
-        profiles=profiles, framework_costs=costs, canary_cost=0.01,
+        profiles=profiles,
         dataset_lock_hash="b" * 64, baseline_identity_hash="c" * 64,
         model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64,
         oracle_hash="f" * 64, native_identity_hash="1" * 64,
-        image_digests={name: "sha256:" + "2" * 64 for name in costs},
+        image_digests={name: "sha256:" + "2" * 64 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")},
         max_input_tokens=1024, max_output_tokens=256,
         retry_policy={"max_attempts": 2, "retryable": ["429"]}, strict=True,
     )
@@ -93,13 +92,12 @@ def test_runtime_preflight_blocks_profile_drift_and_overreservation() -> None:
 
 def test_strict_plan_rejects_profile_drift() -> None:
     profiles = [_profile(label) for label in LOCKED_MODEL_LABELS]
-    costs = {name: 0.1 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")}
     plan = build_canary_smoke_plan(
-        profiles=profiles, framework_costs=costs, canary_cost=0.01,
+        profiles=profiles,
         dataset_lock_hash="b" * 64, baseline_identity_hash="c" * 64,
         model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64,
         oracle_hash="f" * 64, native_identity_hash="1" * 64,
-        image_digests={name: "sha256:" + "2" * 64 for name in costs},
+        image_digests={name: "sha256:" + "2" * 64 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")},
         max_input_tokens=1024, max_output_tokens=256,
         retry_policy={"max_attempts": 2, "retryable": ["429"]}, strict=True,
     )

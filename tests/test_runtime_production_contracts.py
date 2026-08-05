@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+import pytest
+
+from scripts.collect_modelgarden_metadata import _resource, _select
+from src.pipeline.framework_adapter import ModelProfile
+from src.pipeline.runtime_readiness import build_canary_smoke_plan, worst_case_cost_usd
+
+
+def _profile(label: str) -> ModelProfile:
+    gemma = label == "gemma-4-26b-a4b-it"
+    return ModelProfile.from_dict({
+        "logical_label": label, "location": "global",
+        "resource_id": f"projects/p/locations/global/publishers/google/models/{label}",
+        "resource_revision": "001" if gemma else "default",
+        "resolution_mode": "immutable" if gemma else "provider_alias",
+        "resolution_evidence_hash": "a" * 64, "resolution_resolved_at": "2026-08-05T00:00:00Z",
+        "endpoint_url": "https://global-aiplatform.googleapis.com/v1" if gemma else "",
+        "pricing": {"input_per_million": 1.5, "cached_input_per_million": 0.15, "output_per_million": 7.5},
+        "pricing_effective_at": "2026-08-05T00:00:00Z",
+        "usage_semantics": {"input_includes_cached": "true", "total_formula": "input+output", "output_includes_reasoning": "true"},
+    })
+
+
+def test_model_garden_selection_requires_exact_name_and_version() -> None:
+    records = [
+        {"name": "gemini-3.5-flash", "versionId": "default"},
+        {"name": "gemini-3.5-flash", "versionId": "002"},
+    ]
+    assert _select(records, model_id="gemini-3.5-flash", version="default") == records[0]
+    with pytest.raises(RuntimeError, match="exactly one"):
+        _select(records, model_id="gemini-3.5-flash", version="001")
+
+
+def test_publisher_template_becomes_global_project_resource() -> None:
+    assert _resource(
+        "projects/{project}/locations/{location}/publishers/google/models/gemini-3.5-flash",
+        project="runtime-project", model_id="gemini-3.5-flash",
+    ) == "projects/runtime-project/locations/global/publishers/google/models/gemini-3.5-flash"
+
+
+def test_strict_reservation_uses_pricing_and_two_attempts() -> None:
+    profiles = [_profile(label) for label in sorted(ModelProfile.ALLOWED_MODELS)]
+    images = {name: "sha256:" + "2" * 64 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")}
+    plan = build_canary_smoke_plan(
+        profiles=profiles, dataset_lock_hash="a" * 64, baseline_identity_hash="b" * 64,
+        native_identity_hash="c" * 64, model_resolution_lock_hash="d" * 64,
+        evaluator_hash="e" * 64, oracle_hash="f" * 64, image_digests=images,
+        max_input_tokens=100, max_output_tokens=10, retry_policy={"max_attempts": 2}, strict=True,
+    )
+    expected = worst_case_cost_usd(profiles[0], max_input_tokens=100, max_output_tokens=10, max_attempts=2)
+    assert plan["cells"][0]["cell_worst_case_cost_usd"] == expected

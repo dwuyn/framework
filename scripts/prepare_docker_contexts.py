@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_ARTIFACT_ROOT = ROOT.parent / "veriplanpt-artifacts"
 IGNORE = shutil.ignore_patterns(
     ".git", ".venv", "venv", "env", "cyber_venv", "__pycache__", ".pytest_cache",
     ".ruff_cache", ".mypy_cache", ".tox", "logs", "data", "Data", "data_test", "results",
@@ -43,21 +42,30 @@ def materialize_lock(lock: Path, wheelhouse: Path, destination: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--metadata", default=str(ROOT / "build/dependency-envelopes/envelopes.json"))
-    parser.add_argument("--artifact-root", default=str(DEFAULT_ARTIFACT_ROOT))
+    parser.add_argument("--staging-root", required=True,
+                        help="new, empty staging root; historical contexts are never reused")
+    parser.add_argument("--wheelhouse-root", required=True,
+                        help="read-only verified wheelhouse root containing one directory per framework")
     args = parser.parse_args()
     metadata = json.loads(Path(args.metadata).read_text(encoding="utf-8"))
-    artifact_root = Path(args.artifact_root).resolve()
+    artifact_root = Path(args.staging_root).resolve()
+    wheelhouse_root = Path(args.wheelhouse_root).resolve()
+    if artifact_root == wheelhouse_root or artifact_root in wheelhouse_root.parents:
+        raise SystemExit("staging root must not overlap the verified wheelhouse root")
+    if artifact_root.exists() and any(artifact_root.iterdir()):
+        raise SystemExit("staging root must be new and empty")
+    artifact_root.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, Any] = {"schema_version": "1.0.0", "contexts": {}}
     for envelope in metadata["envelopes"]:
         name = str(envelope["name"])
         context = artifact_root / "baseline-build-contexts" / name
         if context.exists():
-            shutil.rmtree(context)
+            raise SystemExit(f"refusing to overwrite staged context: {context}")
         for directory in (context / "source", context / "envelope", context / "adapter", context / "wheelhouse"):
             directory.mkdir(parents=True, exist_ok=True)
         copy_clean(Path(str(envelope["source"]["path"])), context / "source")
         lock = ROOT / str(envelope["dependency_lock"]["path"])
-        wheelhouse = artifact_root / "wheelhouses" / name
+        wheelhouse = wheelhouse_root / name
         if not wheelhouse.is_dir():
             raise SystemExit(f"wheelhouse missing for {name}: {wheelhouse}")
         materialize_lock(lock, wheelhouse, context / "envelope" / lock.name)

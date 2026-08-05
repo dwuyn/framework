@@ -154,7 +154,7 @@ def plan_training(*, dataset_root: str | Path, protocol_path: str | Path, output
     state = git_state(Path(__file__).resolve().parents[2])
     if state["dirty"]:
         raise ValueError("training refuses a dirty framework repository")
-    evaluator_commit = str(protocol.get("evaluator_source_hash") or "")
+    evaluator_commit = str(protocol.get("evaluator_commit") or protocol.get("evaluator_source_hash") or "")
     validate_training_protocol(protocol, dataset_hash=lock_hash(lock), framework_commit=str(state["commit"]),
                                evaluator_commit=evaluator_commit)
     cases = _read_train_cases(root, lock)

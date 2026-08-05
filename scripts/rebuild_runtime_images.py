@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,12 +56,14 @@ def _inspect(image: str) -> tuple[str, dict[str, str]]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifact-root", required=True)
+    parser.add_argument("--staging-root", required=True)
     parser.add_argument("--output-baseline-lock", required=True)
     parser.add_argument("--output-native-identity", required=True)
     args = parser.parse_args(argv)
-    artifact_root = Path(args.artifact_root).resolve()
-    contexts = json.loads((artifact_root / "baseline-build-contexts/context-manifest.json").read_text(encoding="utf-8"))["contexts"]
+    staging_root = Path(args.staging_root).resolve()
+    if shutil.disk_usage(staging_root).free < 50 * 1024 ** 3:
+        raise SystemExit("runtime image rebuild requires at least 50 GiB free disk")
+    contexts = json.loads((staging_root / "baseline-build-contexts/context-manifest.json").read_text(encoding="utf-8"))["contexts"]
     envelopes = json.loads((ROOT / "build/dependency-envelopes/envelopes.json").read_text(encoding="utf-8"))["envelopes"]
     by_name = {str(item["name"]): item for item in envelopes}
     observed: list[dict[str, Any]] = []
