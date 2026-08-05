@@ -43,13 +43,20 @@ _HEX64 = set("0123456789abcdef")
 
 @dataclass
 class ModelProfile:
-    """Pinned, reproducible Vertex profile; credentials stay in the environment."""
+    """Pinned Vertex profile; credentials stay in the environment.
+
+    Provider aliases are permitted only through the explicit ``provider_alias``
+    resolution mode and must carry separately hashed resolution evidence.
+    """
     model_name: str
     location: str
     resource_id: str
     resource_revision: str
     pricing: dict[str, float]
     provider: str = "vertexai"
+    resolution_mode: str = "immutable"
+    resolution_evidence_hash: str = ""
+    resolution_resolved_at: str = ""
     # Compatibility-only runtime input. It is intentionally not serialized;
     # benchmark project selection comes from Vertex environment credentials.
     project: str = field(default="", repr=False)
@@ -82,8 +89,21 @@ class ModelProfile:
             raise ValueError(f"ModelProfile missing required field(s): {', '.join(missing_fields)}")
         if self.resource_id == self.model_name:
             raise ValueError("ModelProfile.resource_id must be the real Vertex resource ID, not the logical label")
-        if self.resource_revision.lower() in {"benchmark-pinned", "latest", "default", "unknown"}:
-            raise ValueError("ModelProfile.resource_revision must be an immutable Vertex revision/endpoint ID")
+        if self.resolution_mode not in {"immutable", "provider_alias"}:
+            raise ValueError("ModelProfile.resolution_mode must be immutable or provider_alias")
+        if self.resolution_mode == "provider_alias":
+            if self.model_name not in {"gemini-3.5-flash", "gemini-3.6-flash"}:
+                raise ValueError("provider_alias resolution is allowed only for locked Gemini models")
+            if self.resource_revision.lower() != "default":
+                raise ValueError("provider_alias profiles must declare resource_revision=default")
+            if len(self.resolution_evidence_hash) != 64 or any(
+                char not in _HEX64 for char in self.resolution_evidence_hash.lower()
+            ):
+                raise ValueError("provider_alias profiles require a resolution evidence SHA-256")
+            if not self.resolution_resolved_at.strip():
+                raise ValueError("provider_alias profiles require resolution_resolved_at")
+        elif self.resource_revision.lower() in {"benchmark-pinned", "latest", "default", "unknown"}:
+            raise ValueError("ModelProfile.resource_revision must be immutable unless provider_alias is explicit")
         missing_prices = self.REQUIRED_PRICING_KEYS.difference(self.pricing)
         if missing_prices:
             raise ValueError(f"ModelProfile.pricing missing key(s): {', '.join(sorted(missing_prices))}")
@@ -124,6 +144,9 @@ class ModelProfile:
         return cls(
             model_name=str(label),
             provider=str(data.get("provider", "vertexai")),
+            resolution_mode=str(data.get("resolution_mode", "immutable")),
+            resolution_evidence_hash=str(data.get("resolution_evidence_hash", "")),
+            resolution_resolved_at=str(data.get("resolution_resolved_at", "")),
             location=str(data.get("location", "")),
             resource_id=str(data.get("resource_id", "")),
             resource_revision=str(data.get("resource_revision") or data.get("endpoint_id") or ""),
@@ -145,6 +168,9 @@ class ModelProfile:
             "logical_label": self.model_name,
             "model_name": self.model_name,
             "provider": self.provider,
+            "resolution_mode": self.resolution_mode,
+            "resolution_evidence_hash": self.resolution_evidence_hash,
+            "resolution_resolved_at": self.resolution_resolved_at,
             "resource_id": self.resource_id,
             "resource_revision": self.resource_revision,
             "location": self.location,
@@ -161,6 +187,9 @@ class ModelProfile:
         data = {
             "logical_label": self.model_name,
             "provider": self.provider,
+            "resolution_mode": self.resolution_mode,
+            "resolution_evidence_hash": self.resolution_evidence_hash,
+            "resolution_resolved_at": self.resolution_resolved_at,
             "resource_id": self.resource_id,
             "resource_revision": self.resource_revision,
             "location": self.location,

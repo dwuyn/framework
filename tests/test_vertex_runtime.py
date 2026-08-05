@@ -57,6 +57,31 @@ def test_resolver_rejects_alias_and_fake_resource() -> None:
     metadata["resource_revision"] = "latest"
     with pytest.raises(VertexContractError, match="not immutable"):
         ModelResolver().resolve("gemini-3.6-flash", metadata)
+
+
+def test_resolver_allows_explicit_gemini_provider_alias() -> None:
+    metadata = _metadata("gemini-3.6-flash")
+    metadata.update({
+        "resource_revision": "default",
+        "resolution_mode": "provider_alias",
+        "resolution_evidence_hash": "a" * 64,
+        "resolution_resolved_at": "2026-08-05T00:00:00Z",
+    })
+    resolved = ModelResolver().resolve("gemini-3.6-flash", metadata)
+    assert resolved.resolution_mode == "provider_alias"
+    profile = resolved.to_model_profile(
+        {"input_per_million": 1.0, "cached_input_per_million": 0.5,
+         "output_per_million": 2.0, "thinking_per_million": 2.0},
+        pricing_effective_at="2026-08-05T00:00:00Z",
+    )
+    assert profile.resolution_mode == "provider_alias"
+
+
+def test_resolver_rejects_alias_without_explicit_exception() -> None:
+    metadata = _metadata("gemini-3.6-flash")
+    metadata["resource_revision"] = "default"
+    with pytest.raises(VertexContractError, match="provider_alias"):
+        ModelResolver().resolve("gemini-3.6-flash", metadata)
     metadata["resource_revision"] = "v20260805"
     metadata["resource_id"] = "gemini-3.6-flash"
     with pytest.raises(VertexContractError, match="full Vertex resource"):

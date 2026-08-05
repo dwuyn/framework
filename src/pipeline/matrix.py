@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from src.pipeline.vertex_runtime import VertexContractError, validate_resolution_fields
+
 
 @dataclass(frozen=True)
 class MatrixCell:
@@ -20,6 +22,9 @@ class MatrixCell:
     model_label: str
     model_resource_id: str
     model_revision: str
+    model_resolution_mode: str
+    model_resolution_evidence_hash: str
+    model_resolution_resolved_at: str
     dataset_lock_hash: str
     policy_lock_hash: str
     evaluator_commit: str
@@ -73,6 +78,16 @@ def generate_matrix(
                 raise ValueError("matrix models require resolved resource IDs and revisions")
             if "latest" in str(item.get("resource_revision", "")).lower():
                 raise ValueError("matrix model revisions cannot use latest")
+            try:
+                validate_resolution_fields(
+                    str(item.get("logical_label", "")),
+                    str(item.get("resource_revision", "")),
+                    str(item.get("resolution_mode", "immutable")),
+                    str(item.get("resolution_evidence_hash", "")),
+                    str(item.get("resolution_resolved_at", "")),
+                )
+            except VertexContractError as exc:
+                raise ValueError(str(exc)) from exc
 
     cells: list[MatrixCell] = []
 
@@ -85,6 +100,9 @@ def generate_matrix(
             "model_label": str(model["logical_label"]),
             "model_resource_id": str(model["resource_id"]),
             "model_revision": str(model["resource_revision"]),
+            "model_resolution_mode": str(model.get("resolution_mode", "immutable")),
+            "model_resolution_evidence_hash": str(model.get("resolution_evidence_hash", "")),
+            "model_resolution_resolved_at": str(model.get("resolution_resolved_at", "")),
             "dataset_lock_hash": dataset_lock_hash, "policy_lock_hash": policy_lock_hash,
             "evaluator_commit": evaluator_commit, "budget_tier": budget, "track": track,
             "condition": condition, "repetition": repetition,
@@ -93,6 +111,9 @@ def generate_matrix(
             case_id=case_id, framework=identity["framework"], framework_commit=identity["framework_commit"],
             framework_image_digest=identity["framework_image_digest"], model_label=identity["model_label"],
             model_resource_id=identity["model_resource_id"], model_revision=identity["model_revision"],
+            model_resolution_mode=identity["model_resolution_mode"],
+            model_resolution_evidence_hash=identity["model_resolution_evidence_hash"],
+            model_resolution_resolved_at=identity["model_resolution_resolved_at"],
             dataset_lock_hash=dataset_lock_hash, policy_lock_hash=policy_lock_hash,
             evaluator_commit=evaluator_commit, budget_tier=budget, track=track, condition=condition,
             repetition=repetition, run_id=stable_run_id(identity),

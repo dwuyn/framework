@@ -34,7 +34,7 @@ LOCKED_MODEL_INVOCATIONS: dict[str, dict[str, str]] = {
     },
 }
 
-_NON_PINNED_REVISIONS = {"", "latest", "default", "unknown", "benchmark-pinned"}
+_NON_PINNED_REVISIONS = {"", "latest", "unknown", "benchmark-pinned"}
 
 
 class VertexContractError(ValueError):
@@ -44,6 +44,35 @@ class VertexContractError(ValueError):
 def _canonical_hash(value: Mapping[str, Any]) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def validate_resolution_fields(
+    logical_label: str,
+    resource_revision: str,
+    resolution_mode: str = "immutable",
+    resolution_evidence_hash: str = "",
+    resolution_resolved_at: str = "",
+) -> None:
+    """Validate resolution identity on profiles, matrix rows and evidence."""
+    if resolution_mode not in {"immutable", "provider_alias"}:
+        raise VertexContractError("resolution_mode must be immutable or provider_alias")
+    revision = resource_revision.lower()
+    if revision in _NON_PINNED_REVISIONS:
+        raise VertexContractError("model revision is not immutable")
+    if revision != "default":
+        if resolution_mode == "provider_alias":
+            raise VertexContractError("provider_alias requires resource_revision=default")
+        return
+    if logical_label not in {"gemini-3.5-flash", "gemini-3.6-flash"}:
+        raise VertexContractError("default alias is allowed only for locked Gemini models")
+    if resolution_mode != "provider_alias":
+        raise VertexContractError("default model revision requires explicit provider_alias mode")
+    if len(resolution_evidence_hash) != 64 or any(
+        char not in "0123456789abcdef" for char in resolution_evidence_hash.lower()
+    ):
+        raise VertexContractError("provider_alias requires a resolution evidence SHA-256")
+    if not resolution_resolved_at.strip():
+        raise VertexContractError("provider_alias requires resolution_resolved_at")
 
 
 @dataclass(frozen=True)
@@ -111,6 +140,9 @@ class ResolvedModel:
     location: str
     api_family: str
     metadata_hash: str
+    resolution_mode: str
+    resolution_evidence_hash: str
+    resolution_resolved_at: str
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -121,6 +153,9 @@ class ResolvedModel:
             "location": self.location,
             "api_family": self.api_family,
             "metadata_hash": self.metadata_hash,
+            "resolution_mode": self.resolution_mode,
+            "resolution_evidence_hash": self.resolution_evidence_hash,
+            "resolution_resolved_at": self.resolution_resolved_at,
         }
 
     def to_model_profile(self, pricing: Mapping[str, float], *, pricing_effective_at: str) -> ModelProfile:
@@ -134,6 +169,9 @@ class ResolvedModel:
                 "location": self.location,
                 "resource_id": self.resource_id,
                 "resource_revision": self.resource_revision,
+                "resolution_mode": self.resolution_mode,
+                "resolution_evidence_hash": self.resolution_evidence_hash,
+                "resolution_resolved_at": self.resolution_resolved_at,
                 "pricing": dict(pricing),
                 "pricing_effective_at": pricing_effective_at,
                 "usage_semantics": {
@@ -159,6 +197,9 @@ class ModelResolver:
         revision = str(metadata.get("resource_revision") or metadata.get("version") or "")
         location = str(metadata.get("location") or "")
         api_family = str(metadata.get("api_family") or "")
+        resolution_mode = str(metadata.get("resolution_mode") or "immutable")
+        resolution_evidence_hash = str(metadata.get("resolution_evidence_hash") or "")
+        resolution_resolved_at = str(metadata.get("resolution_resolved_at") or "")
         missing = [
             name for name, value in (
                 ("model_id", model_id),
@@ -182,6 +223,21 @@ class ModelResolver:
             )
         if revision.lower() in _NON_PINNED_REVISIONS:
             raise VertexContractError(f"model revision for {logical_label} is not immutable")
+        if resolution_mode not in {"immutable", "provider_alias"}:
+            raise VertexContractError("resolution_mode must be immutable or provider_alias")
+        if revision.lower() == "default":
+            if logical_label not in {"gemini-3.5-flash", "gemini-3.6-flash"}:
+                raise VertexContractError("default alias is allowed only for locked Gemini models")
+            if resolution_mode != "provider_alias":
+                raise VertexContractError("default model revision requires explicit provider_alias mode")
+            if len(resolution_evidence_hash) != 64 or any(
+                char not in "0123456789abcdef" for char in resolution_evidence_hash.lower()
+            ):
+                raise VertexContractError("provider_alias requires a resolution evidence SHA-256")
+            if not resolution_resolved_at.strip():
+                raise VertexContractError("provider_alias requires resolution_resolved_at")
+        elif resolution_mode == "provider_alias":
+            raise VertexContractError("provider_alias requires resource_revision=default")
         if resource_id in {logical_label, model_id} or not resource_id.startswith("projects/"):
             raise VertexContractError(f"model resource_id for {logical_label} is not a full Vertex resource")
         if api_family != expected["api_family"]:
@@ -202,6 +258,9 @@ class ModelResolver:
             location=location,
             api_family=api_family,
             metadata_hash=metadata_hash,
+            resolution_mode=resolution_mode,
+            resolution_evidence_hash=resolution_evidence_hash,
+            resolution_resolved_at=resolution_resolved_at,
         )
 
     def resolve_all(self, inventory: Mapping[str, Mapping[str, Any]]) -> list[ResolvedModel]:

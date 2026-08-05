@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from src.pipeline.vertex_runtime import VertexContractError, validate_resolution_fields
+
 SCHEMA_VERSION = "2.0.0"
 BASE_CASE_COUNT = 94
 ROBUSTNESS_COUNT = 9
@@ -161,6 +163,16 @@ def validate_smoke_evidence(
             _passed(record, f"Vertex canary {record.get('model_label', '')}", artifact_root=artifact_root)
             if not str(record.get("resource_id", "")).strip() or not str(record.get("resource_revision", "")).strip():
                 raise ValueError("Vertex canary requires a pinned resource_id and resource_revision")
+            try:
+                validate_resolution_fields(
+                    str(record.get("model_label", "")),
+                    str(record.get("resource_revision", "")),
+                    str(record.get("resolution_mode", "immutable")),
+                    str(record.get("resolution_evidence_hash", "")),
+                    str(record.get("resolution_resolved_at", "")),
+                )
+            except VertexContractError as exc:
+                raise ValueError(str(exc)) from exc
         smoke_records = _records(evidence["framework_model_smokes"], "framework-model smoke", FRAMEWORK_MODEL_SMOKE_COUNT)
         expected_pairs = {(framework, model) for framework in FRAMEWORKS for model in expected_models}
         runtime_pairs: set[tuple[str, str]] = set()
@@ -259,6 +271,16 @@ def validate_smoke_evidence(
         _passed(record, f"Vertex canary {record.get('model_label', '')}", artifact_root=artifact_root)
         if not str(record.get("resource_id", "")).strip() or not str(record.get("resource_revision", "")).strip():
             raise ValueError("Vertex canary requires a pinned resource_id and resource_revision")
+        try:
+            validate_resolution_fields(
+                str(record.get("model_label", "")),
+                str(record.get("resource_revision", "")),
+                str(record.get("resolution_mode", "immutable")),
+                str(record.get("resolution_evidence_hash", "")),
+                str(record.get("resolution_resolved_at", "")),
+            )
+        except VertexContractError as exc:
+            raise ValueError(str(exc)) from exc
 
     smoke_records = _records(smokes, "framework-model smoke", FRAMEWORK_MODEL_SMOKE_COUNT)
     expected_pairs = {(framework, model) for framework in FRAMEWORKS for model in expected_models}

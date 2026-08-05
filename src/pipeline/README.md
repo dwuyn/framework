@@ -26,6 +26,12 @@ available only as the frozen variant 1 baseline under the
 | `benchmark.py`               | Benchmark manifests, metrics-from-events, reporting                  |
 | `vertex_runtime.py`          | Pinned model identity, pricing snapshot, and fakeable Vertex transports |
 
+Gemini 3.5/3.6 currently resolve through Google's `default` publisher alias.
+Profiles may use `resolution_mode=provider_alias` only with a resolution
+evidence hash and timestamp; Gemma MaaS remains revision-pinned. Alias mode is
+explicitly recorded in every profile/run identity and does not provide the
+same reproducibility guarantee as an immutable model revision.
+
 ## Run modes
 
 * **live** – real HTTP / filesystem reads; raw responses preserved.
