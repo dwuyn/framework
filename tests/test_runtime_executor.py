@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from src.pipeline.framework_adapter import BudgetTier, ModelProfile, RunArtifact
 from src.pipeline.readiness_evidence import validate_smoke_evidence
 from src.pipeline.runtime_executor import RuntimeCellResult, execute_runtime_plan
@@ -32,3 +34,7 @@ def test_fake_executor_produces_all_runtime_evidence(tmp_path: Path) -> None:
         return RuntimeCellResult(artifact.to_dict(), ledger, proof, {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "usd": .01}, {"billing_status": "known", "cost_usd": .01}, {"status": "passed"}, clean, "known", "passed")
     evidence = execute_runtime_plan(artifact_root=tmp_path, plan=plan, profiles=profiles, training_protocol_hash="1" * 64, baseline_lock_hash="b" * 64, pricing_snapshot_hash="c" * 64, approval_hash="d" * 64, dataset_evidence_hash="e" * 64, framework_commit="b" * 40, evaluator_commit="c" * 40, cell_executor=execute, cleanup=cleanup)
     validate_smoke_evidence(json.loads(evidence.read_text()), base_case_ids=[], model_labels=[p.logical_label for p in profiles], mode="runtime-smoke", artifact_root=tmp_path)
+    proof = next((tmp_path / "runs").rglob("proof.json"))
+    proof.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="does not match artifact contents"):
+        validate_smoke_evidence(json.loads(evidence.read_text()), base_case_ids=[], model_labels=[p.logical_label for p in profiles], mode="runtime-smoke", artifact_root=tmp_path)

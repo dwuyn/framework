@@ -115,6 +115,7 @@ def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str 
         "model_resolution_lock_hash", "evaluator_hash", "oracle_hash", "image_digest",
         "max_input_tokens", "max_output_tokens", "retry_policy", "artifact_path",
         "artifact_sha256", "artifact_type", "event_ledger_path", "event_ledger_sha256",
+        "proof_path", "proof_sha256",
         "usage_path", "usage_sha256", "cost_path", "cost_sha256", "evaluator_path",
         "evaluator_sha256", "cleanup_path", "cleanup_sha256", "billing_status",
         "oracle_status",
@@ -142,6 +143,7 @@ def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str 
     root = Path(artifact_root).resolve()
     paths = {
         "event_ledger": (record["event_ledger_path"], record["event_ledger_sha256"]),
+        "proof": (record["proof_path"], record["proof_sha256"]),
         "usage": (record["usage_path"], record["usage_sha256"]),
         "cost": (record["cost_path"], record["cost_sha256"]),
         "evaluator": (record["evaluator_path"], record["evaluator_sha256"]),
@@ -154,6 +156,7 @@ def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str 
         cost = json.loads((root / _relative_artifact_path(record["cost_path"], name)).read_text(encoding="utf-8"))
         evaluator = json.loads((root / _relative_artifact_path(record["evaluator_path"], name)).read_text(encoding="utf-8"))
         cleanup = json.loads((root / _relative_artifact_path(record["cleanup_path"], name)).read_text(encoding="utf-8"))
+        artifact = json.loads((root / _relative_artifact_path(record["artifact_path"], name)).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"{name} runtime evidence contains invalid JSON") from exc
     if not isinstance(usage, Mapping) or not all(str(key) in usage for key in ("input_tokens", "output_tokens", "total_tokens", "usd")):
@@ -174,6 +177,20 @@ def _runtime_record(record: Mapping[str, Any], name: str, *, artifact_root: str 
     resources = cleanup.get("resources", {})
     if isinstance(resources, Mapping) and any(record.get("ids") for record in resources.values() if isinstance(record, Mapping)):
         raise ValueError(f"{name} cleanup left Docker resources")
+    try:
+        from src.pipeline.framework_adapter import RunArtifact
+        run_artifact = RunArtifact.from_dict(artifact)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} cannot load RunArtifact for trust binding") from exc
+    if run_artifact.event_ledger_hash != str(record["event_ledger_sha256"]):
+        raise ValueError(f"{name} RunArtifact ledger hash mismatch")
+    if run_artifact.proof_hash != str(record["proof_sha256"]):
+        raise ValueError(f"{name} RunArtifact proof hash mismatch")
+    if any(float(run_artifact.usage[key]) != float(usage["usd"] if key == "total_usd" else usage[key])
+           for key in ("input_tokens", "output_tokens", "total_tokens", "total_usd")):
+        raise ValueError(f"{name} RunArtifact usage mismatch")
+    if str(run_artifact.framework_identity.get("image_digest", "")) != str(record["image_digest"]):
+        raise ValueError(f"{name} RunArtifact framework image mismatch")
 
 
 def _validate_control(
