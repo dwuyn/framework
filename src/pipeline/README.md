@@ -24,6 +24,7 @@ available only as the frozen variant 1 baseline under the
 | `renderers.py`               | Structured argv-array renderers (no free-form shell)                 |
 | `runner.py`                  | Top-level pipeline runner                                            |
 | `benchmark.py`               | Benchmark manifests, metrics-from-events, reporting                  |
+| `vertex_runtime.py`          | Pinned model identity, pricing snapshot, and fakeable Vertex transports |
 
 ## Run modes
 
