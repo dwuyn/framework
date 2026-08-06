@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pytest
 
-from scripts.collect_modelgarden_metadata import _resource, _select
+from scripts.collect_modelgarden_metadata import _gemma_endpoint_snapshot, _resource, _select
 from src.pipeline.framework_adapter import ModelProfile
 from src.pipeline.runtime_readiness import build_canary_smoke_plan, worst_case_cost_usd
 
@@ -38,6 +41,21 @@ def test_publisher_template_becomes_global_project_resource() -> None:
         "projects/{project}/locations/{location}/publishers/google/models/gemini-3.5-flash",
         project="runtime-project", model_id="gemini-3.5-flash",
     ) == "projects/runtime-project/locations/global/publishers/google/models/gemini-3.5-flash"
+
+
+def test_gemma_endpoint_snapshot_uses_public_model_id(tmp_path) -> None:
+    document = tmp_path / "gemma.source"
+    document.write_text("official source", encoding="utf-8")
+    snapshot = tmp_path / "gemma.json"
+    snapshot.write_text(json.dumps({
+        "schema_version": "1.0.0",
+        "model_id": "gemma-4-26b-a4b-it-maas",
+        "endpoint_url": "https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi/chat/completions",
+        "source_url": "https://docs.cloud.google.com/example",
+        "retrieved_at": "2026-08-06T00:00:00Z",
+        "source_sha256": hashlib.sha256(document.read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+    assert _gemma_endpoint_snapshot(snapshot, document)["model_id"] == "gemma-4-26b-a4b-it-maas"
 
 
 def test_strict_reservation_uses_pricing_and_two_attempts() -> None:

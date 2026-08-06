@@ -60,7 +60,8 @@ def _gemma_endpoint_snapshot(path: Path, document: Path) -> dict[str, Any]:
     required = {"schema_version", "model_id", "endpoint_url", "source_url", "retrieved_at", "source_sha256"}
     if not isinstance(value, dict) or set(value) != required:
         raise RuntimeError("Gemma MaaS endpoint snapshot fields are invalid")
-    if value["model_id"] != LOCKED_MODEL_INVOCATIONS["gemma-4-26b-a4b-it"]["model_id"]:
+    expected_model_id = LOCKED_MODEL_INVOCATIONS["gemma-4-26b-a4b-it"]["model_id"].rsplit("/", 1)[-1]
+    if value["model_id"] != expected_model_id:
         raise RuntimeError("Gemma MaaS endpoint snapshot model ID mismatch")
     if not str(value["endpoint_url"]).startswith("https://") or "googleapis.com" not in str(value["endpoint_url"]):
         raise RuntimeError("Gemma MaaS endpoint snapshot is not a verified Google endpoint")
