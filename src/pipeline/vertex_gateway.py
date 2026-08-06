@@ -193,9 +193,8 @@ def serve_gateway_unix(gateway: VertexGateway, *, socket_path: str) -> socketser
     if os.path.lexists(path):
         raise GatewayError("gateway Unix socket path must be new and not a symlink")
     parent = os.path.dirname(path)
-    if os.path.lexists(parent):
-        raise GatewayError("gateway Unix socket parent directory must be new")
-    os.mkdir(parent, 0o700)
+    if not os.path.isdir(parent) or os.path.islink(parent):
+        raise GatewayError("gateway Unix socket parent directory must be a real directory")
     stat = os.stat(parent)
     if stat.st_uid != os.geteuid() or stat.st_mode & 0o777 != 0o700:
         raise GatewayError("gateway Unix socket parent directory is not owner-only")

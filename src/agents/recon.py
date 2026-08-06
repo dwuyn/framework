@@ -108,10 +108,10 @@ def _structured_recon_context(state: PentestState) -> str:
     return "\n\n".join(parts)
 
 
-def _prepare_invocation_messages(state: PentestState, messages: list) -> list:
+def _prepare_invocation_messages(state: PentestState, messages: list[Any]) -> list[Any]:
     system = next((m for m in messages if isinstance(m, SystemMessage)), None)
     non_system = [m for m in messages if not isinstance(m, SystemMessage)]
-    prepared = [system] if system else []
+    prepared: list[Any] = [system] if system else []
     prepared.append(HumanMessage(content=_structured_recon_context(state)))
     prepared.extend(non_system[-6:])
     return prepared

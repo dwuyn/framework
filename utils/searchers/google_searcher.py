@@ -15,6 +15,7 @@ import time
 from readability import Document
 from inscriptis import get_text
 import dotenv
+from typing import Any
 from utils.model_manager import get_model
 
 dotenv.load_dotenv()
@@ -160,7 +161,7 @@ class GoogleSearcher:
         search_keyword = keyword 
         # domain_filter = ["github", "suibian"]
         # + " exploit"
-        search_results = []
+        search_results: dict[str, Any] = {}
         try:
             time.sleep(5)
             search_results = google_search(search_keyword, os.environ.get("GOOGLE_API_KEY"), os.environ.get("GOOGLE_CSE_ID"))

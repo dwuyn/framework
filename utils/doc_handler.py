@@ -18,6 +18,7 @@ import dotenv
 from utils.vote import vote, get_final_res
 from functools import wraps
 import multiprocessing
+from typing import Any
 
 default_vul_type_conf = {
     "code_code_execution": "4",
@@ -96,7 +97,7 @@ class DocHandler:
         Returns vector, summary, and keyword indices keyed by services
     """
     query_eng = None
-    summary_dict = {}
+    summary_dict: dict[str, Any] = {}
 
     def __init__(self) -> None:
 
@@ -116,13 +117,13 @@ class DocHandler:
                 "GitHub": f"{output_dir}/GitHub"
             }
         
-        result = {}
+        result: dict[str, dict[str, Any]] = {}
         result["code"] = {}
         result["doc"] = {}
-        conf = {}
+        conf: dict[str, dict[str, Any]] = {}
         conf["code"] = {}
         conf["doc"] = {}
-        otpt = {}
+        otpt: dict[str, dict[str, Any]] = {}
         otpt["code"] = {}
         otpt["doc"] = {}
 
@@ -614,7 +615,7 @@ class DocHandler:
         list_subfolders_with_paths = [f.path for f in os.scandir(topic_dir) if f.is_dir()]
         counter = 0
         repo_index_nodes = []
-        keyword_index_dir_by_keyword = os.path.join(os.getenv("INDEX_STORAGE_DIR"),
+        keyword_index_dir_by_keyword = os.path.join(os.getenv("INDEX_STORAGE_DIR", ""),
                                                     "keyword_repos", keyword)
         repos_keyword_index = None
         

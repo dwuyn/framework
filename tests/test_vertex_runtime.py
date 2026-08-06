@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from src.pipeline.framework_adapter import ModelProfile
@@ -11,6 +13,7 @@ from src.pipeline.vertex_gateway import (
     VertexGateway,
     build_host_gateway,
     serve_gateway,
+    serve_gateway_unix,
 )
 from src.pipeline.vertex_runtime import (
     GeminiExecutor,
@@ -354,3 +357,17 @@ def test_host_gateway_uses_pinned_gemma_endpoint() -> None:
         ("gemini", "project", "global"),
         ("gemma", "https://global-aiplatform.googleapis.com/v1/projects/p"),
     ]
+
+
+def test_unix_gateway_binds_topology_owned_parent(tmp_path) -> None:
+    parent = tmp_path / "runtime-sockets" / "topology"
+    parent.mkdir(parents=True, mode=0o700)
+    os.chmod(parent, 0o700)
+    socket_path = parent / "gateway.sock"
+    server = serve_gateway_unix(object(), socket_path=str(socket_path))  # type: ignore[arg-type]
+    try:
+        assert socket_path.is_socket()
+        assert socket_path.stat().st_mode & 0o777 == 0o600
+    finally:
+        server.server_close()
+        socket_path.unlink()

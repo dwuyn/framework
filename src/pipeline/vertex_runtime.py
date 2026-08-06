@@ -124,6 +124,8 @@ class PricingSnapshot:
     unit: str = "USD/token"
     billing_semantics: str = "reasoning_billed_once_with_output"
     thinking_enabled: Mapping[str, bool] | None = None
+    source_sha256: str = ""
+    verified_skus: Mapping[str, Mapping[str, Any]] | None = None
 
     REQUIRED_KEYS = frozenset({
         "input_per_million",
@@ -139,6 +141,11 @@ class PricingSnapshot:
     def __post_init__(self) -> None:
         if not self.source_url.strip() or not self.retrieved_at.strip() or not self.effective_at.strip():
             raise VertexContractError("pricing snapshot requires source and timestamps")
+        if self.source_sha256 and (
+            len(self.source_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.source_sha256)
+        ):
+            raise VertexContractError("pricing snapshot source_sha256 is invalid")
         if self.region != "global" or self.package != "Standard" or self.unit != "USD/token":
             raise VertexContractError("pricing snapshot must be global Standard USD/token")
         if self.billing_semantics != "reasoning_billed_once_with_output":
@@ -202,12 +209,15 @@ class PricingSnapshot:
             billing_semantics=str(value.get("billing_semantics", "reasoning_billed_once_with_output")),
             thinking_enabled={str(label): bool(enabled) for label, enabled in dict(thinking).items()}
             if isinstance(thinking, Mapping) else None,
+            source_sha256=str(value.get("source_sha256", "")),
+            verified_skus={str(label): dict(record) for label, record in dict(value.get("verified_skus") or {}).items()},
         )
 
     def to_dict(self, *, include_hash: bool = True) -> dict[str, Any]:
         result: dict[str, Any] = {
             "schema_version": "1.0.0",
             "source_url": self.source_url,
+            "source_sha256": self.source_sha256,
             "retrieved_at": self.retrieved_at,
             "effective_at": self.effective_at,
             "region": self.region,
@@ -225,6 +235,7 @@ class PricingSnapshot:
                 }
                 for label in self.model_prices
             },
+            "verified_skus": {label: dict(record) for label, record in (self.verified_skus or {}).items()},
         }
         if include_hash:
             result["snapshot_hash"] = self.snapshot_hash

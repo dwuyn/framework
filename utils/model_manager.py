@@ -13,7 +13,7 @@ class ModelManager:
                 os.path.dirname(os.path.dirname(__file__)), 'configs', 'config.yaml')
         self.config_path = config_path
         self.config = self._load_config()
-        self.initialized_models = {}
+        self.initialized_models: dict[str, Any] = {}
 
     def _load_config(self) -> Dict[str, Any]:
         try:

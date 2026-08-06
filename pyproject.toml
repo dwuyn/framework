@@ -7,7 +7,7 @@ authors = [
 ]
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11,<3.13"
 
 dependencies = [
     # ── Orchestration ────────────────────────────────────────────────────────
@@ -73,6 +73,30 @@ ignore = ["E501"]
 [tool.poetry]
 package-mode = false
 
+[tool.mypy]
+python_version = "3.12"
+
+[[tool.mypy.overrides]]
+module = [
+    "deep_translator.*",
+    "inscriptis.*",
+    "langdetect.*",
+    "llama_index.*",
+    "msgpack.*",
+    "readability.*",
+    "scipy.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "langchain_deepseek.*",
+    "langchain_google_genai.*",
+    "langchain_ollama.*",
+    "langchain_openai.*",
+]
+ignore_missing_imports = true
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
@@ -91,4 +115,7 @@ dev = [
     "readability-lxml (==0.8.1)",
     "lxml-html-clean (>=0.4,<1)",
     "inscriptis (==2.5.0)",
+    "types-pyyaml (>=6.0.12.20260724,<7.0.0.0)",
+    "types-requests (>=2.33.0.20260712,<3.0.0.0)",
+    "types-tqdm (>=4.70.0.20260805,<5.0.0.0)",
 ]

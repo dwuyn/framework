@@ -213,9 +213,10 @@ class GithubSearcher:
                           per_page: int = 30,
                           sort_method: str = '',
                           url=None,
-                          keyword: str = '', size_limits: int = [0, 1000000],
+                          keyword: str = '', size_limits: list[int] | None = None,
                           loose_mode: bool = False ):
         timestamp = int(datetime.datetime.now().timestamp())
+        size_limits = size_limits or [0, 1000000]
         # print("called!")
         if self.search_limit_remaining == 0 and timestamp < self.search_limit_reset + 3:
             time.sleep(self.search_limit_reset - timestamp + 5)
@@ -255,8 +256,7 @@ class GithubSearcher:
         # print(resp.text)
 
         if 'link' in resp.headers.keys():
-            links = resp.headers['link']
-            links = links.split(',')
+            links = resp.headers['link'].split(',')
             for link in links:
                 parts = link.split(';', 1)
                 if len(parts) < 2:
@@ -445,7 +445,7 @@ class GithubSearcher:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
             try:
-                for item in code_result['items']:
+                for item in (code_result or {}).get('items', []):
                     file_name = item['name']
                     file_path = item['path']
                     file_url = self.convert_to_raw(item['html_url'])  # use html_url to download

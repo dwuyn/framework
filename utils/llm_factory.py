@@ -1,13 +1,12 @@
 import logging
 from typing import Dict, Any
 from abc import ABC, abstractmethod
-from langchain_core.language_models import BaseLLM
 
 logger = logging.getLogger(__name__)
 
 class BaseLLMProvider(ABC):
     @abstractmethod
-    def create_llm(self, config: Dict[str, Any]) -> BaseLLM:
+    def create_llm(self, config: Dict[str, Any]) -> Any:
         pass
 
     @abstractmethod
@@ -18,7 +17,7 @@ class GeminiProvider(BaseLLMProvider):
     def validate_config(self, config: Dict[str, Any]) -> bool:
         return 'api_key' in config and 'model' in config
 
-    def create_llm(self, config: Dict[str, Any]) -> BaseLLM:
+    def create_llm(self, config: Dict[str, Any]) -> Any:
         from langchain_google_genai import ChatGoogleGenerativeAI
         return ChatGoogleGenerativeAI(
             api_key=config['api_key'],
@@ -34,7 +33,7 @@ class VertexAIProvider(BaseLLMProvider):
     def validate_config(self, config: Dict[str, Any]) -> bool:
         return 'model' in config
 
-    def create_llm(self, config: Dict[str, Any]) -> BaseLLM:
+    def create_llm(self, config: Dict[str, Any]) -> Any:
         from langchain_google_vertexai import ChatVertexAI
         return ChatVertexAI(
             model_name=config['model'],
@@ -50,7 +49,7 @@ class OpenAIProvider(BaseLLMProvider):
     def validate_config(self, config: Dict[str, Any]) -> bool:
         return 'api_key' in config and 'model' in config
 
-    def create_llm(self, config: Dict[str, Any]) -> BaseLLM:
+    def create_llm(self, config: Dict[str, Any]) -> Any:
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             api_key=config['api_key'],
@@ -67,7 +66,7 @@ class DeepSeekProvider(BaseLLMProvider):
     def validate_config(self, config: Dict[str, Any]) -> bool:
         return 'api_key' in config and 'model' in config
 
-    def create_llm(self, config: Dict[str, Any]) -> BaseLLM:
+    def create_llm(self, config: Dict[str, Any]) -> Any:
         from langchain_deepseek import ChatDeepSeek
         return ChatDeepSeek(
             api_key=config['api_key'],
@@ -82,7 +81,7 @@ class OllamaProvider(BaseLLMProvider):
     def validate_config(self, config: Dict[str, Any]) -> bool:
         return 'model' in config and 'base_url' in config
 
-    def create_llm(self, config: Dict[str, Any]) -> BaseLLM:
+    def create_llm(self, config: Dict[str, Any]) -> Any:
         from langchain_ollama import ChatOllama
         timeout = config.get('timeout', 300)
         client_kwargs = dict(config.get('client_kwargs') or {})
@@ -114,7 +113,7 @@ class LLMFactory:
     }
 
     @classmethod
-    def create_llm(cls, provider: str, config: Dict[str, Any]) -> BaseLLM:
+    def create_llm(cls, provider: str, config: Dict[str, Any]) -> Any:
         if provider not in cls._providers:
             raise ValueError(f"Unsupported provider: {provider}")
         return cls._providers[provider].create_llm(config)
@@ -124,7 +123,7 @@ class LLMManager:
         self._llms = {}
         self._configs = {}
 
-    def create_llm(self, name: str, provider: str, config: Dict[str, Any]) -> BaseLLM:
+    def create_llm(self, name: str, provider: str, config: Dict[str, Any]) -> Any:
         llm = LLMFactory.create_llm(provider, config)
         self._llms[name] = llm
         self._configs[name] = {'provider': provider, 'config': config}
@@ -135,7 +134,7 @@ class LLMManager:
 
 llm_manager = LLMManager()
 
-def create_llm_from_config(config: Dict[str, Any]) -> BaseLLM:
+def create_llm_from_config(config: Dict[str, Any]) -> Any:
     provider = config.get('provider', 'openai')
     name = config.get('name', 'default')
     clean_config = {k: v for k, v in config.items() if k not in ['provider', 'name']}
