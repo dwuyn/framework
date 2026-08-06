@@ -32,14 +32,17 @@ def _bundle(root: Path, kind: str) -> Path:
     bundle = root / f"{kind}-bundle"
     entrypoint = bundle / "bin/evaluate"
     entrypoint.parent.mkdir(parents=True)
-    entrypoint.write_text(
+    script = (
         "#!/bin/sh\n"
         "while [ \"$#\" -gt 0 ]; do\n"
-        "  if [ \"$1\" = \"--output\" ]; then output=\"$2\"; shift 2; else shift; fi\n"
+        "  if [ \"$1\" = \"--output\" ]; then output=\"$2\"; shift 2; "
+        "elif [ \"$1\" = \"--run-dir\" ]; then run_dir=\"$2\"; shift 2; else shift; fi\n"
         "done\n"
-        f"printf '{{\"kind\":\"{kind}\",\"status\":\"passed\"}}' > \"$output\"\n",
-        encoding="utf-8",
     )
+    script += "set -- \"$run_dir\"/../../runtime/*-invocation-ledger.json; test -f \"$1\"\n" if kind == "evaluator" else ""
+    script += "test -f \"$run_dir/evaluator.json\"\n" if kind == "oracle" else ""
+    script += f"printf '{{\"kind\":\"{kind}\",\"status\":\"passed\"}}' > \"$output\"\n"
+    entrypoint.write_text(script, encoding="utf-8")
     entrypoint.chmod(0o755)
     manifest = {
         "schema_version": "1.0.0", "kind": kind, "source_commit": "d" * 40,
@@ -107,7 +110,9 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
     signature.write_bytes(b"signature")
 
     def digest(value: object) -> str:
-        return hashlib.sha256((json.dumps(value, indent=2, sort_keys=True) + "\n").encode()).hexdigest()
+        return hashlib.sha256(
+            json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
 
     def execute(cell, run_dir, _labels, _phase, _topology, ledger: InvocationLedger):
         observed = {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
@@ -138,3 +143,7 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
     output = runner.run()
     assert output.is_file()
     assert runner.topology.phases == ["canary", "smoke"]
+    assert len(list((tmp_path / "runs").rglob("evaluator.json"))) == 18
+    assert len(list((tmp_path / "runs").rglob("oracle.json"))) == 18
+    assert (tmp_path / "runtime" / "canary-invocation-ledger.json").is_file()
+    assert (tmp_path / "runtime" / "smoke-invocation-ledger.json").is_file()

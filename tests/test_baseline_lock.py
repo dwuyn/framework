@@ -15,6 +15,7 @@ def _git_repo(tmp_path):
     (root / "common.py").write_text("common\n")
     (root / "framework.py").write_text("framework\n")
     (root / "wrapper.py").write_text("wrapper\n")
+    (root / "runtime.py").write_text("runtime\n")
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(
@@ -38,7 +39,8 @@ def _specs(root):
                 "common": str(root / "common.py"),
                 "framework": str(root / "framework.py"),
                 "wrapper": str(root / "wrapper.py"),
-                "contract_version": "adapter-2.1",
+                "runtime": str(root / "runtime.py"),
+                "contract_version": "adapter-2.2",
             },
         }
         for name in ("PentestAgent", "PentestGPT", "VulnBot", "HackSynth")
@@ -68,7 +70,7 @@ def test_git_tree_hash_ignores_ignored_cache_and_bundle_hash_is_complete(tmp_pat
 
 def test_adapter_bundle_hash_changes_with_contract_version(tmp_path):
     paths = {}
-    for role in ("common", "framework", "wrapper"):
+    for role in ("common", "framework", "wrapper", "runtime"):
         path = tmp_path / f"{role}.py"
         path.write_text(role)
         paths[role] = str(path)

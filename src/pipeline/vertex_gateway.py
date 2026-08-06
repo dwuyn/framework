@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Mapping, Sequence
 
 from src.pipeline.framework_adapter import ModelProfile
+from src.pipeline.runtime_ledger import InvocationLedger
 from src.pipeline.vertex_runtime import (
     GeminiExecutor,
     GemmaMaaSExecutor,
@@ -66,6 +67,7 @@ class VertexGateway:
         gemini: GeminiExecutor,
         gemma: GemmaMaaSExecutor,
         token_expires_at: str = "",
+        invocation_ledger: InvocationLedger | None = None,
     ) -> None:
         if not token:
             raise GatewayError("gateway token is required")
@@ -86,6 +88,7 @@ class VertexGateway:
                 raise GatewayError("gateway token expiry must include a timezone")
         self.gemini = gemini
         self.gemma = gemma
+        self.invocation_ledger = invocation_ledger
 
     def invoke(self, request: Mapping[str, Any], *, token: str) -> InvocationResult:
         if token != self.token:
@@ -101,13 +104,22 @@ class VertexGateway:
         if profile is None or profile.profile_hash != parsed.profile_hash:
             raise GatewayError("gateway request profile is not pinned")
         if profile.logical_label.startswith("gemini-"):
-            return self.gemini.invoke(profile, parsed.contents)
-        if not isinstance(parsed.contents, Sequence) or isinstance(parsed.contents, (str, bytes)):
-            raise GatewayError("Gemma gateway contents must be chat messages")
-        messages = [dict(item) for item in parsed.contents if isinstance(item, Mapping)]
-        if len(messages) != len(parsed.contents):
-            raise GatewayError("Gemma gateway messages must be objects")
-        return self.gemma.invoke(profile, messages)
+            result = self.gemini.invoke(profile, parsed.contents)
+        else:
+            if not isinstance(parsed.contents, Sequence) or isinstance(parsed.contents, (str, bytes)):
+                raise GatewayError("Gemma gateway contents must be chat messages")
+            messages = [dict(item) for item in parsed.contents if isinstance(item, Mapping)]
+            if len(messages) != len(parsed.contents):
+                raise GatewayError("Gemma gateway messages must be objects")
+            result = self.gemma.invoke(profile, messages)
+        if self.invocation_ledger is not None:
+            self.invocation_ledger.record(
+                run_id=parsed.run_id, model_label=parsed.model_label,
+                request=dict(request), response=result.to_dict(),
+                usage=result.usage.to_dict(), cost_usd=result.usage.usd,
+                billing_status="known",
+            )
+        return result
 
 
 def build_host_gateway(
@@ -115,6 +127,7 @@ def build_host_gateway(
     token_expires_at: str, project: str,
     gemini_client_factory: Callable[[str, str], Any],
     gemma_client_factory: Callable[[str], Any],
+    invocation_ledger: InvocationLedger | None = None,
 ) -> VertexGateway:
     """Build credential-owning transports from verified host-side metadata.
 
@@ -140,6 +153,7 @@ def build_host_gateway(
         token_expires_at=token_expires_at,
         gemini=GeminiExecutor(GoogleGenAITransport(gemini_client)),
         gemma=GemmaMaaSExecutor(OpenAICompatibleClientTransport(gemma_client)),
+        invocation_ledger=invocation_ledger,
     )
 
 
@@ -199,5 +213,8 @@ def serve_gateway_unix(gateway: VertexGateway, *, socket_path: str) -> socketser
     if stat.st_uid != os.geteuid() or stat.st_mode & 0o777 != 0o700:
         raise GatewayError("gateway Unix socket parent directory is not owner-only")
     server = _ThreadingUnixGatewayServer(path, gateway_handler(gateway))
+    # The coordinator owns the server and uses this explicit handle to persist
+    # host-observed usage.  Containers never receive the object or its ledger.
+    server.veriplanpt_gateway = gateway  # type: ignore[attr-defined]
     os.chmod(path, 0o600)
     return server

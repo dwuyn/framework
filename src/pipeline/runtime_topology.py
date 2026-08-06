@@ -16,6 +16,7 @@ from src.pipeline.runtime_contract import validate_gateway_relay_lock
 
 TOPOLOGY_SCHEMA = "1.0.0"
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+_IMAGE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class TopologyError(RuntimeError):
@@ -23,12 +24,19 @@ class TopologyError(RuntimeError):
 
 
 class DockerBackend(Protocol):
-    def run(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]: ...
+    def run(
+        self, args: Sequence[str], input_bytes: bytes | None = None,
+    ) -> subprocess.CompletedProcess[str]: ...
 
 
 class SubprocessDocker:
-    def run(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["docker", *args], capture_output=True, text=True, check=False)
+    def run(
+        self, args: Sequence[str], input_bytes: bytes | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["docker", *args], input=input_bytes.decode("utf-8") if input_bytes is not None else None,
+            capture_output=True, text=True, check=False,
+        )
 
 
 @dataclass
@@ -162,10 +170,13 @@ class TopologyLifecycle:
 
     def run_baseline(
         self, handle: TopologyHandle, *, run_id: str, image: str, command: Sequence[str],
-        environment: Mapping[str, str],
+        environment: Mapping[str, str], public_payload: bytes,
+        output_dir: str | Path,
     ) -> subprocess.CompletedProcess[str]:
         if handle.phase not in self._active or run_id not in handle.allowed_run_ids:
             raise TopologyError("baseline run is not bound to the active topology/run ID")
+        if not _IMAGE.fullmatch(image) or not command:
+            raise TopologyError("baseline image/command is not immutably pinned")
         required_runtime = {
             "VERIPLANPT_RUN_ID": run_id,
             "VERIPLANPT_PROVIDER_TOKEN": handle.phase_token,
@@ -187,10 +198,21 @@ class TopologyLifecycle:
         name = _safe(f"veriplanpt-{handle.phase}-{run_id}", "baseline container")
         labels = {**handle.labels, "veriplanpt.run_id": run_id}
         handle.baseline_containers.append(name)
-        return self.docker.run([
-            "run", "--name", name, "--network", handle.network_name,
+        output = Path(output_dir).resolve()
+        if not output.is_dir() or output.is_symlink():
+            raise TopologyError("baseline output directory must be a real directory")
+        env_args.extend(["--env", "VERIPLANPT_OUTPUT_DIR=/run/veriplanpt/output"])
+        args = [
+            "run", "--rm", "--name", name, "--network", handle.network_name,
+            "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
+            "--mount", f"type=bind,src={output},dst=/run/veriplanpt/output,rw",
             *(_label_args(labels)), *env_args, image, *command,
-        ])
+        ]
+        try:
+            return self.docker.run(args, input_bytes=public_payload)
+        except TypeError:
+            return self.docker.run(args)
 
     @staticmethod
     def runtime_environment(

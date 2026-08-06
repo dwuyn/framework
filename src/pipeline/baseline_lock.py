@@ -110,6 +110,12 @@ def _adapter_bundle(spec: Mapping[str, Any]) -> tuple[dict[str, str], str]:
             or spec.get("wrapper")
             or ""
         ),
+        "runtime": str(
+            bundle.get("runtime")
+            or spec.get("runtime_adapter_path")
+            or spec.get("runtime_adapter")
+            or ""
+        ),
     }
     missing = [role for role, value in paths.items() if not value]
     if missing:

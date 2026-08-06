@@ -17,8 +17,8 @@ from src.pipeline.runtime_readiness import write_runtime_smoke_evidence
 class RuntimeCellResult:
     """Evidence emitted by the real wrapper, evaluator, and Docker cleanup."""
     run_artifact: Mapping[str, Any]
-    event_ledger: Mapping[str, Any]
-    proof: Mapping[str, Any]
+    event_ledger: Any
+    proof: Any
     usage: Mapping[str, Any]
     cost: Mapping[str, Any]
     evaluator: Mapping[str, Any]
@@ -26,16 +26,22 @@ class RuntimeCellResult:
     billing_status: str
     oracle_status: str
     invocation_ledger: Mapping[str, Any] = field(default_factory=dict)
+    oracle: Mapping[str, Any] = field(default_factory=dict)
 
 
 CellExecutor = Callable[[Mapping[str, Any], Path], RuntimeCellResult]
 Cleanup = Callable[[str], Mapping[str, Any]]
 
 
-def _write(path: Path, value: Mapping[str, Any]) -> str:
+def _write(path: Path, value: Any) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _canonical_hash(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
@@ -85,7 +91,7 @@ def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
         validate_run_artifact(result.run_artifact, official=True, strict_runtime=production)
         if artifact.model_profile.profile_hash != profile.profile_hash or artifact.model_profile.resource_revision != profile.resource_revision:
             raise ValueError("RunArtifact profile or resource revision drift")
-        if artifact.event_ledger_hash != ledger_hash or artifact.proof_hash != proof_hash:
+        if artifact.event_ledger_hash != _canonical_hash(result.event_ledger) or artifact.proof_hash != _canonical_hash(result.proof):
             raise ValueError("RunArtifact ledger or proof hash does not match source evidence")
         if artifact.framework_identity.get("image_digest") != cell["image_digest"]:
             raise ValueError("RunArtifact framework image identity does not match cell")

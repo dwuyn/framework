@@ -31,9 +31,10 @@ ENV PATH="/opt/venv/bin:$PATH" \
     VERIPLANPT_RUN_DIR="/run/veriplanpt"
 RUN addgroup --gid 10001 baseline \
     && adduser --disabled-password --gecos "" --uid 10001 --gid 10001 baseline \
-    && mkdir -p /run/veriplanpt \
+    && mkdir -p /run/veriplanpt /runner \
+    && cp /opt/adapter/runtime_entrypoint.py /runner/run \
     && chown -R baseline:baseline /run/veriplanpt /opt/adapter /opt/veriplanpt \
-    && chmod 0555 /opt/adapter/entrypoint.sh
+    && chmod 0555 /opt/adapter/entrypoint.sh /runner/run
 USER baseline:baseline
 ENTRYPOINT ["/opt/adapter/entrypoint.sh"]
 CMD ["python", "main.py"]

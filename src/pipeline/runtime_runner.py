@@ -44,6 +44,11 @@ def _bundle_hash(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def _canonical_hash(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class RuntimeHalt(RuntimeError):
     """A runtime cell violated a production gate."""
 
@@ -61,7 +66,7 @@ class RuntimeRunner:
         dataset_evidence_hash: str = "", training_protocol_hash: str = "",
         pricing_snapshot_hash: str = "", approval_hash: str = "",
         topology: TopologyLifecycle | None = None,
-        gateway_factory: Callable[[Path, set[str], str, str], Any] | None = None,
+        gateway_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.root = Path(artifact_root).resolve()
         self.plan = dict(plan)
@@ -137,8 +142,8 @@ class RuntimeRunner:
         if artifact.run_context.get("gateway_relay_lock_hash") != self.relay_lock_hash:
             raise RuntimeHalt("runtime RunArtifact relay lock binding mismatch")
         observed = ledger.aggregate(str(cell["run_id"]))
-        if result.billing_status != "known" or result.oracle_status != "passed":
-            raise RuntimeHalt("billing unknown or oracle failure halted runtime")
+        if result.billing_status != "known":
+            raise RuntimeHalt("billing unknown halted runtime")
         if result.cleanup.get("success") is not True:
             raise RuntimeHalt("cell cleanup failed")
         resources = result.cleanup.get("resources", {})
@@ -146,18 +151,59 @@ class RuntimeRunner:
             item.get("ids") for item in resources.values() if isinstance(item, Mapping)
         ):
             raise RuntimeHalt("cell cleanup left managed Docker resources")
+        reported = result.usage
+        if reported and any(
+            float(reported.get(key, -1)) != float(observed[key])
+            for key in ("input_tokens", "output_tokens", "total_tokens", "usd")
+        ):
+            raise RuntimeHalt("runtime usage differs from observed gateway ledger")
+        artifact_usage = artifact.usage
+        if any(
+            float(artifact_usage.get(key, -1))
+            != float(observed["usd" if key == "total_usd" else key])
+            for key in ("input_tokens", "output_tokens", "total_tokens", "total_usd")
+        ):
+            raise RuntimeHalt("RunArtifact usage differs from observed gateway ledger")
+        if artifact.event_ledger_hash != _canonical_hash(result.event_ledger):
+            raise RuntimeHalt("RunArtifact event ledger hash differs from source evidence")
+        if artifact.proof_hash != _canonical_hash(result.proof):
+            raise RuntimeHalt("RunArtifact proof hash differs from source evidence")
+        normalized_cost = {"billing_status": "known", "cost_usd": observed["usd"]}
+        # The independent evaluator validates the host-observed invocation
+        # ledger.  Materialize the current phase ledger before invoking it;
+        # the file is extended atomically as later cells complete.
+        ledger_path = self.root / "runtime" / f"{phase}-invocation-ledger.json"
+        ledger.write(ledger_path)
+        # Evidence must exist before either independent verdict runs.  In
+        # particular, never accept an executor-supplied oracle status: that
+        # creates a self-verdict loop and permits an oracle pass before the
+        # evaluator has seen the source evidence.
+        source_paths = {
+            "run_artifact": run_dir / "run_artifact.json",
+            "event_ledger": run_dir / "event-ledger.json",
+            "proof": run_dir / "proof.json",
+            "usage": run_dir / "usage.json",
+            "cost": run_dir / "cost.json",
+            "cleanup": run_dir / "cleanup.json",
+        }
+        for name, value in (("run_artifact", result.run_artifact), ("event_ledger", result.event_ledger),
+                            ("proof", result.proof), ("usage", observed),
+                            ("cost", normalized_cost), ("cleanup", result.cleanup)):
+            source_paths[name].parent.mkdir(parents=True, exist_ok=True)
+            source_paths[name].write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         evaluator_verdict = self.bundle_executor(self.evaluator_bundle, run_dir, result.run_artifact)
-        oracle_verdict = self.bundle_executor(self.oracle_bundle, run_dir, result.run_artifact)
         if evaluator_verdict.get("status") != "passed" and evaluator_verdict.get("evaluator", {}).get("status") != "passed":
             raise RuntimeHalt("evaluator bundle failed")
+        evaluator_path = run_dir / "evaluator.json"
+        evaluator_path.write_text(json.dumps(dict(evaluator_verdict), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        oracle_verdict = self.bundle_executor(self.oracle_bundle, run_dir, result.run_artifact)
         if oracle_verdict.get("status") != "passed" and oracle_verdict.get("oracle", {}).get("status") != "passed":
             raise RuntimeHalt("oracle bundle failed")
-        reported = result.usage
-        if reported and any(float(reported.get(key, -1)) != float(observed[key]) for key in ("input_tokens", "output_tokens", "total_tokens", "usd")):
-            raise RuntimeHalt("RunArtifact usage differs from observed gateway ledger")
+        (run_dir / "oracle.json").write_text(json.dumps(dict(oracle_verdict), indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return replace(
-            result, usage=observed, cost={"billing_status": "known", "cost_usd": observed["usd"]},
+            result, usage=observed, cost=normalized_cost,
             evaluator=dict(evaluator_verdict.get("evaluator", evaluator_verdict)),
+            oracle=dict(oracle_verdict.get("oracle", oracle_verdict)), oracle_status="passed",
         )
 
     def _run_phase(
@@ -173,10 +219,19 @@ class RuntimeRunner:
         phase_token = secrets.token_urlsafe(32)
         token_expires_at = (datetime.now(UTC) + timedelta(minutes=20)).isoformat().replace("+00:00", "Z")
         gateway_factory = self.gateway_factory
+        def bound_gateway_factory(socket_path: Path, approved: set[str], token: str) -> Any:
+            if gateway_factory is None:
+                return None
+            try:
+                return gateway_factory(
+                    socket_path, approved, token, token_expires_at, ledger,
+                )
+            except TypeError:
+                return gateway_factory(socket_path, approved, token, token_expires_at)
+
         handle = self.topology.start(
             phase=phase, run_ids=run_ids,
-            gateway_factory=(lambda socket_path, approved, token: gateway_factory(socket_path, approved, token, token_expires_at))
-            if gateway_factory is not None else None,
+            gateway_factory=bound_gateway_factory if gateway_factory is not None else None,
             gateway_token=phase_token, token_expires_at=token_expires_at,
         )
         coordinator = ExperimentRunner(
@@ -213,9 +268,9 @@ class RuntimeRunner:
                     "run_artifact": run_dir / "run_artifact.json", "event_ledger": run_dir / "event-ledger.json",
                     "proof": run_dir / "proof.json", "usage": run_dir / "usage.json",
                     "cost": run_dir / "cost.json", "evaluator": run_dir / "evaluator.json",
-                    "cleanup": run_dir / "cleanup.json",
+                    "oracle": run_dir / "oracle.json", "cleanup": run_dir / "cleanup.json",
                 }
-                for name, value in (("event_ledger", result.event_ledger), ("proof", result.proof), ("usage", result.usage), ("cost", result.cost), ("evaluator", result.evaluator), ("cleanup", result.cleanup), ("run_artifact", result.run_artifact)):
+                for name, value in (("event_ledger", result.event_ledger), ("proof", result.proof), ("usage", result.usage), ("cost", result.cost), ("evaluator", result.evaluator), ("oracle", result.oracle), ("cleanup", result.cleanup), ("run_artifact", result.run_artifact)):
                     paths[name].parent.mkdir(parents=True, exist_ok=True)
                     paths[name].write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 hashes = {name: sha256_file(path) for name, path in paths.items()}
@@ -232,7 +287,7 @@ class RuntimeRunner:
                     "invocation_ledger_path": str(ledger_path.relative_to(self.root)), "invocation_ledger_sha256": ledger_hash,
                     "smoke_id": str(cell["run_id"]) if phase == "smoke" else "",
                 }
-                for name in ("event_ledger", "proof", "usage", "cost", "evaluator", "cleanup"):
+                for name in ("event_ledger", "proof", "usage", "cost", "evaluator", "oracle", "cleanup"):
                     record[f"{name}_path"] = str(paths[name].relative_to(self.root))
                     record[f"{name}_sha256"] = hashes[name]
                 records.append(record)

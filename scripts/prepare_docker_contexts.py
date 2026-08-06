@@ -77,6 +77,7 @@ def main() -> int:
             shutil.copyfile(source, context / "adapter" / f"{role}-{source.name}")
         shutil.copyfile(ROOT / "docker/adapter/provider_shim.py", context / "adapter/provider_shim.py")
         shutil.copyfile(ROOT / "docker/adapter/entrypoint.sh", context / "adapter/entrypoint.sh")
+        shutil.copyfile(ROOT / "docker/adapter/runtime_entrypoint.py", context / "adapter/runtime_entrypoint.py")
         manifest["contexts"][name] = {
             "path": str(context),
             "source_commit": envelope["source"]["commit"],

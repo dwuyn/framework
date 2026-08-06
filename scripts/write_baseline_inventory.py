@@ -47,7 +47,8 @@ def main() -> int:
                 "common": str((Path(context["path"]) / "adapter/provider_shim.py").resolve()),
                 "framework": str((Path(context["path"]) / "adapter" / f"framework-{name.lower().replace('pentestagent', 'pentest_agent').replace('pentestgpt', 'pentest_gpt').replace('vulnbot', 'vuln_bot').replace('hacksynth', 'hack_synth')}.py").resolve()),
                 "wrapper": str((Path(context["path"]) / "adapter/wrapper-wrapper.py").resolve()),
-                "contract_version": "adapter-2.1",
+                "runtime": str((Path(context["path"]) / "adapter/runtime_entrypoint.py").resolve()),
+                "contract_version": "adapter-2.2",
             },
         })
     output = Path(args.output)

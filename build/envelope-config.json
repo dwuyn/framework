@@ -10,6 +10,7 @@
     "adapter_paths": {
       "common": "docker/adapter/provider_shim.py",
       "framework": "src/baselines/pentest_agent.py",
+      "runtime": "docker/adapter/runtime_entrypoint.py",
       "wrapper": "src/baselines/wrapper.py"
     },
     "os_package_requirements": []
@@ -25,6 +26,7 @@
       "adapter_paths": {
         "common": "docker/adapter/provider_shim.py",
         "framework": "src/baselines/pentest_agent.py",
+        "runtime": "docker/adapter/runtime_entrypoint.py",
         "wrapper": "src/baselines/wrapper.py"
       },
       "os_package_requirements": []
@@ -39,6 +41,7 @@
       "adapter_paths": {
         "common": "docker/adapter/provider_shim.py",
         "framework": "src/baselines/pentest_gpt.py",
+        "runtime": "docker/adapter/runtime_entrypoint.py",
         "wrapper": "src/baselines/wrapper.py"
       },
       "os_package_requirements": []
@@ -53,6 +56,7 @@
       "adapter_paths": {
         "common": "docker/adapter/provider_shim.py",
         "framework": "src/baselines/vuln_bot.py",
+        "runtime": "docker/adapter/runtime_entrypoint.py",
         "wrapper": "src/baselines/wrapper.py"
       },
       "os_package_requirements": []
@@ -67,6 +71,7 @@
       "adapter_paths": {
         "common": "docker/adapter/provider_shim.py",
         "framework": "src/baselines/hack_synth.py",
+        "runtime": "docker/adapter/runtime_entrypoint.py",
         "wrapper": "src/baselines/wrapper.py"
       },
       "os_package_requirements": []

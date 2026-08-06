@@ -27,6 +27,7 @@ def test_all_recipes_pin_base_and_hacksynth_is_cpu_only() -> None:
         assert text.count(BASE_IMAGE) == 2
         assert "--network=host" not in text
         assert "GOOGLE_APPLICATION_CREDENTIALS" not in text
+        assert "/runner/run" in text
     hacksynth = (ROOT / "docker/baselines/HackSynth.Dockerfile").read_text()
     assert "cpu-only" in hacksynth
     assert "picoctf_bench" not in hacksynth
@@ -35,9 +36,17 @@ def test_all_recipes_pin_base_and_hacksynth_is_cpu_only() -> None:
 def test_provider_bundle_refuses_direct_vertex_and_root() -> None:
     provider = (ROOT / "docker/adapter/provider_shim.py").read_text()
     entrypoint = (ROOT / "docker/adapter/entrypoint.sh").read_text()
+    runtime = (ROOT / "docker/adapter/runtime_entrypoint.py").read_text()
     assert "googleapis.com" in provider
     assert "refuses root" in entrypoint
     assert "unset GOOGLE_APPLICATION_CREDENTIALS" in entrypoint
+    assert "paid stage requires a locked framework-specific automation adapter" in runtime
+
+
+def test_rebuild_writes_strict_four_baseline_lock() -> None:
+    script = (ROOT / "scripts/rebuild_runtime_images.py").read_text()
+    assert 'item["name"] != "VeriPlanPT"' in script
+    assert "generate_baseline_lock(baseline_specs" in script
 
 
 def test_hacksynth_lock_contains_hashes_and_no_gpu_packages() -> None:

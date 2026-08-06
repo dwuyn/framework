@@ -179,6 +179,8 @@ def _runtime_record(
         cost = json.loads((root / _relative_artifact_path(record["cost_path"], name)).read_text(encoding="utf-8"))
         evaluator = json.loads((root / _relative_artifact_path(record["evaluator_path"], name)).read_text(encoding="utf-8"))
         cleanup = json.loads((root / _relative_artifact_path(record["cleanup_path"], name)).read_text(encoding="utf-8"))
+        event_ledger = json.loads((root / _relative_artifact_path(record["event_ledger_path"], name)).read_text(encoding="utf-8"))
+        proof = json.loads((root / _relative_artifact_path(record["proof_path"], name)).read_text(encoding="utf-8"))
         artifact = json.loads((root / _relative_artifact_path(record["artifact_path"], name)).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"{name} runtime evidence contains invalid JSON") from exc
@@ -205,9 +207,9 @@ def _runtime_record(
         run_artifact = RunArtifact.from_dict(artifact)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{name} cannot load RunArtifact for trust binding") from exc
-    if run_artifact.event_ledger_hash != str(record["event_ledger_sha256"]):
+    if run_artifact.event_ledger_hash != canonical_hash(event_ledger):
         raise ValueError(f"{name} RunArtifact ledger hash mismatch")
-    if run_artifact.proof_hash != str(record["proof_sha256"]):
+    if run_artifact.proof_hash != canonical_hash(proof):
         raise ValueError(f"{name} RunArtifact proof hash mismatch")
     if any(float(run_artifact.usage[key]) != float(usage["usd"] if key == "total_usd" else usage[key])
            for key in ("input_tokens", "output_tokens", "total_tokens", "total_usd")):

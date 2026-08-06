@@ -27,7 +27,7 @@ class _Docker:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
 
-    def run(self, args):
+    def run(self, args, input_bytes=None):
         self.commands.append(list(args))
         if args[0] in {"container", "network"} and args[1] == "ls":
             return subprocess.CompletedProcess(args, 0, "", "")
@@ -61,3 +61,26 @@ def test_topology_evidence_rejects_failed_phase() -> None:
         assert "success" in str(exc)
     else:
         raise AssertionError("failed topology evidence was accepted")
+
+
+def test_baseline_receives_only_public_stdin_and_output_mount(tmp_path: Path) -> None:
+    docker = _Docker()
+    lifecycle = TopologyLifecycle(
+        artifact_root=tmp_path, relay_lock={**_lock(), "lock_hash": "d" * 64},
+        relay_image="relay:locked", docker=docker, host_uid=1000, host_gid=1000,
+    )
+    handle = lifecycle.start(phase="smoke", run_ids={"smoke-a"}, gateway_token="token", token_expires_at="2999-01-01T00:00:00Z")
+    output = tmp_path / "output"
+    output.mkdir()
+    environment = lifecycle.runtime_environment(
+        handle, run_id="smoke-a", model_label="gemini-3.5-flash", profile_hash="e" * 64,
+    )
+    lifecycle.run_baseline(
+        handle, run_id="smoke-a", image="sha256:" + "f" * 64,
+        command=("/runner/run",), environment=environment,
+        public_payload=b"{}", output_dir=output,
+    )
+    command = docker.commands[-1]
+    assert "--rm" in command and "--read-only" in command
+    assert any("/run/veriplanpt/output" in item for item in command)
+    lifecycle.shutdown(handle)

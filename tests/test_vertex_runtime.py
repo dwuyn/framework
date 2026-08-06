@@ -7,6 +7,7 @@ import pytest
 from src.pipeline.framework_adapter import ModelProfile
 from src.pipeline.llm_budget import UsageMetadataMissing, normalize_usage
 from src.pipeline.model_resolution import validate_resolution_lock
+from src.pipeline.runtime_ledger import InvocationLedger
 from src.pipeline.runtime_readiness import build_canary_smoke_plan
 from src.pipeline.vertex_gateway import (
     GatewayError,
@@ -336,6 +337,29 @@ def test_gateway_rejects_expired_short_lived_token() -> None:
             "run_id": "run-1", "model_label": profile.logical_label,
             "profile_hash": profile.profile_hash, "contents": "ping",
         }, token="test-token")
+
+
+def test_gateway_persists_host_observed_usage() -> None:
+    profile = _profile("gemini-3.6-flash")
+    ledger = InvocationLedger(phase="benchmark", gateway_relay_lock_hash="a" * 64)
+    gateway = VertexGateway(
+        profiles=[profile], allowed_run_ids={"run-1"}, token="test-token",
+        token_expires_at="2099-01-01T00:00:00Z",
+        gemini=GeminiExecutor(_GeminiTransport()), gemma=GemmaMaaSExecutor(_GemmaTransport()),
+        invocation_ledger=ledger,
+    )
+
+    result = gateway.invoke({
+        "run_id": "run-1", "model_label": profile.logical_label,
+        "profile_hash": profile.profile_hash, "contents": "ping",
+    }, token="test-token")
+
+    assert ledger.aggregate("run-1") == {
+        "input_tokens": result.usage.input_tokens,
+        "output_tokens": result.usage.output_tokens,
+        "total_tokens": result.usage.total_tokens,
+        "usd": result.usage.usd,
+    }
 
 
 def test_host_gateway_uses_pinned_gemma_endpoint() -> None:

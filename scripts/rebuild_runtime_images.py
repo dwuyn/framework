@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from src.pipeline.baseline_lock import _adapter_bundle_hash
+from src.pipeline.baseline_lock import _adapter_bundle_hash, generate_baseline_lock
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGES = {
@@ -80,8 +80,9 @@ def main(argv: list[str] | None = None) -> int:
             "common": context / "adapter/provider_shim.py",
             "framework": next(context.joinpath("adapter").glob("framework-*.py")),
             "wrapper": context / "adapter/wrapper-wrapper.py",
+            "runtime": context / "adapter/runtime_entrypoint.py",
         }
-        adapter_hash = _adapter_bundle_hash({key: str(path) for key, path in adapter_paths.items()}, "adapter-2.1")
+        adapter_hash = _adapter_bundle_hash({key: str(path) for key, path in adapter_paths.items()}, "adapter-2.2")
         dependency_hash = _sha(next((context / "envelope").iterdir()))
         recipe_hash = _sha(recipe)
         commit = _git(source, "rev-parse", "HEAD")
@@ -107,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         digest, labels = _inspect(image)
         identity = {
             "name": name, "image": image, "image_id": digest, "image_digest": digest,
-            "adapter_bundle_hash": adapter_hash, "adapter_contract_version": "adapter-2.1",
+            "adapter_bundle_hash": adapter_hash, "adapter_contract_version": "adapter-2.2",
             "dependency_lock_hash": dependency_hash, "recipe_hash": recipe_hash,
             "source_commit": commit, "source_tree_hash": tree_hash, "image_labels": labels,
         }
@@ -116,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
                 "schema_version": "2.0.0", "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "name": name, "source": {"path": str(source), "commit": commit, "tree_hash": tree_hash},
                 "recipe": {"path": str(recipe), "sha256": recipe_hash},
-                "adapter_bundle": {"sha256": adapter_hash, "contract_version": "adapter-2.1"},
+                "adapter_bundle": {"sha256": adapter_hash, "contract_version": "adapter-2.2"},
                 "dependency_lock": {"path": str(context / "envelope" / next((context / "envelope").iterdir()).name), "sha256": dependency_hash},
                 "image": identity,
             }
@@ -128,7 +129,8 @@ def main(argv: list[str] | None = None) -> int:
                 "dependency_lock_path": str(context / "envelope" / next((context / "envelope").iterdir()).name),
                 "os_package_requirements": envelope.get("os_package_requirements", []),
                 "adapter_bundle": {"common": str(adapter_paths["common"]), "framework": str(adapter_paths["framework"]),
-                                   "wrapper": str(adapter_paths["wrapper"]), "contract_version": "adapter-2.1"},
+                                   "wrapper": str(adapter_paths["wrapper"]), "runtime": str(adapter_paths["runtime"]),
+                                   "contract_version": "adapter-2.2"},
             })
     relay_context = Path(str(contexts["gateway-relay"]["path"])).resolve()
     relay_recipe = relay_context / "Dockerfile"
@@ -170,7 +172,13 @@ def main(argv: list[str] | None = None) -> int:
     Path(args.output_native_identity).write_text(json.dumps(native, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     inventory = Path(args.output_baseline_lock).with_suffix(".inventory.json")
     inventory.write_text(json.dumps({"schema_version": "1.0.0", "baselines": observed}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"images": len(IMAGES) + 1, "inventory": str(inventory), "native_identity": str(args.output_native_identity), "relay_lock": str(relay_lock_path)}))
+    # The inventory is useful for audit, but it is not a lock.  Materialise the
+    # strict lock requested by the caller only after all four baseline images
+    # have been observed successfully.
+    baseline_lock_path = Path(args.output_baseline_lock)
+    baseline_specs = [item for item in observed if item["name"] != "VeriPlanPT"]
+    baseline_lock = generate_baseline_lock(baseline_specs, output=baseline_lock_path)
+    print(json.dumps({"images": len(IMAGES) + 1, "baseline_lock": str(baseline_lock_path), "baseline_count": len(baseline_lock["baselines"]), "inventory": str(inventory), "native_identity": str(args.output_native_identity), "relay_lock": str(relay_lock_path)}))
     return 0
 
 

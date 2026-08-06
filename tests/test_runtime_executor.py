@@ -27,7 +27,9 @@ def test_fake_executor_produces_all_runtime_evidence(tmp_path: Path) -> None:
         profile = by_label[cell["model_label"]]
         ledger, proof = {"events": []}, {"text": "proof"}
         def digest(value: object) -> str:
-            return hashlib.sha256((json.dumps(value, indent=2, sort_keys=True) + "\n").encode()).hexdigest()
+            return hashlib.sha256(
+                json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+            ).hexdigest()
         artifact = RunArtifact(case_id="runtime", repetition=1, track="blind", condition=cell["kind"], model_profile=profile, budget_tier=BudgetTier.MEDIUM, schema_version="2.1.0", run_id=cell["run_id"], run_dir=str(run_dir), usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "total_usd": .01}, framework_identity={"name": cell.get("framework", "VeriPlanPT"), "repository_url": "https://example.test/repo", "commit": "a" * 40, "image_digest": cell["image_digest"], "adapter_version": "adapter-2.1"}, run_context={"dataset_lock_hash": cell["dataset_lock_hash"], "framework_commit": "b" * 40, "evaluator_commit": "c" * 40, "stage": "canary_smoke", "training_protocol_hash": "1" * 64}, event_ledger_hash="2" * 64, proof_hash="3" * 64)
         artifact.event_ledger_hash, artifact.proof_hash = digest(ledger), digest(proof)
         clean = cleanup(cell["run_id"])

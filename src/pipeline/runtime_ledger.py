@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,8 +24,8 @@ class InvocationLedger:
     """Capture request/response identities and observed usage/cost only."""
 
     def __init__(self, *, phase: str, gateway_relay_lock_hash: str) -> None:
-        if phase not in {"canary", "smoke"}:
-            raise ValueError("invocation ledger phase must be canary or smoke")
+        if phase not in {"canary", "smoke", "sweep", "confirmation", "benchmark"}:
+            raise ValueError("invocation ledger phase is not a locked runtime stage")
         self.phase = phase
         self.gateway_relay_lock_hash = gateway_relay_lock_hash
         self._lock = threading.RLock()
@@ -76,12 +78,27 @@ class InvocationLedger:
     def write(self, path: str | Path) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        value = {
-            "schema_version": "1.0.0", "phase": self.phase,
-            "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
-            "invocations": self.snapshot(),
-        }
-        destination.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with self._lock:
+            value = {
+                "schema_version": "1.0.0", "phase": self.phase,
+                "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
+                "invocations": [dict(record) for record in self._records],
+            }
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{destination.name}.", dir=destination.parent,
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary_name, destination)
+            except Exception:
+                try:
+                    os.unlink(temporary_name)
+                except FileNotFoundError:
+                    pass
+                raise
         return destination
 
 
