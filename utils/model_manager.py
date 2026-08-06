@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 class ModelManager:
     def __init__(self, config_path: Optional[str] = None):
         if config_path is None:
-            config_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), 'configs', 'config.yaml')
+            configs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'configs')
+            candidates = (os.path.join(configs_dir, 'config.yaml'), os.path.join(configs_dir, 'config.yaml.example'))
+            config_path = next((path for path in candidates if os.path.isfile(path)), candidates[0])
         self.config_path = config_path
         self.config = self._load_config()
         self.initialized_models: dict[str, Any] = {}
@@ -55,14 +56,24 @@ class ModelManager:
         runtime = self.config.get("runtime", {})
         return runtime.get(agent_type, {}).get("model", "default")
 
-model_manager = ModelManager()
+
+_model_manager: Optional[ModelManager] = None
+
+
+def get_model_manager() -> ModelManager:
+    global _model_manager
+    if _model_manager is None:
+        _model_manager = ModelManager()
+    return _model_manager
+
 
 def get_model(model_name: str = "default"):
     try:
-        return model_manager.get_model(model_name)
+        return get_model_manager().get_model(model_name)
     except Exception as e:
         logger.error(f"Failed to load model '{model_name}': {e}")
         return None
 
+
 def get_agent_model(agent_type: str):
-    return model_manager.get_model(model_manager.get_runtime_model(agent_type))
+    return get_model_manager().get_model(get_model_manager().get_runtime_model(agent_type))

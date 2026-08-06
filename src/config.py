@@ -23,7 +23,11 @@ import yaml
 # ── Path helpers ──────────────────────────────────────────────────────────────
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CONFIG_YAML = os.path.join(_ROOT, "configs", "config.yaml")
+_CONFIG_CANDIDATES = (
+    os.path.join(_ROOT, "configs", "config.yaml"),
+    os.path.join(_ROOT, "configs", "config.yaml.example"),
+)
+_CONFIG_YAML = next((path for path in _CONFIG_CANDIDATES if os.path.isfile(path)), _CONFIG_CANDIDATES[0])
 
 
 # ── Env-var resolver ──────────────────────────────────────────────────────────
