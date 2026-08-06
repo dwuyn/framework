@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Mapping, Sequence
 
+from src.pipeline.bundle_executor import IndependentBundleExecutor
 from src.pipeline.experiment_runner import CellResult, ExperimentRunner
 from src.pipeline.framework_adapter import ModelProfile, RunArtifact
 from src.pipeline.protocol import validate_run_artifact
@@ -56,7 +57,7 @@ class RuntimeRunner:
         approval: Mapping[str, Any], signature_path: str | Path, public_key: str,
         evaluator_bundle: str | Path, oracle_bundle: str | Path,
         evaluator_bundle_hash: str, oracle_bundle_hash: str,
-        cell_executor: RuntimeCellExecutor, bundle_executor: BundleExecutor,
+        cell_executor: RuntimeCellExecutor, bundle_executor: BundleExecutor | None = None,
         dataset_evidence_hash: str = "", training_protocol_hash: str = "",
         pricing_snapshot_hash: str = "", approval_hash: str = "",
         topology: TopologyLifecycle | None = None,
@@ -76,7 +77,9 @@ class RuntimeRunner:
         self.evaluator_bundle_hash = evaluator_bundle_hash
         self.oracle_bundle_hash = oracle_bundle_hash
         self.cell_executor = cell_executor
-        self.bundle_executor = bundle_executor
+        self.bundle_executor = bundle_executor or IndependentBundleExecutor(
+            evaluator_bundle=self.evaluator_bundle, oracle_bundle=self.oracle_bundle,
+        )
         self.dataset_evidence_hash = dataset_evidence_hash
         self.training_protocol_hash = training_protocol_hash
         self.pricing_snapshot_hash = pricing_snapshot_hash
@@ -90,6 +93,8 @@ class RuntimeRunner:
 
     def _validate_inputs(self) -> None:
         validate_gateway_relay_lock(self.relay_lock, strict=True)
+        if not isinstance(self.bundle_executor, IndependentBundleExecutor):
+            raise RuntimeHalt("production runtime requires the independent bundle executor")
         if not re.fullmatch(r"[0-9a-f]{64}", self.relay_lock_hash):
             raise RuntimeHalt("runtime relay lock hash is invalid")
         if not Path(self.signature_path).is_file():

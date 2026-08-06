@@ -4,11 +4,12 @@ import hashlib
 import json
 from pathlib import Path
 
+from src.pipeline.bundle_executor import IndependentBundleExecutor
 from src.pipeline.framework_adapter import BudgetTier, ModelProfile, RunArtifact
 from src.pipeline.runtime_executor import RuntimeCellResult
 from src.pipeline.runtime_ledger import InvocationLedger
 from src.pipeline.runtime_readiness import build_canary_smoke_plan
-from src.pipeline.runtime_runner import RuntimeRunner
+from src.pipeline.runtime_runner import RuntimeRunner, _bundle_hash
 from src.pipeline.runtime_topology import TopologyHandle
 
 
@@ -25,6 +26,29 @@ def _profile(label: str) -> ModelProfile:
         "pricing_effective_at": "2026-08-05T00:00:00Z",
         "usage_semantics": {"input_includes_cached": "true", "total_formula": "input+output", "output_includes_reasoning": "true"},
     })
+
+
+def _bundle(root: Path, kind: str) -> Path:
+    bundle = root / f"{kind}-bundle"
+    entrypoint = bundle / "bin/evaluate"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text(
+        "#!/bin/sh\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = \"--output\" ]; then output=\"$2\"; shift 2; else shift; fi\n"
+        "done\n"
+        f"printf '{{\"kind\":\"{kind}\",\"status\":\"passed\"}}' > \"$output\"\n",
+        encoding="utf-8",
+    )
+    entrypoint.chmod(0o755)
+    manifest = {
+        "schema_version": "1.0.0", "kind": kind, "source_commit": "d" * 40,
+        "entrypoint": "bin/evaluate",
+    }
+    if kind == "evaluator":
+        manifest.update({"feature_schema_hash": "e" * 64, "image_digest": "sha256:" + "f" * 64})
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return bundle
 
 
 class _Topology:
@@ -77,10 +101,10 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
     }
     approval = {"cost_ceiling_usd": sum(cell["cell_worst_case_cost_usd"] for cell in plan["cells"]), "expires_at": "2099-01-01T00:00:00Z"}
     monkeypatch.setattr("src.pipeline.experiment_runner.verify_approval", lambda *args, **kwargs: approval)
-    evaluator = tmp_path / "evaluator.bin"
-    oracle = tmp_path / "oracle.bin"
-    evaluator.write_bytes(b"evaluator")
-    oracle.write_bytes(b"oracle")
+    evaluator = _bundle(tmp_path, "evaluator")
+    oracle = _bundle(tmp_path, "oracle")
+    signature = tmp_path / "signature"
+    signature.write_bytes(b"signature")
 
     def digest(value: object) -> str:
         return hashlib.sha256((json.dumps(value, indent=2, sort_keys=True) + "\n").encode()).hexdigest()
@@ -104,9 +128,11 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
     runner = RuntimeRunner(
         artifact_root=tmp_path, plan=plan, profiles=profiles, relay_lock=lock,
         relay_lock_hash=relay_hash, relay_image="relay:locked", approval=approval,
-        signature_path=evaluator, public_key="test", evaluator_bundle=evaluator, oracle_bundle=oracle,
-        evaluator_bundle_hash=hashlib.sha256(b"evaluator").hexdigest(), oracle_bundle_hash=hashlib.sha256(b"oracle").hexdigest(),
-        cell_executor=execute, bundle_executor=lambda _bundle, _run_dir, _artifact: {"status": "passed"},
+        signature_path=signature, public_key="test", evaluator_bundle=evaluator, oracle_bundle=oracle,
+        evaluator_bundle_hash=_bundle_hash(evaluator), oracle_bundle_hash=_bundle_hash(oracle),
+        cell_executor=execute, bundle_executor=IndependentBundleExecutor(
+            evaluator_bundle=evaluator, oracle_bundle=oracle,
+        ),
         topology=_Topology(tmp_path, relay_hash),
     )
     output = runner.run()
