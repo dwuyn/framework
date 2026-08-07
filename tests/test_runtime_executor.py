@@ -21,7 +21,7 @@ def test_fake_executor_produces_all_runtime_evidence(tmp_path: Path) -> None:
     profiles = [_profile(label) for label in sorted(ModelProfile.ALLOWED_MODELS)]
     by_label = {profile.logical_label: profile for profile in profiles}
     images = {name: "sha256:" + "2" * 64 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")}
-    plan = build_canary_smoke_plan(profiles=profiles, dataset_lock_hash="a" * 64, baseline_identity_hash="b" * 64, native_identity_hash="c" * 64, model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64, oracle_hash="f" * 64, image_digests=images, max_input_tokens=10, max_output_tokens=5, retry_policy={"max_attempts": 2}, strict=True)
+    plan = build_canary_smoke_plan(profiles=profiles, dataset_lock_hash="a" * 64, baseline_identity_hash="b" * 64, native_identity_hash="c" * 64, model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64, oracle_hash="f" * 64, image_digests=images, target_runtime_lock_hash="9" * 64, max_input_tokens=10, max_output_tokens=5, retry_policy={"max_attempts": 2}, strict=True)
     def cleanup(run_id: str): return {"success": True, "resources": {"container": {"ids": []}, "network": {"ids": []}}, "run_id": run_id}
     def execute(cell, run_dir):
         profile = by_label[cell["model_label"]]
@@ -30,7 +30,7 @@ def test_fake_executor_produces_all_runtime_evidence(tmp_path: Path) -> None:
             return hashlib.sha256(
                 json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
             ).hexdigest()
-        artifact = RunArtifact(case_id="runtime", repetition=1, track="blind", condition=cell["kind"], model_profile=profile, budget_tier=BudgetTier.MEDIUM, schema_version="2.1.0", run_id=cell["run_id"], run_dir=str(run_dir), usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "total_usd": .01}, framework_identity={"name": cell.get("framework", "VeriPlanPT"), "repository_url": "https://example.test/repo", "commit": "a" * 40, "image_digest": cell["image_digest"], "adapter_version": "adapter-2.1"}, run_context={"dataset_lock_hash": cell["dataset_lock_hash"], "framework_commit": "b" * 40, "evaluator_commit": "c" * 40, "stage": "canary_smoke", "training_protocol_hash": "1" * 64}, event_ledger_hash="2" * 64, proof_hash="3" * 64)
+        artifact = RunArtifact(case_id="runtime", repetition=1, track="blind", condition=cell["kind"], model_profile=profile, budget_tier=BudgetTier.MEDIUM, schema_version="2.1.0", run_id=cell["run_id"], run_dir=str(run_dir), usage={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "total_usd": .01}, framework_identity={"name": cell.get("framework", "VeriPlanPT"), "repository_url": "https://example.test/repo", "commit": "a" * 40, "image_digest": cell["image_digest"], "adapter_version": "adapter-3.0"}, run_context={"dataset_lock_hash": cell["dataset_lock_hash"], "framework_commit": "b" * 40, "evaluator_commit": "c" * 40, "stage": "canary_smoke", "training_protocol_hash": "1" * 64, "target_runtime_lock_hash": cell["target_runtime_lock_hash"]}, event_ledger_hash="2" * 64, proof_hash="3" * 64)
         artifact.event_ledger_hash, artifact.proof_hash = digest(ledger), digest(proof)
         clean = cleanup(cell["run_id"])
         return RuntimeCellResult(artifact.to_dict(), ledger, proof, {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "usd": .01}, {"billing_status": "known", "cost_usd": .01}, {"status": "passed"}, clean, "known", "passed")

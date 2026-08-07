@@ -116,6 +116,8 @@ class RuntimeRunner:
             raise RuntimeHalt("production runtime requires canary plan 1.1.0")
         if str(self.plan.get("gateway_relay_lock_hash")) != self.relay_lock_hash:
             raise RuntimeHalt("runtime plan gateway relay lock hash mismatch")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(self.plan.get("target_runtime_lock_hash", ""))):
+            raise RuntimeHalt("runtime plan target runtime lock hash is invalid")
         validate_canary_smoke_plan(self.plan, profiles=self.profiles, strict=True)
 
     @staticmethod
@@ -141,6 +143,8 @@ class RuntimeRunner:
             raise RuntimeHalt("runtime RunArtifact image digest mismatch")
         if artifact.run_context.get("gateway_relay_lock_hash") != self.relay_lock_hash:
             raise RuntimeHalt("runtime RunArtifact relay lock binding mismatch")
+        if artifact.run_context.get("target_runtime_lock_hash") != str(self.plan["target_runtime_lock_hash"]):
+            raise RuntimeHalt("runtime RunArtifact target lock binding mismatch")
         observed = ledger.aggregate(str(cell["run_id"]))
         if result.billing_status != "known":
             raise RuntimeHalt("billing unknown halted runtime")

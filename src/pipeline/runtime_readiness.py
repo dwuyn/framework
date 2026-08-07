@@ -38,6 +38,7 @@ def build_canary_smoke_plan(
     dataset_lock_hash: str = "", baseline_identity_hash: str = "",
     model_resolution_lock_hash: str = "", evaluator_hash: str = "", oracle_hash: str = "",
     image_digests: Mapping[str, str] | None = None, native_identity_hash: str = "",
+    target_runtime_lock_hash: str = "",
     gateway_relay_lock_hash: str = "",
     max_input_tokens: int = 0, max_output_tokens: int = 0,
     retry_policy: Mapping[str, Any] | None = None, strict: bool = False,
@@ -56,6 +57,7 @@ def build_canary_smoke_plan(
             "evaluator_hash": evaluator_hash,
             "oracle_hash": oracle_hash,
             "native_identity_hash": native_identity_hash,
+            "target_runtime_lock_hash": target_runtime_lock_hash,
         }
         if any(len(str(value)) != 64 for value in required_digests.values()):
             raise ValueError("strict runtime plan requires all upstream SHA-256 identities")
@@ -99,6 +101,7 @@ def build_canary_smoke_plan(
             "model_resolution_lock_hash": model_resolution_lock_hash,
             "evaluator_hash": evaluator_hash,
             "oracle_hash": oracle_hash,
+            "target_runtime_lock_hash": target_runtime_lock_hash,
             "image_digest": images.get(framework, "") if framework else images.get("VeriPlanPT", ""),
             "max_input_tokens": max_input_tokens,
             "max_output_tokens": max_output_tokens,
@@ -124,6 +127,8 @@ def build_canary_smoke_plan(
     }
     if gateway_relay_lock_hash:
         plan["gateway_relay_lock_hash"] = gateway_relay_lock_hash
+    if target_runtime_lock_hash:
+        plan["target_runtime_lock_hash"] = target_runtime_lock_hash
     plan["plan_hash"] = _canonical_hash(plan)
     if strict:
         validate_canary_smoke_plan(plan, profiles=profiles, strict=True)
@@ -163,7 +168,7 @@ def validate_canary_smoke_plan(
             "model_profile_hash", "model_resource_id", "model_revision", "dataset_lock_hash",
             "baseline_identity_hash", "native_identity_hash", "model_resolution_lock_hash",
             "evaluator_hash", "oracle_hash", "image_digest", "max_input_tokens",
-            "max_output_tokens", "retry_policy", "cell_worst_case_cost_usd",
+            "max_output_tokens", "retry_policy", "cell_worst_case_cost_usd", "target_runtime_lock_hash",
         }
         for cell in cells:
             if not required.issubset(cell):
@@ -174,6 +179,10 @@ def validate_canary_smoke_plan(
                     raise ValueError("production canary smoke plan requires gateway_relay_lock_hash")
                 if str(cell.get("gateway_relay_lock_hash")) != str(plan["gateway_relay_lock_hash"]):
                     raise ValueError("canary smoke gateway relay lock binding mismatch")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(plan.get("target_runtime_lock_hash", ""))):
+                raise ValueError("strict canary smoke plan requires target_runtime_lock_hash")
+            if str(cell.get("target_runtime_lock_hash")) != str(plan["target_runtime_lock_hash"]):
+                raise ValueError("canary smoke target runtime lock binding mismatch")
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(cell["image_digest"])):
                 raise ValueError("strict canary smoke cell requires an immutable image digest")
             for key in ("dataset_lock_hash", "baseline_identity_hash", "native_identity_hash",

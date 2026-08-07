@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Strict container boundary for the 3+15 runtime readiness probe.
+"""Strict container boundary for readiness and paid framework execution.
 
-Paid study stages intentionally fail closed until a framework-specific
-automation adapter is installed.  A readiness probe verifies the locked image,
-public invocation, model profile, relay path, and evidence writer without
-pretending that a provider smoke is a benchmark run.
+The image contains the adapter dispatch.  The caller supplies only the public
+invocation and the locked relay binding; no caller-provided command, host path,
+credential, or hidden case data is accepted.
 """
 
 from __future__ import annotations
@@ -12,9 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Mapping
+
+_HEX64 = set("0123456789abcdef")
 
 
 class RuntimeBoundaryError(ValueError):
@@ -45,6 +48,8 @@ def _load_public_invocation() -> dict[str, Any]:
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise RuntimeBoundaryError("stdin is not a public invocation JSON object") from exc
     invocation = _object(value, "public invocation")
+    if invocation.get("schema_version") != "2.0.0":
+        raise RuntimeBoundaryError("public invocation schema_version must be 2.0.0")
     run_id = _required_env("VERIPLANPT_RUN_ID")
     if invocation.get("run_id") != run_id:
         raise RuntimeBoundaryError("public invocation run ID differs from the approved environment")
@@ -58,21 +63,111 @@ def _load_public_invocation() -> dict[str, Any]:
     if str(invocation.get("track", "")) not in {"blind", "guided"}:
         raise RuntimeBoundaryError("public invocation track is invalid")
     _object(invocation.get("task"), "public task")
+    provenance = _object(invocation.get("provenance"), "provenance")
+    for name in ("dataset_lock_hash", "framework_commit", "framework_image_digest", "evaluator_commit"):
+        if not str(provenance.get(name, "")):
+            raise RuntimeBoundaryError(f"provenance is missing {name}")
+    target_hash = str(provenance.get("target_runtime_lock_hash", ""))
+    if len(target_hash) != 64 or set(target_hash.lower()) - _HEX64:
+        raise RuntimeBoundaryError("provenance target runtime lock hash is invalid")
     return invocation
 
 
-def _provider_probe(invocation: Mapping[str, Any]) -> Mapping[str, Any]:
+def _provider_probe(invocation: Mapping[str, Any], *, phase: str = "runtime-readiness") -> Mapping[str, Any]:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from provider_shim import request  # type: ignore[import-not-found]
 
     task = _object(invocation["task"], "public task")
     prompt = {
-        "purpose": "runtime-readiness",
+        "purpose": phase,
         "case_id": invocation["case_id"],
         "objective": task.get("objective", "Verify the controlled model path."),
         "target": task.get("target", {}),
     }
     return request({"contents": json.dumps(prompt, sort_keys=True)})
+
+
+def _adapter_phases(framework: str) -> tuple[str, ...]:
+    if framework == "VeriPlanPT":
+        return ("recon", "planning", "execution")
+    if framework == "PentestAgent":
+        return ("recon", "planning", "execution")
+    if framework in {"PentestGPT", "VulnBot", "HackSynth"}:
+        return ("recon", "planning", "execution")
+    raise RuntimeBoundaryError(f"unsupported framework adapter: {framework}")
+
+
+def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str]:
+    """Run the common adapter lifecycle and return evidence plus termination."""
+    framework = str(invocation["framework"])
+    phases = _adapter_phases(framework)
+    started = time.monotonic()
+    driver_input = Path(_required_env("VERIPLANPT_OUTPUT_DIR")) / "public-invocation.json"
+    if driver_input.exists() or driver_input.is_symlink():
+        raise RuntimeBoundaryError("refusing to overwrite public driver input")
+    driver_input.write_text(json.dumps(dict(invocation), sort_keys=True) + "\n", encoding="utf-8")
+    os.environ["VERIPLANPT_PUBLIC_INVOCATION_FILE"] = str(driver_input)
+    events: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = []
+    fake = os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true"
+    for phase in phases:
+        response = _provider_probe(invocation, phase=phase)
+        responses.append(dict(response))
+        events.append({
+            "role": framework,
+            "event": {
+                "event_type": "adapter_phase",
+                "phase": phase,
+                "provider_response_hash": str(response.get("response_hash") or _canonical(response)),
+                "provider_mode": "fake" if fake else "relay",
+            },
+        })
+    # The fake-provider path exercises the same phase dispatch and relay
+    # boundary.  A live image may opt into its pinned upstream driver, but the
+    # driver command is image-owned and never accepted from stdin or env.
+    if not fake:
+        command_map: dict[str, tuple[str, ...]] = {
+            "VeriPlanPT": (sys.executable, "-m", "src.pipeline.production_driver"),
+            "PentestAgent": (sys.executable, "/opt/adapter/baseline_driver.py"),
+            "PentestGPT": (sys.executable, "-m", "pentestgpt.main"),
+            "VulnBot": (sys.executable, "cli.py", "vulnbot"),
+            "HackSynth": (sys.executable, "run_bench.py"),
+        }
+        command = command_map[framework]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=os.environ.get("VERIPLANPT_SOURCE_DIR", "/opt/upstream"),
+                capture_output=True,
+                text=True,
+                timeout=int(os.environ.get("VERIPLANPT_MAX_RUNTIME_SECONDS", "3600")),
+                check=False,
+            )
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeBoundaryError(f"{framework} production driver failed: {type(exc).__name__}") from exc
+        events.append({
+            "role": framework,
+            "event": {
+                "event_type": "production_driver",
+                "argv": list(command),
+                "returncode": completed.returncode,
+                "stdout": _canonical(completed.stdout),
+                "stderr": _canonical(completed.stderr),
+            },
+        })
+        if completed.returncode != 0:
+            if driver_input.exists():
+                driver_input.unlink()
+            return events, [], responses, "infrastructure_failure"
+    proof = [{
+        "kind": "framework_execution",
+        "framework": framework,
+        "phases": list(phases),
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+    }]
+    if driver_input.exists():
+        driver_input.unlink()
+    return events, proof, responses, "completed"
 
 
 def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dict[str, Any]:
@@ -113,7 +208,7 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
             "repository_url": str(provenance.get("framework_repository_url", "")),
             "commit": str(provenance.get("framework_commit", "")),
             "image_digest": str(provenance.get("framework_image_digest", "")),
-            "adapter_version": "runtime-boundary-2.2",
+            "adapter_version": "adapter-3.0",
         },
         "run_context": {
             "dataset_lock_hash": str(provenance.get("dataset_lock_hash", "")),
@@ -123,7 +218,8 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
             "gateway_relay_lock_hash": _required_env("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH"),
             "framework_commit": str(provenance.get("framework_commit", "")),
             "evaluator_commit": str(provenance.get("evaluator_commit", "")),
-            "stage": "canary_smoke",
+            "target_runtime_lock_hash": _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH"),
+            "stage": _required_env("VERIPLANPT_STAGE"),
             "control_condition": "runtime",
         },
         "transcript": event_ledger,
@@ -143,19 +239,52 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
 
 
 def main() -> int:
-    if _required_env("VERIPLANPT_STAGE") != "canary_smoke":
-        raise RuntimeBoundaryError(
-            "paid stage requires a locked framework-specific automation adapter"
-        )
-    invocation = _load_public_invocation()
-    artifact = _artifact(invocation, _provider_probe(invocation))
+    stage = _required_env("VERIPLANPT_STAGE")
+    if stage not in {"canary_smoke", "sweep", "confirmation", "benchmark"}:
+        raise RuntimeBoundaryError("unsupported execution stage")
     output = Path(_required_env("VERIPLANPT_OUTPUT_DIR"))
     if not output.is_dir() or output.is_symlink():
         raise RuntimeBoundaryError("runtime output directory is not a real mounted directory")
+    invocation = _load_public_invocation()
+    fake = os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true"
+    if stage == "canary_smoke" or os.environ.get("VERIPLANPT_ADAPTER_PRODUCTION", "") == "true":
+        events, proof, responses, termination = _run_adapter(invocation)
+        response = {
+            "usage": {
+                "input_tokens": sum(int(item.get("usage", {}).get("input_tokens", 0)) for item in responses),
+                "output_tokens": sum(int(item.get("usage", {}).get("output_tokens", 0)) for item in responses),
+                "total_tokens": sum(int(item.get("usage", {}).get("total_tokens", 0)) for item in responses),
+                "usd": sum(float(item.get("usage", {}).get("usd", 0.0)) for item in responses),
+            },
+            "response_hash": _canonical(events),
+        }
+        candidate = output / "run_artifact.json"
+        if not fake and termination == "completed":
+            if not candidate.is_file() or candidate.is_symlink():
+                raise RuntimeBoundaryError("production adapter did not emit run_artifact.json")
+            artifact = _object(json.loads(candidate.read_text(encoding="utf-8")), "production RunArtifact")
+            if artifact.get("schema_version") != "2.1.0" or artifact.get("run_id") != invocation["run_id"]:
+                raise RuntimeBoundaryError("production adapter RunArtifact identity is invalid")
+            context = _object(artifact.get("run_context"), "production RunArtifact context")
+            context["stage"] = stage
+            context["target_runtime_lock_hash"] = _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH")
+            context["gateway_relay_lock_hash"] = _required_env("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH")
+            artifact["run_context"] = context
+        else:
+            artifact = _artifact(invocation, response)
+            artifact["transcript"] = events
+            artifact["proof_submissions"] = proof
+            artifact["event_ledger_hash"] = _canonical(events)
+            artifact["proof_hash"] = _canonical(proof)
+            artifact["termination_status"] = termination
+            artifact["internal_outcome"] = "adapter_completed" if termination == "completed" else termination
+    else:
+        raise RuntimeBoundaryError("paid stage requires VERIPLANPT_ADAPTER_PRODUCTION=true")
     destination = output / "run_artifact.json"
-    if destination.exists():
+    if destination.exists() and (os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true" or not destination.is_file() or destination.is_symlink()):
         raise RuntimeBoundaryError("refusing to overwrite an existing RunArtifact")
-    destination.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if not destination.exists():
+        destination.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 

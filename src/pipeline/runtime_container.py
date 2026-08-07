@@ -68,6 +68,7 @@ class ReadinessContainerExecutor:
             "evaluator_commit": self.evaluator_commit,
         }
         invocation = {
+            "schema_version": "2.0.0",
             "run_id": run_id,
             "framework": framework,
             "model_label": profile.logical_label,
@@ -90,6 +91,14 @@ class ReadinessContainerExecutor:
             "VERIPLANPT_STAGE": "canary_smoke",
             "VERIPLANPT_FRAMEWORK_NAME": framework,
             "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": self.gateway_relay_lock_hash,
+            "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": str(cell["target_runtime_lock_hash"]),
+            "VERIPLANPT_ADAPTER_PRODUCTION": "true",
+            "VERIPLANPT_IMAGE_DIGEST": str(cell["image_digest"]),
+            "VERIPLANPT_DATASET_LOCK_HASH": str(cell["dataset_lock_hash"]),
+            "VERIPLANPT_EVALUATOR_COMMIT": self.evaluator_commit,
+            "VERIPLANPT_TRAINING_PROTOCOL_HASH": self.training_protocol_hash,
+            "VERIPLANPT_REPOSITORY_URL": str(identity["repository_url"]),
+            "VERIPLANPT_FRAMEWORK_COMMIT": str(identity["commit"]),
         })
         run_dir.mkdir(parents=True, exist_ok=True)
         result = self.topology.run_baseline(

@@ -40,7 +40,7 @@ def _specs(root):
                 "framework": str(root / "framework.py"),
                 "wrapper": str(root / "wrapper.py"),
                 "runtime": str(root / "runtime.py"),
-                "contract_version": "adapter-2.2",
+                "contract_version": "adapter-3.0",
             },
         }
         for name in ("PentestAgent", "PentestGPT", "VulnBot", "HackSynth")
@@ -74,6 +74,6 @@ def test_adapter_bundle_hash_changes_with_contract_version(tmp_path):
         path = tmp_path / f"{role}.py"
         path.write_text(role)
         paths[role] = str(path)
-    first = baseline_lock._adapter_bundle_hash(paths, "adapter-2.1")
-    second = baseline_lock._adapter_bundle_hash(paths, "adapter-2.2")
+    first = baseline_lock._adapter_bundle_hash(paths, "adapter-3.0")
+    second = baseline_lock._adapter_bundle_hash(paths, "adapter-3.1")
     assert first != second

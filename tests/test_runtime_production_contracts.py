@@ -65,7 +65,7 @@ def test_strict_reservation_uses_pricing_and_two_attempts() -> None:
         profiles=profiles, dataset_lock_hash="a" * 64, baseline_identity_hash="b" * 64,
         native_identity_hash="c" * 64, model_resolution_lock_hash="d" * 64,
         evaluator_hash="e" * 64, oracle_hash="f" * 64, image_digests=images,
-        max_input_tokens=100, max_output_tokens=10, retry_policy={"max_attempts": 2}, strict=True,
+        target_runtime_lock_hash="1" * 64, max_input_tokens=100, max_output_tokens=10, retry_policy={"max_attempts": 2}, strict=True,
     )
     expected = worst_case_cost_usd(profiles[0], max_input_tokens=100, max_output_tokens=10, max_attempts=2)
     assert plan["cells"][0]["cell_worst_case_cost_usd"] == expected

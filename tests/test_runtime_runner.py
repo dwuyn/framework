@@ -41,15 +41,16 @@ def _bundle(root: Path, kind: str) -> Path:
     )
     script += "set -- \"$run_dir\"/../../runtime/*-invocation-ledger.json; test -f \"$1\"\n" if kind == "evaluator" else ""
     script += "test -f \"$run_dir/evaluator.json\"\n" if kind == "oracle" else ""
-    script += f"printf '{{\"kind\":\"{kind}\",\"status\":\"passed\"}}' > \"$output\"\n"
+    script += f"printf '{{\"schema_version\":\"2.0.0\",\"kind\":\"{kind}\",\"status\":\"passed\",\"outcome\":{{}}}}' > \"$output\"\n"
     entrypoint.write_text(script, encoding="utf-8")
     entrypoint.chmod(0o755)
     manifest = {
-        "schema_version": "1.0.0", "kind": kind, "source_commit": "d" * 40,
+        "schema_version": "2.0.0", "kind": kind, "source_commit": "d" * 40,
         "entrypoint": "bin/evaluate",
     }
+    manifest["image_digest"] = "sha256:" + "f" * 64
     if kind == "evaluator":
-        manifest.update({"feature_schema_hash": "e" * 64, "image_digest": "sha256:" + "f" * 64})
+        manifest["feature_schema_hash"] = "e" * 64
     (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return bundle
 
@@ -87,7 +88,7 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
         profiles=profiles, dataset_lock_hash="a" * 64, baseline_identity_hash="b" * 64,
         native_identity_hash="c" * 64, model_resolution_lock_hash="d" * 64,
         evaluator_hash="e" * 64, oracle_hash="f" * 64, image_digests=images,
-        gateway_relay_lock_hash=relay_hash, max_input_tokens=10, max_output_tokens=5,
+        gateway_relay_lock_hash=relay_hash, target_runtime_lock_hash="1" * 64, max_input_tokens=10, max_output_tokens=5,
         retry_policy={"max_attempts": 1}, strict=True,
     )
     lock = {
@@ -123,8 +124,8 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
             case_id="runtime", repetition=1, track="blind", condition=cell["kind"], model_profile=profile,
             budget_tier=BudgetTier.MEDIUM, schema_version="2.1.0", run_id=cell["run_id"], run_dir=str(run_dir),
             usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, "total_usd": .00002},
-            framework_identity={"name": cell.get("framework", "VeriPlanPT"), "repository_url": "https://example.test/repo", "commit": "a" * 40, "image_digest": cell["image_digest"], "adapter_version": "adapter-2.1"},
-            run_context={"dataset_lock_hash": cell["dataset_lock_hash"], "framework_commit": "b" * 40, "evaluator_commit": "c" * 40, "stage": "canary_smoke", "gateway_relay_lock_hash": relay_hash},
+            framework_identity={"name": cell.get("framework", "VeriPlanPT"), "repository_url": "https://example.test/repo", "commit": "a" * 40, "image_digest": cell["image_digest"], "adapter_version": "adapter-3.0"},
+            run_context={"dataset_lock_hash": cell["dataset_lock_hash"], "framework_commit": "b" * 40, "evaluator_commit": "c" * 40, "stage": "canary_smoke", "gateway_relay_lock_hash": relay_hash, "target_runtime_lock_hash": cell["target_runtime_lock_hash"]},
             event_ledger_hash=digest(event), proof_hash=digest(proof),
         )
         cleanup = {"success": True, "resources": {"container": {"ids": []}, "network": {"ids": []}}}

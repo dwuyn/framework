@@ -5,29 +5,152 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
+import subprocess
+import tarfile
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-IGNORE = shutil.ignore_patterns(
-    ".git", ".venv", "venv", "env", "cyber_venv", "__pycache__", ".pytest_cache",
-    ".ruff_cache", ".mypy_cache", ".tox", "logs", "data", "Data", "data_test", "results",
-    "cases", "hidden", "target", "node_modules", "references", "architecture", "build",
+_FORBIDDEN_PATHS = (
+    re.compile(r"(^|/)\.env(?:$|\.(?!example(?:$|/)))", re.IGNORECASE),
+    re.compile(r"(^|/)(?:application_default_credentials\.json|credentials\.json|google-key\.json)$", re.IGNORECASE),
+    re.compile(r"(^|/)(?:service[_-]?account.*\.json|.*-key\.json)$", re.IGNORECASE),
+    re.compile(r"\.pem$", re.IGNORECASE),
+    re.compile(r"(^|/)\.config/gcloud(?:/|$)", re.IGNORECASE),
+    re.compile(r"(^|/)docker\.sock$", re.IGNORECASE),
+    re.compile(r"(^|/)(?:hidden|truth|oracle_truth|evaluator_truth)(?:/|$)", re.IGNORECASE),
+    re.compile(r"(^|/)(?:hidden|truth|oracle)[_-].*\.json$", re.IGNORECASE),
 )
 
 
-def copy_clean(source: Path, destination: Path) -> None:
-    shutil.copytree(source, destination, ignore=IGNORE, dirs_exist_ok=True)
+def _run_git(source: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(source), *arguments],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode:
+        raise SystemExit(f"pinned source Git query failed: {result.stderr.strip()[-1000:]}")
+    return result.stdout.strip()
 
 
-def link_or_copy(source: Path, destination: Path) -> None:
+def _forbidden_path(relative: str) -> str | None:
+    for pattern in _FORBIDDEN_PATHS:
+        if pattern.search(relative):
+            return pattern.pattern
+    return None
+
+
+def _scan_json_secret(path: Path, relative: str) -> str | None:
+    if path.suffix.lower() != ".json":
+        return None
     try:
-        os.link(source, destination)
-    except OSError:
-        shutil.copyfile(source, destination)
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if isinstance(value, dict) and value.get("type") == "service_account" and "private_key" in value:
+        return f"service-account credential material at {relative}"
+    return None
+
+
+def scan_context(root: Path) -> None:
+    """Fail closed on credential, hidden-truth, socket, and link material."""
+    violations: list[str] = []
+    seen_inodes: set[tuple[int, int]] = set()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        reason = _forbidden_path(relative)
+        if reason:
+            violations.append(f"{relative}: forbidden path")
+            continue
+        info = path.lstat()
+        if path.is_symlink() or not (path.is_dir() or path.is_file()):
+            violations.append(f"{relative}: symlink or special file")
+            continue
+        if path.is_file():
+            inode = (info.st_dev, info.st_ino)
+            if inode in seen_inodes:
+                violations.append(f"{relative}: hardlink alias")
+            seen_inodes.add(inode)
+            secret = _scan_json_secret(path, relative)
+            if secret:
+                violations.append(secret)
+    if violations:
+        raise SystemExit("derived context security gate failed: " + "; ".join(violations[:20]))
+
+
+def materialize_git_tree(source: Path, destination: Path, *, commit: str, tree: str) -> None:
+    """Extract only the pinned Git tree; ignored/untracked files are unreachable."""
+    if not source.is_dir() or not destination.is_dir():
+        raise SystemExit("Git source and destination directories are required")
+    if any(destination.iterdir()):
+        raise SystemExit(f"refusing to overwrite materialized source: {destination}")
+    if _run_git(source, "rev-parse", "--is-inside-work-tree") != "true":
+        raise SystemExit(f"source is not a Git worktree: {source}")
+    resolved_commit = _run_git(source, "rev-parse", f"{commit}^{{commit}}")
+    resolved_tree = _run_git(source, "rev-parse", f"{resolved_commit}^{{tree}}")
+    if resolved_commit != commit or resolved_tree != tree:
+        raise SystemExit(
+            f"pinned source identity mismatch for {source}: "
+            f"commit={resolved_commit} tree={resolved_tree}"
+        )
+    process = subprocess.Popen(
+        ["git", "-C", str(source), "archive", "--format=tar", resolved_commit],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdout is not None
+    try:
+        with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
+            for member in archive:
+                relative = Path(member.name).as_posix()
+                if relative.startswith("/") or ".." in Path(relative).parts:
+                    raise SystemExit(f"Git archive contains unsafe path: {relative}")
+                if _forbidden_path(relative):
+                    raise SystemExit(f"Git archive contains forbidden path: {relative}")
+                target = destination / relative
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=False)
+                    continue
+                if not member.isfile():
+                    raise SystemExit(f"Git archive contains symlink or special file: {relative}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise SystemExit(f"Git archive member cannot be read: {relative}")
+                with target.open("xb") as output:
+                    shutil.copyfileobj(stream, output)
+                target.chmod(member.mode & 0o777)
+    finally:
+        process.stdout.close()
+    stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
+    return_code = process.wait()
+    if return_code:
+        raise SystemExit(f"Git archive failed: {stderr.strip()[-1000:]}")
+
+
+def copy_from_materialized_source(source_root: Path, source_path: Path, destination: Path, *, repo: Path) -> None:
+    relative = source_path.resolve().relative_to(repo.resolve())
+    source = source_root / relative
+    if not source.is_file() or source.is_symlink():
+        raise SystemExit(f"pinned adapter file is not present in Git archive: {relative}")
+    shutil.copyfile(source, destination)
+
+
+def copy_from_git_object(repo: Path, source_path: Path, destination: Path, *, commit: str) -> None:
+    """Materialize one shared file from a verified Git object, never worktree bytes."""
+    relative = source_path.resolve().relative_to(repo.resolve()).as_posix()
+    result = subprocess.run(
+        ["git", "-C", str(repo), "show", f"{commit}:{relative}"],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode:
+        raise SystemExit(f"pinned shared adapter file is not present in Git object: {relative}")
+    destination.write_bytes(result.stdout)
 
 
 def materialize_lock(lock: Path, wheelhouse: Path, destination: Path) -> None:
@@ -56,6 +179,12 @@ def main() -> int:
         raise SystemExit("staging root must be new and empty")
     artifact_root.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, Any] = {"schema_version": "1.0.0", "contexts": {}}
+    framework_envelope = next(
+        item for item in metadata["envelopes"] if str(item["name"]) == "VeriPlanPT"
+    )
+    framework_repo = Path(str(framework_envelope["source"]["path"])).resolve()
+    framework_commit = str(framework_envelope["source"]["commit"])
+    _run_git(framework_repo, "rev-parse", f"{framework_commit}^{{commit}}")
     for envelope in metadata["envelopes"]:
         name = str(envelope["name"])
         context = artifact_root / "baseline-build-contexts" / name
@@ -63,7 +192,13 @@ def main() -> int:
             raise SystemExit(f"refusing to overwrite staged context: {context}")
         for directory in (context / "source", context / "envelope", context / "adapter", context / "wheelhouse"):
             directory.mkdir(parents=True, exist_ok=True)
-        copy_clean(Path(str(envelope["source"]["path"])), context / "source")
+        source_repo = Path(str(envelope["source"]["path"])).resolve()
+        materialize_git_tree(
+            source_repo,
+            context / "source",
+            commit=str(envelope["source"]["commit"]),
+            tree=str(envelope["source"]["tree_hash"]),
+        )
         lock = ROOT / str(envelope["dependency_lock"]["path"])
         wheelhouse = wheelhouse_root / name
         if not wheelhouse.is_dir():
@@ -71,13 +206,17 @@ def main() -> int:
         materialize_lock(lock, wheelhouse, context / "envelope" / lock.name)
         for wheel in wheelhouse.iterdir():
             if wheel.is_file():
-                link_or_copy(wheel, context / "wheelhouse" / wheel.name)
+                shutil.copyfile(wheel, context / "wheelhouse" / wheel.name)
         for role, source_path in dict(envelope["adapter_paths"]).items():
             source = Path(str(source_path))
-            shutil.copyfile(source, context / "adapter" / f"{role}-{source.name}")
-        shutil.copyfile(ROOT / "docker/adapter/provider_shim.py", context / "adapter/provider_shim.py")
-        shutil.copyfile(ROOT / "docker/adapter/entrypoint.sh", context / "adapter/entrypoint.sh")
-        shutil.copyfile(ROOT / "docker/adapter/runtime_entrypoint.py", context / "adapter/runtime_entrypoint.py")
+            copy_from_materialized_source(
+                context / "source", source, context / "adapter" / f"{role}-{source.name}", repo=source_repo,
+            )
+        for adapter_name in ("provider_shim.py", "entrypoint.sh", "runtime_entrypoint.py", "baseline_driver.py"):
+            copy_from_git_object(
+                framework_repo, ROOT / "docker/adapter" / adapter_name,
+                context / "adapter" / adapter_name, commit=framework_commit,
+            )
         manifest["contexts"][name] = {
             "path": str(context),
             "source_commit": envelope["source"]["commit"],
@@ -96,6 +235,7 @@ def main() -> int:
         "recipe": str(relay_context / "Dockerfile"),
         "source": str(relay_context / "relay/relay.py"),
     }
+    scan_context(artifact_root)
     output = artifact_root / "baseline-build-contexts" / "context-manifest.json"
     output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({"output": str(output), "contexts": len(manifest["contexts"])}, sort_keys=True))

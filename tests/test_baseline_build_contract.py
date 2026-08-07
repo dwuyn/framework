@@ -40,7 +40,8 @@ def test_provider_bundle_refuses_direct_vertex_and_root() -> None:
     assert "googleapis.com" in provider
     assert "refuses root" in entrypoint
     assert "unset GOOGLE_APPLICATION_CREDENTIALS" in entrypoint
-    assert "paid stage requires a locked framework-specific automation adapter" in runtime
+    assert "VERIPLANPT_ADAPTER_PRODUCTION" in runtime
+    assert "adapter-3.0" in runtime
 
 
 def test_rebuild_writes_strict_four_baseline_lock() -> None:

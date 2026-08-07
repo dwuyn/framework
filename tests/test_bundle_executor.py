@@ -18,13 +18,14 @@ def _write_bundle(root: Path, kind: str, script: str, *, entrypoint: str = "bin/
     entrypoint_path.write_text(textwrap.dedent(script).lstrip(), encoding="utf-8")
     entrypoint_path.chmod(entrypoint_path.stat().st_mode | stat.S_IXUSR)
     manifest = {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "kind": kind,
         "source_commit": "a" * 40,
         "entrypoint": entrypoint,
     }
+    manifest["image_digest"] = "sha256:" + "c" * 64
     if kind == "evaluator":
-        manifest.update({"feature_schema_hash": "b" * 64, "image_digest": "sha256:" + "c" * 64})
+        manifest["feature_schema_hash"] = "b" * 64
     (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return bundle
 
@@ -40,7 +41,7 @@ _PASS = """
     assert not any(name.startswith('GOOGLE_') for name in os.environ)
     assert 'GOOGLE_APPLICATION_CREDENTIALS' not in os.environ
     json.load(open(args.run_artifact, encoding='utf-8'))
-    json.dump({'kind': 'KIND', 'status': 'passed'}, open(args.output, 'w', encoding='utf-8'))
+    json.dump({'schema_version': '2.0.0', 'kind': 'KIND', 'status': 'passed', 'outcome': {}}, open(args.output, 'w', encoding='utf-8'))
 """
 
 
@@ -55,7 +56,7 @@ def test_independent_bundle_executor_passes_and_strips_cloud_environment(tmp_pat
 
     verdict = executor(evaluator, tmp_path, {"status": "public"})
 
-    assert verdict == {"kind": "evaluator", "status": "passed"}
+    assert verdict == {"schema_version": "2.0.0", "kind": "evaluator", "status": "passed", "outcome": {}}
 
 
 def test_independent_bundle_executor_rejects_wrong_bundle_kind(tmp_path: Path) -> None:
@@ -63,7 +64,7 @@ def test_independent_bundle_executor_rejects_wrong_bundle_kind(tmp_path: Path) -
     oracle = _write_bundle(tmp_path, "oracle", _PASS.replace("KIND", "oracle"))
     (oracle / "manifest.json").write_text(
         json.dumps({
-            "schema_version": "1.0.0", "kind": "evaluator", "source_commit": "a" * 40,
+            "schema_version": "2.0.0", "kind": "evaluator", "source_commit": "a" * 40,
             "entrypoint": "bin/evaluate", "feature_schema_hash": "b" * 64,
             "image_digest": "sha256:" + "c" * 64,
         }),
@@ -151,4 +152,4 @@ def test_independent_bundle_executor_supports_archive_bundle(tmp_path: Path) -> 
 
     verdict = executor(archive, tmp_path, {"status": "public"})
 
-    assert verdict == {"kind": "evaluator", "status": "passed"}
+    assert verdict == {"schema_version": "2.0.0", "kind": "evaluator", "status": "passed", "outcome": {}}

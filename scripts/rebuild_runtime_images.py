@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             "wrapper": context / "adapter/wrapper-wrapper.py",
             "runtime": context / "adapter/runtime_entrypoint.py",
         }
-        adapter_hash = _adapter_bundle_hash({key: str(path) for key, path in adapter_paths.items()}, "adapter-2.2")
+        adapter_hash = _adapter_bundle_hash({key: str(path) for key, path in adapter_paths.items()}, "adapter-3.0")
         dependency_hash = _sha(next((context / "envelope").iterdir()))
         recipe_hash = _sha(recipe)
         commit = _git(source, "rev-parse", "HEAD")
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         digest, labels = _inspect(image)
         identity = {
             "name": name, "image": image, "image_id": digest, "image_digest": digest,
-            "adapter_bundle_hash": adapter_hash, "adapter_contract_version": "adapter-2.2",
+            "adapter_bundle_hash": adapter_hash, "adapter_contract_version": "adapter-3.0",
             "dependency_lock_hash": dependency_hash, "recipe_hash": recipe_hash,
             "source_commit": commit, "source_tree_hash": tree_hash, "image_labels": labels,
         }
@@ -117,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
                 "schema_version": "2.0.0", "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "name": name, "source": {"path": str(source), "commit": commit, "tree_hash": tree_hash},
                 "recipe": {"path": str(recipe), "sha256": recipe_hash},
-                "adapter_bundle": {"sha256": adapter_hash, "contract_version": "adapter-2.2"},
+                "adapter_bundle": {"sha256": adapter_hash, "contract_version": "adapter-3.0"},
                 "dependency_lock": {"path": str(context / "envelope" / next((context / "envelope").iterdir()).name), "sha256": dependency_hash},
                 "image": identity,
             }
@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
                 "os_package_requirements": envelope.get("os_package_requirements", []),
                 "adapter_bundle": {"common": str(adapter_paths["common"]), "framework": str(adapter_paths["framework"]),
                                    "wrapper": str(adapter_paths["wrapper"]), "runtime": str(adapter_paths["runtime"]),
-                                   "contract_version": "adapter-2.2"},
+                                   "contract_version": "adapter-3.0"},
             })
     relay_context = Path(str(contexts["gateway-relay"]["path"])).resolve()
     relay_recipe = relay_context / "Dockerfile"

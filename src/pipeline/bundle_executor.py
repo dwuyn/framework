@@ -22,7 +22,7 @@ class BundleExecutionError(RuntimeError):
 _COMMIT_LENGTH = 40
 _HASH_LENGTH = 64
 _MAX_OUTPUT_BYTES = 64 * 1024
-_SUPPORTED_SCHEMA = "1.0.0"
+_SUPPORTED_SCHEMA = "2.0.0"
 
 
 def _archive_target(root: Path, name: str) -> Path:
@@ -135,6 +135,12 @@ def _read_manifest(root: Path, expected_kind: str) -> tuple[dict[str, Any], Path
             raise BundleExecutionError("evaluator image_digest is invalid")
         if any(character not in "0123456789abcdef" for character in image_digest[7:]):
             raise BundleExecutionError("evaluator image_digest is invalid")
+    else:
+        image_digest = value.get("image_digest")
+        if not isinstance(image_digest, str) or not image_digest.startswith("sha256:") or len(image_digest) != 71:
+            raise BundleExecutionError("oracle image_digest is invalid")
+        if any(character not in "0123456789abcdef" for character in image_digest[7:]):
+            raise BundleExecutionError("oracle image_digest is invalid")
     entrypoint_path = Path(entrypoint)
     if entrypoint_path.is_absolute() or any(part in {"", ".", ".."} for part in entrypoint_path.parts):
         raise BundleExecutionError("bundle entrypoint must be a safe relative path")
@@ -233,7 +239,10 @@ class IndependentBundleExecutor:
                 raise
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise BundleExecutionError("bundle verdict is not valid JSON") from exc
-            if not isinstance(verdict, dict) or verdict.get("kind") != expected_kind or verdict.get("status") != "passed":
+            if not isinstance(verdict, dict) or verdict.get("schema_version") != "2.0.0" or verdict.get("kind") != expected_kind or verdict.get("status") not in {"passed", "failed"}:
                 raise BundleExecutionError("bundle verdict did not pass")
-            return {"kind": expected_kind, "status": "passed"}
-
+            if verdict.get("status") == "passed" and not isinstance(verdict.get("outcome"), dict):
+                raise BundleExecutionError("passed bundle verdict is missing outcome")
+            if verdict.get("status") == "failed" and not isinstance(verdict.get("errors"), list):
+                raise BundleExecutionError("failed bundle verdict is missing errors")
+            return dict(verdict)

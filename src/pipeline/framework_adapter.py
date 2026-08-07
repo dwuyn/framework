@@ -38,6 +38,7 @@ __all__ = [
 ]
 
 RUN_ARTIFACT_VERSION = "2.1.0"
+ADAPTER_CONTRACT_VERSION = "adapter-3.0"
 _HEX64 = set("0123456789abcdef")
 
 
@@ -488,18 +489,21 @@ class RunArtifact:
         required_identity = {"name", "repository_url", "commit", "image_digest", "adapter_version"}
         if not required_identity.issubset(self.framework_identity):
             raise ValueError("RunArtifact.framework_identity is incomplete")
+        adapter_version = str(self.framework_identity["adapter_version"])
+        if strict_runtime and adapter_version not in {ADAPTER_CONTRACT_VERSION, f"{self.framework_identity['name'].lower()}-{ADAPTER_CONTRACT_VERSION}"}:
+            raise ValueError("strict runtime requires adapter-3.0")
         if not str(self.framework_identity.get("repository_url", "")).startswith(("https://", "git@")):
             raise ValueError("RunArtifact.framework_identity.repository_url must be an upstream URL")
         if not str(self.framework_identity.get("image_digest", "")).startswith("sha256:"):
             raise ValueError("RunArtifact.framework_identity.image_digest must be immutable")
         required_context = {"dataset_lock_hash", "framework_commit", "evaluator_commit", "stage"}
         if strict_runtime:
-            required_context.add("gateway_relay_lock_hash")
+            required_context.update({"gateway_relay_lock_hash", "target_runtime_lock_hash"})
         if not required_context.issubset(self.run_context):
             raise ValueError("RunArtifact.run_context is incomplete")
         for key in (
             "dataset_lock_hash", "training_protocol_hash", "policy_lock_hash", "matrix_hash",
-            "gateway_relay_lock_hash",
+            "gateway_relay_lock_hash", "target_runtime_lock_hash",
         ):
             if key == "gateway_relay_lock_hash" and not self.run_context.get(key):
                 continue
@@ -541,6 +545,8 @@ def _capture_env(snapshot_dir: str = "") -> EnvironmentManifest:
         ).stdout.strip())
     except Exception:
         pass
+    if not commit:
+        commit = os.environ.get("VERIPLANPT_FRAMEWORK_COMMIT", "")
 
     snap_hash = ""
     if snapshot_dir and os.path.isdir(snapshot_dir):
@@ -591,6 +597,7 @@ class FrameworkAdapter:
         repetition: int = 1,
         run_dir: str = "",
         condition: str = "",
+        run_id: str = "",
     ) -> RunArtifact:
         """Execute one benchmark run and return the normalised RunArtifact.
 
@@ -618,7 +625,7 @@ class FrameworkAdapter:
             "condition": condition,
             "repetition": repetition,
         }, sort_keys=True)
-        thread_id = "vp-" + hashlib.sha256(identity_blob.encode("utf-8")).hexdigest()[:24]
+        thread_id = run_id or "vp-" + hashlib.sha256(identity_blob.encode("utf-8")).hexdigest()[:24]
         graph, config = build_graph(thread_id)
 
         # Parse first port from port_range for initial state.
@@ -750,12 +757,13 @@ class FrameworkAdapter:
                 ),
                 "commit": env.framework_commit,
                 "image_digest": os.environ.get("VERIPLANPT_IMAGE_DIGEST", ""),
-                "adapter_version": "veriplanpt-adapter-2.1",
+                "adapter_version": "veriplanpt-adapter-3.0",
             },
             run_context={
                 "dataset_lock_hash": os.environ.get("VERIPLANPT_DATASET_LOCK_HASH", ""),
                 "training_protocol_hash": os.environ.get("VERIPLANPT_TRAINING_PROTOCOL_HASH", ""),
                 "gateway_relay_lock_hash": os.environ.get("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH", ""),
+                "target_runtime_lock_hash": os.environ.get("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH", ""),
                 "policy_lock_hash": os.environ.get("VERIPLANPT_POLICY_LOCK_HASH", ""),
                 "matrix_hash": os.environ.get("VERIPLANPT_MATRIX_HASH", ""),
                 "framework_commit": env.framework_commit,

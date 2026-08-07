@@ -171,7 +171,7 @@ def run_baseline_command(
             ),
             "commit": os.environ.get(f"VERIPLANPT_{framework_key}_COMMIT", ""),
             "image_digest": os.environ.get(f"VERIPLANPT_{framework_key}_IMAGE_DIGEST", ""),
-            "adapter_version": f"{framework.lower()}-adapter-2.1",
+            "adapter_version": f"{framework.lower()}-adapter-3.0",
         },
         run_context={
             "dataset_lock_hash": os.environ.get("VERIPLANPT_DATASET_LOCK_HASH", ""),
