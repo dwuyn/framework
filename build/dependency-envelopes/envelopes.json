@@ -4,6 +4,7 @@
       "adapter_paths": {
         "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
         "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/pentest_agent.py",
+        "runtime": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/runtime_entrypoint.py",
         "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
       },
       "build_delta": {},
@@ -14,7 +15,7 @@
         "sha256": "e8bd7a78f565579e670857af563bf27534ea28f19b51fd8076d99f7a95f6e3f7"
       },
       "input_hashes": {
-        "pyproject.toml": "c0cd0b10f601f71625124c6cd2b6b81f3d459eba6b204b7d5a7b46cd167fb328",
+        "pyproject.toml": "71cf1212c9ab83b43a287ecaf0e5190c69f384ad094bcc984ea2797c91b63eda",
         "requirements.txt": "1851f74d22707f54d64fab6e7f54e763d109a994581e109baf8e8fbb0707897d"
       },
       "name": "VeriPlanPT",
@@ -22,10 +23,10 @@
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/veriplanpt.Dockerfile",
       "resolver_overrides": [],
       "source": {
-        "commit": "67d447fe715176262129880feb769f51cb525dbf",
+        "commit": "0d28db620cf498f8df57b096c79d35b9dd7dbd1b",
         "path": "/home/dwyn/Research/test/pentest-agent_new",
-        "remote": "",
-        "tree_hash": "2aaf10464d2c04874fc14a8a0866e86483652ac8"
+        "remote": "https://github.com/dwuyn/framework.git",
+        "tree_hash": "8b249bb84e6c066197cdc3af1a526058e23eb3bf"
       },
       "source_dependency_lock_sha256": "",
       "target": {
@@ -49,6 +50,7 @@
       "adapter_paths": {
         "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
         "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/pentest_agent.py",
+        "runtime": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/runtime_entrypoint.py",
         "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
       },
       "build_delta": {},
@@ -94,6 +96,7 @@
       "adapter_paths": {
         "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
         "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/pentest_gpt.py",
+        "runtime": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/runtime_entrypoint.py",
         "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
       },
       "build_delta": {},
@@ -138,6 +141,7 @@
       "adapter_paths": {
         "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
         "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/vuln_bot.py",
+        "runtime": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/runtime_entrypoint.py",
         "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
       },
       "build_delta": {},
@@ -182,6 +186,7 @@
       "adapter_paths": {
         "common": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/provider_shim.py",
         "framework": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/hack_synth.py",
+        "runtime": "/home/dwyn/Research/test/pentest-agent_new/docker/adapter/runtime_entrypoint.py",
         "wrapper": "/home/dwyn/Research/test/pentest-agent_new/src/baselines/wrapper.py"
       },
       "build_delta": {

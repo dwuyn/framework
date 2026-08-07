@@ -8,6 +8,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,26 +31,52 @@ def target_python() -> str:
     return result.stdout.strip().splitlines()[-1]
 
 
-def download(lock: Path, destination: Path, *, cpu: bool, python: str) -> None:
+def download(
+    lock: Path,
+    destination: Path,
+    *,
+    cpu: bool,
+    python: str,
+    attempts: int,
+    network_timeout: int,
+) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     command = [
         python, "-m", "pip", "download", "--dest", str(destination),
         "--require-hashes", "--prefer-binary",
+        "--timeout", str(network_timeout), "--retries", "0",
         "-r", str(lock),
     ]
     if cpu:
         command.extend(["--extra-index-url", "https://download.pytorch.org/whl/cpu"])
-    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
-    if result.returncode:
-        detail = (result.stderr or result.stdout).strip()[-4_000:]
-        raise RuntimeError(f"wheelhouse download failed for {lock}: {detail}")
+    last_detail = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            result = subprocess.run(
+                command, cwd=ROOT, capture_output=True, text=True, check=False,
+                timeout=max(300, network_timeout * 20),
+            )
+        except subprocess.TimeoutExpired as exc:
+            last_detail = f"attempt {attempt} timed out after {max(300, network_timeout * 20)}s: {exc}"
+            result = None
+        if result is not None and result.returncode == 0:
+            return
+        if result is not None:
+            last_detail = (result.stderr or result.stdout).strip()[-4_000:]
+        if attempt < attempts:
+            time.sleep(min(2 ** (attempt - 1), 8))
+    raise RuntimeError(f"wheelhouse download failed for {lock} after {attempts} attempts: {last_detail}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--metadata", default=str(ROOT / "build/dependency-envelopes/envelopes.json"))
     parser.add_argument("--artifact-root", default=str(DEFAULT_ARTIFACT_ROOT))
+    parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--network-timeout", type=int, default=30)
     args = parser.parse_args()
+    if args.attempts < 1 or args.network_timeout < 1:
+        raise SystemExit("--attempts and --network-timeout must be positive")
     metadata = json.loads(Path(args.metadata).read_text(encoding="utf-8"))
     artifact_root = Path(args.artifact_root).resolve()
     manifest_path = artifact_root / "wheelhouse-manifest.json"
@@ -74,7 +101,10 @@ def main() -> int:
                     child.unlink()
                 elif child.is_dir():
                     shutil.rmtree(child)
-        download(lock, destination, cpu=name == "HackSynth", python=python)
+        download(
+            lock, destination, cpu=name == "HackSynth", python=python,
+            attempts=args.attempts, network_timeout=args.network_timeout,
+        )
         files = []
         for path in sorted(destination.iterdir()):
             if not path.is_file():
