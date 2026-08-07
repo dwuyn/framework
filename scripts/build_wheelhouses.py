@@ -31,6 +31,26 @@ def target_python() -> str:
     return result.stdout.strip().splitlines()[-1]
 
 
+def verified_reuse(destination: Path, previous: dict[str, Any], lock_sha256: str) -> bool:
+    """Reuse only a complete wheelhouse whose prior manifest is self-consistent."""
+    if previous.get("dependency_lock_sha256") != lock_sha256:
+        return False
+    records = previous.get("files")
+    if not isinstance(records, list) or not records:
+        return False
+    expected = {str(item.get("filename")): item for item in records if isinstance(item, dict)}
+    actual = {path.name: path for path in destination.iterdir() if path.is_file()}
+    if set(expected) != set(actual):
+        return False
+    for filename, record in expected.items():
+        path = actual[filename]
+        if int(record.get("size", -1)) != path.stat().st_size:
+            return False
+        if str(record.get("sha256", "")) != sha256_file(path):
+            return False
+    return True
+
+
 def download(
     lock: Path,
     destination: Path,
@@ -90,10 +110,8 @@ def main() -> int:
         lock = ROOT / str(envelope["dependency_lock"]["path"])
         destination = artifact_root / "wheelhouses" / name
         previous = previous_manifest.get(name, {})
-        reusable = (
-            destination.is_dir()
-            and previous.get("dependency_lock_sha256") == envelope["dependency_lock"]["sha256"]
-            and any(destination.iterdir())
+        reusable = destination.is_dir() and verified_reuse(
+            destination, previous, str(envelope["dependency_lock"]["sha256"]),
         )
         if destination.exists() and not reusable:
             for child in destination.iterdir():
@@ -101,10 +119,11 @@ def main() -> int:
                     child.unlink()
                 elif child.is_dir():
                     shutil.rmtree(child)
-        download(
-            lock, destination, cpu=name == "HackSynth", python=python,
-            attempts=args.attempts, network_timeout=args.network_timeout,
-        )
+        if not reusable:
+            download(
+                lock, destination, cpu=name == "HackSynth", python=python,
+                attempts=args.attempts, network_timeout=args.network_timeout,
+            )
         files = []
         for path in sorted(destination.iterdir()):
             if not path.is_file():

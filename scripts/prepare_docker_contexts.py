@@ -209,9 +209,16 @@ def main() -> int:
                 shutil.copyfile(wheel, context / "wheelhouse" / wheel.name)
         for role, source_path in dict(envelope["adapter_paths"]).items():
             source = Path(str(source_path))
-            copy_from_materialized_source(
-                context / "source", source, context / "adapter" / f"{role}-{source.name}", repo=source_repo,
-            )
+            destination = context / "adapter" / f"{role}-{source.name}"
+            try:
+                source.resolve().relative_to(source_repo)
+            except ValueError:
+                # Adapter code is first-party and must come from the pinned
+                # framework Git object, even when the runtime source is an
+                # external baseline tree.
+                copy_from_git_object(framework_repo, source, destination, commit=framework_commit)
+            else:
+                copy_from_materialized_source(context / "source", source, destination, repo=source_repo)
         for adapter_name in ("provider_shim.py", "entrypoint.sh", "runtime_entrypoint.py", "baseline_driver.py"):
             copy_from_git_object(
                 framework_repo, ROOT / "docker/adapter" / adapter_name,
