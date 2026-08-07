@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -35,6 +36,14 @@ def _run_git(source: Path, *arguments: str) -> str:
     if result.returncode:
         raise SystemExit(f"pinned source Git query failed: {result.stderr.strip()[-1000:]}")
     return result.stdout.strip()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _forbidden_path(relative: str) -> str | None:
@@ -170,7 +179,9 @@ def main() -> int:
     parser.add_argument("--wheelhouse-root", required=True,
                         help="read-only verified wheelhouse root containing one directory per framework")
     args = parser.parse_args()
-    metadata = json.loads(Path(args.metadata).read_text(encoding="utf-8"))
+    metadata_path = Path(args.metadata).resolve()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata_sha256 = _sha256_file(metadata_path)
     artifact_root = Path(args.staging_root).resolve()
     wheelhouse_root = Path(args.wheelhouse_root).resolve()
     if artifact_root == wheelhouse_root or artifact_root in wheelhouse_root.parents:
@@ -178,7 +189,12 @@ def main() -> int:
     if artifact_root.exists() and any(artifact_root.iterdir()):
         raise SystemExit("staging root must be new and empty")
     artifact_root.mkdir(parents=True, exist_ok=True)
-    manifest: dict[str, Any] = {"schema_version": "1.0.0", "contexts": {}}
+    manifest: dict[str, Any] = {
+        "schema_version": "1.1.0",
+        "metadata": {"path": str(metadata_path), "sha256": metadata_sha256},
+        "metadata_sha256": metadata_sha256,
+        "contexts": {},
+    }
     framework_envelope = next(
         item for item in metadata["envelopes"] if str(item["name"]) == "VeriPlanPT"
     )
@@ -228,6 +244,7 @@ def main() -> int:
             "path": str(context),
             "source_commit": envelope["source"]["commit"],
             "source_tree_hash": envelope["source"]["tree_hash"],
+            "dependency_lock_sha256": envelope["dependency_lock"]["sha256"],
             "dependency_lock": str(context / "envelope" / lock.name),
             "wheelhouse": str(context / "wheelhouse"),
         }

@@ -46,6 +46,9 @@ def test_provider_bundle_refuses_direct_vertex_and_root() -> None:
 
 def test_rebuild_writes_strict_four_baseline_lock() -> None:
     script = (ROOT / "scripts/rebuild_runtime_images.py").read_text()
+    assert 'parser.add_argument("--metadata", required=True' in script
+    assert "--pull=false" in script
+    assert "metadata/context SHA-256 mismatch" in script
     assert 'item["name"] != "VeriPlanPT"' in script
     assert "generate_baseline_lock(baseline_specs" in script
 

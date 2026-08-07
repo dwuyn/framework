@@ -11,8 +11,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,13 +36,6 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _git(root: Path, *args: str) -> str:
-    result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False)
-    if result.returncode:
-        raise RuntimeError(f"git {' '.join(args)} failed for {root}")
-    return result.stdout.strip()
-
-
 def _inspect(image: str) -> tuple[str, dict[str, str]]:
     result = subprocess.run(
         ["docker", "image", "inspect", "--format", "{{json .}}", image],
@@ -56,8 +51,63 @@ def _inspect(image: str) -> tuple[str, dict[str, str]]:
     return digest, {str(key): str(item) for key, item in labels.items()}
 
 
+def _context_manifest(staging_root: Path, metadata_path: Path) -> tuple[dict[str, Any], str]:
+    manifest_path = staging_root / "baseline-build-contexts/context-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    metadata_sha256 = _sha(metadata_path)
+    if manifest.get("metadata_sha256") != metadata_sha256:
+        raise RuntimeError("metadata/context SHA-256 mismatch")
+    metadata_record = manifest.get("metadata")
+    if not isinstance(metadata_record, dict) or metadata_record.get("sha256") != metadata_sha256:
+        raise RuntimeError("metadata/context SHA-256 mismatch")
+    contexts = manifest.get("contexts")
+    if not isinstance(contexts, dict):
+        raise RuntimeError("context manifest does not contain contexts")
+    return contexts, metadata_sha256
+
+
+def _dependency_lock(context: Mapping[str, Any], envelope: Mapping[str, Any]) -> tuple[Path, str]:
+    lock_path = Path(str(context.get("dependency_lock", ""))).resolve()
+    expected = str(envelope["dependency_lock"]["sha256"])
+    if not lock_path.is_file():
+        raise RuntimeError(f"staged dependency lock is missing: {lock_path}")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise RuntimeError("metadata dependency lock hash is invalid")
+    if context.get("dependency_lock_sha256") != expected:
+        raise RuntimeError("metadata/context dependency-lock hash mismatch")
+    if lock_path.name != Path(str(envelope["dependency_lock"]["path"])).name:
+        raise RuntimeError("metadata/context dependency-lock path mismatch")
+    return lock_path, expected
+
+
+def _build_arguments(
+    name: str,
+    envelope: Mapping[str, Any],
+    *,
+    dependency_hash: str,
+    recipe_hash: str,
+    adapter_hash: str,
+) -> tuple[str, str, dict[str, str]]:
+    source = envelope.get("source")
+    if not isinstance(source, Mapping):
+        raise RuntimeError(f"metadata source is invalid for {name}")
+    commit = str(source["commit"])
+    tree_hash = str(source["tree_hash"])
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[0-9a-f]{40}", tree_hash):
+        raise RuntimeError(f"metadata source identity is invalid for {name}")
+    args_for_build = {
+        "ADAPTER_BUNDLE_HASH": adapter_hash,
+        "DEPENDENCY_LOCK_HASH": dependency_hash,
+        "GIT_TREE_HASH": tree_hash,
+        "RECIPE_HASH": recipe_hash,
+    }
+    args_for_build["FRAMEWORK_COMMIT" if name == "VeriPlanPT" else "UPSTREAM_COMMIT"] = commit
+    return commit, tree_hash, args_for_build
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--metadata", required=True, help="receipt-scoped envelope metadata")
     parser.add_argument("--staging-root", required=True)
     parser.add_argument("--output-baseline-lock", required=True)
     parser.add_argument("--output-native-identity", required=True)
@@ -66,8 +116,10 @@ def main(argv: list[str] | None = None) -> int:
     staging_root = Path(args.staging_root).resolve()
     if shutil.disk_usage(staging_root).free < 50 * 1024 ** 3:
         raise SystemExit("runtime image rebuild requires at least 50 GiB free disk")
-    contexts = json.loads((staging_root / "baseline-build-contexts/context-manifest.json").read_text(encoding="utf-8"))["contexts"]
-    envelopes = json.loads((ROOT / "build/dependency-envelopes/envelopes.json").read_text(encoding="utf-8"))["envelopes"]
+    metadata_path = Path(args.metadata).resolve()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    contexts, metadata_sha256 = _context_manifest(staging_root, metadata_path)
+    envelopes = metadata["envelopes"]
     by_name = {str(item["name"]): item for item in envelopes}
     observed: list[dict[str, Any]] = []
     native: dict[str, Any] = {}
@@ -75,7 +127,9 @@ def main(argv: list[str] | None = None) -> int:
         context = Path(str(contexts[name]["path"])).resolve()
         recipe = ROOT / ("docker/veriplanpt.Dockerfile" if name == "VeriPlanPT" else f"docker/baselines/{name}.Dockerfile")
         envelope = by_name[name]
-        source = Path(str(envelope["source"]["path"])).resolve()
+        context_record = contexts[name]
+        if context_record.get("source_commit") != envelope["source"]["commit"] or context_record.get("source_tree_hash") != envelope["source"]["tree_hash"]:
+            raise RuntimeError(f"metadata/context source identity mismatch for {name}")
         adapter_paths = {
             "common": context / "adapter/provider_shim.py",
             "framework": next(context.joinpath("adapter").glob("framework-*.py")),
@@ -83,21 +137,12 @@ def main(argv: list[str] | None = None) -> int:
             "runtime": context / "adapter/runtime_entrypoint.py",
         }
         adapter_hash = _adapter_bundle_hash({key: str(path) for key, path in adapter_paths.items()}, "adapter-3.0")
-        dependency_hash = _sha(next((context / "envelope").iterdir()))
+        _lock_path, dependency_hash = _dependency_lock(context_record, envelope)
         recipe_hash = _sha(recipe)
-        commit = _git(source, "rev-parse", "HEAD")
-        tree_hash = _git(source, "rev-parse", "HEAD^{tree}")
-        args_for_build = {
-            "DEPENDENCY_LOCK_HASH": dependency_hash,
-            "RECIPE_HASH": recipe_hash,
-            "ADAPTER_BUNDLE_HASH": adapter_hash,
-            "GIT_TREE_HASH": tree_hash,
-        }
-        if name == "VeriPlanPT":
-            args_for_build["FRAMEWORK_COMMIT"] = commit
-        else:
-            args_for_build["UPSTREAM_COMMIT"] = commit
-        command = ["docker", "build", "--network=none", "--tag", image, "--file", str(recipe)]
+        commit, tree_hash, args_for_build = _build_arguments(
+            name, envelope, dependency_hash=dependency_hash, recipe_hash=recipe_hash, adapter_hash=adapter_hash,
+        )
+        command = ["docker", "build", "--network=none", "--pull=false", "--tag", image, "--file", str(recipe)]
         for key, value in sorted(args_for_build.items()):
             command.extend(["--build-arg", f"{key}={value}"])
         command.append(str(context))
@@ -106,24 +151,29 @@ def main(argv: list[str] | None = None) -> int:
             detail = (result.stderr or result.stdout).strip()[-4000:]
             raise RuntimeError(f"Docker build failed for {name}: {detail}")
         digest, labels = _inspect(image)
+        commit_label = labels.get("com.veriplanpt.upstream-commit")
+        tree_label = labels.get("com.veriplanpt.git-tree-hash")
+        if commit_label != commit or tree_label != tree_hash:
+            raise RuntimeError(f"Docker labels do not match receipt-scoped metadata for {name}")
         identity = {
             "name": name, "image": image, "image_id": digest, "image_digest": digest,
             "adapter_bundle_hash": adapter_hash, "adapter_contract_version": "adapter-3.0",
             "dependency_lock_hash": dependency_hash, "recipe_hash": recipe_hash,
             "source_commit": commit, "source_tree_hash": tree_hash, "image_labels": labels,
+            "metadata_sha256": metadata_sha256,
         }
         if name == "VeriPlanPT":
             native = {
                 "schema_version": "2.0.0", "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                "name": name, "source": {"path": str(source), "commit": commit, "tree_hash": tree_hash},
+                "name": name, "source": {"path": str(envelope["source"]["path"]), "commit": commit, "tree_hash": tree_hash},
                 "recipe": {"path": str(recipe), "sha256": recipe_hash},
                 "adapter_bundle": {"sha256": adapter_hash, "contract_version": "adapter-3.0"},
                 "dependency_lock": {"path": str(context / "envelope" / next((context / "envelope").iterdir()).name), "sha256": dependency_hash},
-                "image": identity,
+                "metadata_sha256": metadata_sha256, "image": identity,
             }
         else:
             observed.append({
-                "name": name, "path": str(source), "repo_url": str(envelope["source"]["remote"]),
+                "name": name, "path": str(envelope["source"]["path"]), "repo_url": str(envelope["source"]["remote"]),
                 "recipe_path": str(recipe), "build_context_path": str(context), "image": image,
                 "input_hashes": envelope.get("input_hashes", {}),
                 "dependency_lock_path": str(context / "envelope" / next((context / "envelope").iterdir()).name),
@@ -138,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     relay_recipe_hash = _sha(relay_recipe)
     relay_source_hash = _sha(relay_source)
     relay_build = [
-        "docker", "build", "--network=none", "--tag", RELAY_IMAGE,
+        "docker", "build", "--network=none", "--pull=false", "--tag", RELAY_IMAGE,
         "--file", str(relay_recipe), "--build-arg", f"HOST_UID={os.geteuid()}",
         "--build-arg", f"HOST_GID={os.getegid()}",
         "--build-arg", f"RECIPE_HASH={relay_recipe_hash}",
