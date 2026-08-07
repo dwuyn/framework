@@ -8,7 +8,6 @@ import os
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-
 SOCKET = "/run/veriplanpt-gateway/gateway.sock"
 
 

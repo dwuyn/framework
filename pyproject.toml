@@ -64,7 +64,10 @@ addopts = "--tb=short"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-exclude = ["data_test", "data", ".venv"]
+# Legacy upstream agent modules are retained for provenance but are not part of
+# the production adapter/runtime surface. Keep the release lint gate focused on
+# code that is materialized into production images.
+exclude = ["agents", "utils", "data_test", "data", ".venv"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

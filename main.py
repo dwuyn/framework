@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import sys
 import time
@@ -43,11 +42,11 @@ dotenv.load_dotenv()
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _ROOT)
 
-from src.graph import build_graph
-from src.state import PentestState, initial_state
-from src.utils.logging_config import setup_logging
-from src.utils.metrics_collector import MetricsCollector
-from src.utils.structured_logger import get_structured_logger
+from src.graph import build_graph  # noqa: E402
+from src.state import PentestState, initial_state  # noqa: E402
+from src.utils.logging_config import setup_logging  # noqa: E402
+from src.utils.metrics_collector import MetricsCollector  # noqa: E402
+from src.utils.structured_logger import get_structured_logger  # noqa: E402
 
 try:
     from langgraph.errors import GraphRecursionError
@@ -100,7 +99,6 @@ def _stream_and_print(graph, state: PentestState, config: dict, skip_phases: lis
 
     for event in graph.stream(state, config=config, stream_mode="updates"):
         for node_name, node_output in event.items():
-            phase = node_output.get("current_phase", "")
             step_r = node_output.get("recon_step_count")
             step_e = node_output.get("execution_step_count")
 
