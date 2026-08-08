@@ -204,7 +204,15 @@ class InvocationLedger:
                 if self.path is not None:
                     self._write_locked(self.path)
             except Exception:
-                self._records.pop()
+                # Atomic write-through failed.  An in-memory tombstone is
+                # sticky so a durable classification is never destroyed:
+                # later lookups report "unknown", never "none".  The gateway
+                # converts this into BillingUnknownError and the coordinator
+                # halts with billing_unknown instead of misreading the moment
+                # as a pre-response infrastructure failure.
+                record["billing_status"] = "unknown"
+                record["usage"] = None
+                record["cost_usd"] = None
                 raise
         return dict(record)
 

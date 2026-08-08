@@ -265,7 +265,10 @@ class RuntimeRunner:
                             f"known-billed invocation failed for {cell['run_id']}",
                             cost_usd=float(state["cost_usd"]),
                         ) from exc
-                    coordinator._halt("runtime_cell_failure", str(exc))
+                    # No provider response was observed: the failure is a
+                    # pre-response infrastructure fault.  Leave the phase
+                    # running and let the coordinator retry (max 3) instead
+                    # of preemptively halting the whole phase.
                     raise
                 with self._result_lock:
                     result_by_id[str(cell["run_id"])] = result

@@ -215,7 +215,7 @@ def test_atomic_ledger_persistence_failure_halts_unknown(tmp_path, monkeypatch) 
     )
     with pytest.raises(BillingUnknownError):
         gateway.invoke(_request(profile), token="test-token")
-    assert ledger.lookup("run-1")["billing_status"] == "none"
+    assert ledger.lookup("run-1")["billing_status"] == "unknown"
 
 
 def test_ledger_reads_r5_schema_without_rewriting_it(tmp_path) -> None:
@@ -281,6 +281,43 @@ def test_http_boundary_returns_403_for_auth_and_502_for_provider(tmp_path) -> No
             with pytest.raises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(request)
             assert error.value.code == expected
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_http_ledger_write_failure_is_502_and_sticky_unknown(tmp_path, monkeypatch) -> None:
+    """End-to-end via the HTTP boundary: a durable ledger write failure on a
+    provider success must reach the client as a sanitized 502 AND leave a
+    sticky in-memory unknown record that the coordinator reads as unknown,
+    not as a pre-response infrastructure failure."""
+    profile = _profile("gemini-3.5-flash")
+    ledger = InvocationLedger(
+        phase="canary", gateway_relay_lock_hash="a" * 64,
+        path=tmp_path / "ledger.json",
+    )
+
+    def fail(_destination):
+        raise OSError("disk failure")
+
+    monkeypatch.setattr(ledger, "_write_locked", fail)
+    transport = _ResponseTransport({"text": "pong", "usage": {"input_tokens": 1, "output_tokens": 1}})
+    gateway = _gateway(profile, transport, tmp_path, ledger=ledger)
+    server = serve_gateway(gateway, host="127.0.0.1", port=8766)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = json.dumps(_request(profile)).encode()
+        request = urllib.request.Request(
+            "http://127.0.0.1:8766/v1/generate", data=body,
+            headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request)
+        assert error.value.code == 502
+        assert ledger.lookup("run-1")["billing_status"] == "unknown"
+        assert ledger.snapshot()[0]["cost_usd"] is None
     finally:
         server.shutdown()
         server.server_close()
