@@ -11,7 +11,13 @@ import hashlib
 import json
 import math
 import time
+from base64 import b64encode
+from collections.abc import Mapping as ABCMapping
+from collections.abc import Sequence as ABCSequence
 from dataclasses import dataclass
+from datetime import date, datetime
+from datetime import time as datetime_time
+from enum import Enum
 from typing import Any, Mapping, Protocol, Sequence
 
 from src.pipeline.framework_adapter import ModelProfile
@@ -49,6 +55,25 @@ class RetryExhausted(RuntimeError):
     """A provider transport exhausted its bounded retry policy."""
 
 
+class PostResponseFailure(RuntimeError):
+    """Provider answered, but semantic response processing failed."""
+
+    model_response_received = True
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        usage: NormalizedUsage | None = None,
+        response_hash: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.response_hash = response_hash
+        self.billing_unknown = usage is None
+        self.billable_model_response = usage is not None
+
+
 def invoke_with_retry(
     operation: Any, *, max_attempts: int = 2, backoff_seconds: float = 0.0,
     sleep: Any = time.sleep,
@@ -79,6 +104,56 @@ def invoke_with_retry(
 
 def _canonical_hash(value: Mapping[str, Any]) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+_SEMANTIC_EXCLUDED_FIELDS = frozenset({"sdk_http_response", "parsed"})
+
+
+def _normalize_semantic_value(value: Any) -> Any:
+    """Convert provider SDK values to a deterministic JSON value.
+
+    This is intentionally strict: a response object that cannot be reduced to
+    the provider response contract must fail closed instead of being hashed by
+    its Python representation.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise VertexContractError("provider response contains a non-finite number")
+        return value
+    if isinstance(value, Enum):
+        return _normalize_semantic_value(value.value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return b64encode(bytes(value)).decode("ascii")
+    if isinstance(value, (datetime, date, datetime_time)):
+        return value.isoformat()
+    if isinstance(value, ABCMapping):
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if isinstance(key, Enum):
+                key = key.value
+            if not isinstance(key, (str, int, float, bool)):
+                raise VertexContractError("provider response mapping key is unsupported")
+            key_text = str(key)
+            if key_text in _SEMANTIC_EXCLUDED_FIELDS:
+                continue
+            normalized[key_text] = _normalize_semantic_value(item)
+        return normalized
+    if isinstance(value, ABCSequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
+        return [_normalize_semantic_value(item) for item in value]
+    raise VertexContractError(
+        f"provider response contains unsupported value type: {type(value).__name__}"
+    )
+
+
+def semantic_response_hash(payload: Mapping[str, Any]) -> str:
+    """Hash only the semantic JSON contract exposed by a provider response."""
+    normalized = _normalize_semantic_value(payload)
+    if not isinstance(normalized, dict):  # pragma: no cover - Mapping input guarantees this
+        raise VertexContractError("provider response must normalize to an object")
+    encoded = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False,
+    )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -436,13 +511,32 @@ class OpenAICompatibleClientTransport:
 
 def _response_mapping(response: Any) -> Mapping[str, Any]:
     if isinstance(response, Mapping):
-        return response
-    for method_name in ("model_dump", "to_dict", "to_json_dict"):
+        return _normalize_semantic_value(response)
+    to_json_dict = getattr(response, "to_json_dict", None)
+    if callable(to_json_dict):
+        value = to_json_dict()
+        if isinstance(value, Mapping):
+            normalized = _normalize_semantic_value(value)
+            if isinstance(normalized, dict):
+                return normalized
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        try:
+            value = model_dump(mode="json", exclude_none=True)
+        except TypeError:
+            value = model_dump()
+        if isinstance(value, Mapping):
+            normalized = _normalize_semantic_value(value)
+            if isinstance(normalized, dict):
+                return normalized
+    for method_name in ("to_dict",):
         method = getattr(response, method_name, None)
         if callable(method):
             value = method()
             if isinstance(value, Mapping):
-                return value
+                normalized = _normalize_semantic_value(value)
+                if isinstance(normalized, dict):
+                    return normalized
     raise VertexContractError("provider response must expose a mapping for evidence hashing")
 
 
@@ -500,12 +594,24 @@ class GeminiExecutor:
             generation_parameters=profile.generation_parameters,
         )
         latency_ms = (time.monotonic() - started) * 1000.0
-        payload = _response_mapping(response)
-        usage = normalize_usage(payload, profile, latency_ms=latency_ms)
+        usage: NormalizedUsage | None = None
+        response_hash: str | None = None
+        try:
+            payload = _response_mapping(response)
+            usage = normalize_usage(payload, profile, latency_ms=latency_ms)
+            response_hash = semantic_response_hash(payload)
+            text = _response_text(response, payload)
+        except Exception as exc:
+            raise PostResponseFailure(
+                "Gemini provider response could not be normalized",
+                usage=usage,
+                response_hash=response_hash,
+            ) from exc
+        assert usage is not None and response_hash is not None
         return InvocationResult(
-            text=_response_text(response, payload),
+            text=text,
             usage=usage,
-            response_hash=_canonical_hash(dict(payload)),
+            response_hash=response_hash,
             model_id=expected["model_id"],
             resource_revision=profile.resource_revision,
         )
@@ -528,12 +634,24 @@ class GemmaMaaSExecutor:
             generation_parameters=profile.generation_parameters,
         )
         latency_ms = (time.monotonic() - started) * 1000.0
-        payload = _response_mapping(response)
-        usage = normalize_usage(payload, profile, latency_ms=latency_ms)
+        usage: NormalizedUsage | None = None
+        response_hash: str | None = None
+        try:
+            payload = _response_mapping(response)
+            usage = normalize_usage(payload, profile, latency_ms=latency_ms)
+            response_hash = semantic_response_hash(payload)
+            text = _response_text(response, payload)
+        except Exception as exc:
+            raise PostResponseFailure(
+                "Gemma provider response could not be normalized",
+                usage=usage,
+                response_hash=response_hash,
+            ) from exc
+        assert usage is not None and response_hash is not None
         return InvocationResult(
-            text=_response_text(response, payload),
+            text=text,
             usage=usage,
-            response_hash=_canonical_hash(dict(payload)),
+            response_hash=response_hash,
             model_id=expected["model_id"],
             resource_revision=profile.resource_revision,
         )

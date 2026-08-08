@@ -19,7 +19,11 @@ from src.pipeline.protocol import validate_run_artifact
 from src.pipeline.readiness_evidence import validate_smoke_evidence
 from src.pipeline.runtime_contract import sha256_file, validate_gateway_relay_lock
 from src.pipeline.runtime_executor import RuntimeCellResult
-from src.pipeline.runtime_ledger import InvocationLedger
+from src.pipeline.runtime_ledger import (
+    BillableInvocationError,
+    BillingUnknownError,
+    InvocationLedger,
+)
 from src.pipeline.runtime_readiness import validate_canary_smoke_plan, write_runtime_smoke_evidence
 from src.pipeline.runtime_topology import (
     TopologyHandle,
@@ -219,7 +223,10 @@ class RuntimeRunner:
         if len(cells) != expected_count:
             raise RuntimeHalt(f"{phase} phase has the wrong cell count")
         run_ids = {str(cell["run_id"]) for cell in cells}
-        ledger = InvocationLedger(phase=phase, gateway_relay_lock_hash=self.relay_lock_hash)
+        ledger_path = self.root / "runtime" / f"{phase}-invocation-ledger.json"
+        ledger = InvocationLedger(
+            phase=phase, gateway_relay_lock_hash=self.relay_lock_hash, path=ledger_path,
+        )
         phase_token = secrets.token_urlsafe(32)
         token_expires_at = (datetime.now(UTC) + timedelta(minutes=20)).isoformat().replace("+00:00", "Z")
         gateway_factory = self.gateway_factory
@@ -247,6 +254,17 @@ class RuntimeRunner:
                 try:
                     result = self._call_executor(cell, run_dir, labels, phase, handle, ledger)
                 except Exception as exc:
+                    state = ledger.lookup(str(cell["run_id"]))
+                    if state["billing_status"] == "unknown":
+                        coordinator._halt("billing_unknown", str(exc))
+                        raise BillingUnknownError(
+                            f"billing unknown for {cell['run_id']} after provider response"
+                        ) from exc
+                    if state["billing_status"] == "known":
+                        raise BillableInvocationError(
+                            f"known-billed invocation failed for {cell['run_id']}",
+                            cost_usd=float(state["cost_usd"]),
+                        ) from exc
                     coordinator._halt("runtime_cell_failure", str(exc))
                     raise
                 with self._result_lock:
@@ -298,7 +316,7 @@ class RuntimeRunner:
         finally:
             shutdown = self.topology.shutdown(handle)
             topology_evidence.append(shutdown)
-            if shutdown.get("success") is not True:
+            if shutdown.get("success") is not True and coordinator.status().get("halt_reason") != "billing_unknown":
                 coordinator._halt("topology_cleanup_failure")
             coordinator.close()
             if shutdown.get("success") is not True:

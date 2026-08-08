@@ -359,6 +359,8 @@ class ExperimentRunner:
 
     @staticmethod
     def _exception_has_unknown_billing(exc: BaseException) -> bool:
+        if getattr(exc, "cost_usd", None) is not None and getattr(exc, "billing_unknown", None) is False:
+            return False
         return bool(
             getattr(exc, "billing_unknown", False)
             or getattr(exc, "model_response_received", False)
@@ -453,11 +455,18 @@ class ExperimentRunner:
                     or result.status == "completed"
                 )
             )
-            result = CellResult(
-                "billing_unknown" if unknown else "infrastructure_failure",
-                billing_unknown=unknown,
-                model_response_received=unknown,
-            )
+            known_cost = getattr(exc, "cost_usd", None)
+            if known_cost is not None and not unknown:
+                result = CellResult(
+                    "failed", cost_usd=float(known_cost),
+                    billable_model_response=True, model_response_received=True,
+                )
+            else:
+                result = CellResult(
+                    "billing_unknown" if unknown else "infrastructure_failure",
+                    billing_unknown=unknown,
+                    model_response_received=unknown,
+                )
             error = str(exc)[:2000]
             error_path = attempt_dir / "coordinator-error.json"
             error_path.write_text(

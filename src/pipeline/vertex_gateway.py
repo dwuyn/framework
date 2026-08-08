@@ -17,13 +17,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Mapping, Sequence
 
 from src.pipeline.framework_adapter import ModelProfile
-from src.pipeline.runtime_ledger import InvocationLedger
+from src.pipeline.runtime_ledger import BillingUnknownError, InvocationLedger
 from src.pipeline.vertex_runtime import (
     GeminiExecutor,
     GemmaMaaSExecutor,
     GoogleGenAITransport,
     InvocationResult,
     OpenAICompatibleClientTransport,
+    PostResponseFailure,
 )
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -31,6 +32,10 @@ _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 class GatewayError(ValueError):
     """A container request was not authorized for the pinned experiment."""
+
+
+class ProviderGatewayError(RuntimeError):
+    """A provider or post-response failure that must be returned as HTTP 502."""
 
 
 @dataclass(frozen=True)
@@ -103,23 +108,61 @@ class VertexGateway:
         profile = self.profiles.get(parsed.model_label)
         if profile is None or profile.profile_hash != parsed.profile_hash:
             raise GatewayError("gateway request profile is not pinned")
-        if profile.logical_label.startswith("gemini-"):
-            result = self.gemini.invoke(profile, parsed.contents)
-        else:
-            if not isinstance(parsed.contents, Sequence) or isinstance(parsed.contents, (str, bytes)):
-                raise GatewayError("Gemma gateway contents must be chat messages")
-            messages = [dict(item) for item in parsed.contents if isinstance(item, Mapping)]
-            if len(messages) != len(parsed.contents):
-                raise GatewayError("Gemma gateway messages must be objects")
-            result = self.gemma.invoke(profile, messages)
+        try:
+            if profile.logical_label.startswith("gemini-"):
+                result = self.gemini.invoke(profile, parsed.contents)
+            else:
+                if not isinstance(parsed.contents, Sequence) or isinstance(parsed.contents, (str, bytes)):
+                    raise GatewayError("Gemma gateway contents must be chat messages")
+                messages = [dict(item) for item in parsed.contents if isinstance(item, Mapping)]
+                if len(messages) != len(parsed.contents):
+                    raise GatewayError("Gemma gateway messages must be objects")
+                result = self.gemma.invoke(profile, messages)
+        except PostResponseFailure as exc:
+            self._record_post_response_failure(parsed, request, exc)
+            raise AssertionError("post-response failure handler must raise")
         if self.invocation_ledger is not None:
-            self.invocation_ledger.record(
-                run_id=parsed.run_id, model_label=parsed.model_label,
-                request=dict(request), response=result.to_dict(),
-                usage=result.usage.to_dict(), cost_usd=result.usage.usd,
-                billing_status="known",
-            )
+            try:
+                self.invocation_ledger.record(
+                    run_id=parsed.run_id, model_label=parsed.model_label,
+                    request=dict(request), response=result.to_dict(),
+                    response_hash=result.response_hash,
+                    usage=result.usage.to_dict(), cost_usd=result.usage.usd,
+                    billing_status="known", outcome="completed",
+                )
+            except Exception as exc:
+                # A provider response exists, but without an atomic ledger
+                # commit the coordinator cannot safely classify its billing.
+                raise BillingUnknownError(
+                    "gateway could not durably persist known provider usage"
+                ) from exc
         return result
+
+    def _record_post_response_failure(
+        self, parsed: GatewayRequest, request: Mapping[str, Any], exc: PostResponseFailure,
+    ) -> None:
+        usage = exc.usage
+        if self.invocation_ledger is not None:
+            try:
+                self.invocation_ledger.record(
+                    run_id=parsed.run_id, model_label=parsed.model_label,
+                    request=dict(request), response_hash=exc.response_hash,
+                    usage=usage.to_dict() if usage is not None else None,
+                    cost_usd=usage.usd if usage is not None else None,
+                    billing_status="known" if usage is not None else "unknown",
+                    outcome="post_response_failure", model_response_received=True,
+                )
+            except Exception as persist_exc:
+                raise BillingUnknownError(
+                    "gateway could not durably persist post-response billing state"
+                ) from persist_exc
+        if usage is None:
+            raise BillingUnknownError(
+                "provider response received but usage/cost is unknown"
+            ) from exc
+        raise ProviderGatewayError(
+            "provider response received, but post-response processing failed"
+        ) from exc
 
 
 def build_host_gateway(
@@ -166,7 +209,10 @@ def gateway_handler(gateway: VertexGateway) -> type[BaseHTTPRequestHandler]:
                 self.send_error(404)
                 return
             try:
-                length = int(self.headers.get("Content-Length", "0"))
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError as exc:
+                    raise GatewayError("gateway content length is invalid") from exc
                 if length <= 0 or length > 1_048_576:
                     raise GatewayError("gateway request size is invalid")
                 value = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -181,8 +227,13 @@ def gateway_handler(gateway: VertexGateway) -> type[BaseHTTPRequestHandler]:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
-            except (GatewayError, UnicodeDecodeError, ValueError):
+            except (GatewayError, UnicodeDecodeError, json.JSONDecodeError):
                 self.send_error(403)
+            except Exception:
+                # Provider and post-response failures are deliberately
+                # sanitized at the HTTP boundary.  Detailed classification is
+                # retained in the coordinator/ledger evidence, not the client.
+                self.send_error(502)
 
         def log_message(self, _format: str, *_args: object) -> None:
             return
