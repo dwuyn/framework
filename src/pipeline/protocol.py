@@ -278,6 +278,24 @@ def validate_training_protocol(
                 raise ValueError(f"runtime pricing does not match profile {profile.logical_label}")
         if not resolution_path.is_file():
             raise ValueError("runtime model-resolution lock is missing")
+        source_snapshot = protocol.get("source_snapshot")
+        if source_snapshot is not None:
+            if not isinstance(source_snapshot, Mapping):
+                raise ValueError("runtime source_snapshot must be an object")
+            for name in ("snapshot_hash", "manifest_hash", "signature_hash"):
+                if not re.fullmatch(r"[0-9a-f]{64}", str(source_snapshot.get(name, ""))):
+                    raise ValueError(f"runtime source_snapshot requires {name}")
+            if str(source_snapshot.get("root", "")) != "source-snapshot":
+                raise ValueError("runtime source_snapshot root must be source-snapshot")
+            if str(source_snapshot.get("scope", "")) != (
+                "CVE List V5 only; NVD/VulnX source_not_in_snapshot; no network fallback"
+            ):
+                raise ValueError("runtime source_snapshot scope is not locked")
+            canary_plan = load_json(
+                Path(artifact_root).resolve() / Path(str(protocol["canary_smoke_plan"]["artifact_path"]))
+            )
+            if str(canary_plan.get("source_snapshot_hash", "")) != str(source_snapshot["snapshot_hash"]):
+                raise ValueError("runtime source_snapshot does not match canary smoke plan")
 
 
 def validate_experiment_lock(lock: Mapping[str, Any], *, dataset_hash: str, baseline_hash: str,

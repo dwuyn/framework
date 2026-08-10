@@ -116,8 +116,8 @@ class RuntimeRunner:
             raise RuntimeHalt("evaluator bundle hash mismatch")
         if _bundle_hash(self.oracle_bundle) != self.oracle_bundle_hash:
             raise RuntimeHalt("oracle bundle hash mismatch")
-        if str(self.plan.get("schema_version")) != "1.1.0":
-            raise RuntimeHalt("production runtime requires canary plan 1.1.0")
+        if str(self.plan.get("schema_version")) not in {"1.1.0", "1.2.0"}:
+            raise RuntimeHalt("production runtime requires canary plan 1.1.0 or 1.2.0")
         if str(self.plan.get("gateway_relay_lock_hash")) != self.relay_lock_hash:
             raise RuntimeHalt("runtime plan gateway relay lock hash mismatch")
         if not re.fullmatch(r"[0-9a-f]{64}", str(self.plan.get("target_runtime_lock_hash", ""))):

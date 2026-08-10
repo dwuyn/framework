@@ -74,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--feature-schema-hash", required=True)
     parser.add_argument("--max-input-tokens", type=int, default=4096)
     parser.add_argument("--max-output-tokens", type=int, default=1024)
+    parser.add_argument("--max-llm-calls", type=int, default=40)
+    parser.add_argument("--source-snapshot-hash", required=True)
     parser.add_argument("--reservation-ceiling-usd", type=float, required=True)
     args = parser.parse_args(argv)
 
@@ -204,7 +206,9 @@ def main(argv: list[str] | None = None) -> int:
         model_resolution_lock_hash=resolution_hash, evaluator_hash=args.evaluator_bundle_hash,
         oracle_hash=args.oracle_bundle_hash, image_digests=image_digests, native_identity_hash=native_hash,
         gateway_relay_lock_hash=relay_hash,
+        source_snapshot_hash=args.source_snapshot_hash,
         max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens,
+        max_llm_calls=args.max_llm_calls,
         retry_policy={"max_attempts": 2, "retryable": ["408", "429", "500", "502", "503", "504"]}, strict=True,
     )
     reserved_cost = sum(float(cell["cell_worst_case_cost_usd"]) for cell in plan["cells"])

@@ -73,6 +73,7 @@ class VertexGateway:
         gemma: GemmaMaaSExecutor,
         token_expires_at: str = "",
         invocation_ledger: InvocationLedger | None = None,
+        max_llm_calls_by_run: Mapping[str, int] | None = None,
     ) -> None:
         if not token:
             raise GatewayError("gateway token is required")
@@ -94,6 +95,11 @@ class VertexGateway:
         self.gemini = gemini
         self.gemma = gemma
         self.invocation_ledger = invocation_ledger
+        self.max_llm_calls_by_run = {
+            str(run_id): int(limit) for run_id, limit in (max_llm_calls_by_run or {}).items()
+        }
+        if any(limit <= 0 for limit in self.max_llm_calls_by_run.values()):
+            raise GatewayError("gateway call limits must be positive")
 
     def invoke(self, request: Mapping[str, Any], *, token: str) -> InvocationResult:
         if token != self.token:
@@ -108,6 +114,11 @@ class VertexGateway:
         profile = self.profiles.get(parsed.model_label)
         if profile is None or profile.profile_hash != parsed.profile_hash:
             raise GatewayError("gateway request profile is not pinned")
+        limit = self.max_llm_calls_by_run.get(parsed.run_id)
+        if limit is not None and self.invocation_ledger is not None:
+            used = sum(1 for row in self.invocation_ledger.snapshot() if row.get("run_id") == parsed.run_id)
+            if used >= limit:
+                raise GatewayError("gateway max_llm_calls exceeded before provider call")
         try:
             if profile.logical_label.startswith("gemini-"):
                 result = self.gemini.invoke(profile, parsed.contents)
@@ -171,6 +182,9 @@ def build_host_gateway(
     gemini_client_factory: Callable[[str, str], Any],
     gemma_client_factory: Callable[[str], Any],
     invocation_ledger: InvocationLedger | None = None,
+    max_llm_calls_by_run: Mapping[str, int] | None = None,
+    source_snapshot_root: str = "",
+    source_snapshot_hash: str = "",
 ) -> VertexGateway:
     """Build credential-owning transports from verified host-side metadata.
 
@@ -180,6 +194,11 @@ def build_host_gateway(
     """
     if not project.strip():
         raise GatewayError("host gateway requires a project")
+    if source_snapshot_root:
+        from src.pipeline.source_snapshot import validate_source_snapshot
+        validate_source_snapshot(
+            source_snapshot_root, full=True, expected_hash=source_snapshot_hash, official=True,
+        )
     gemini_profiles = [profile for profile in profiles if profile.logical_label.startswith("gemini-")]
     gemma_profiles = [profile for profile in profiles if profile.logical_label == "gemma-4-26b-a4b-it"]
     if len(gemini_profiles) != 2 or len(gemma_profiles) != 1:
@@ -197,6 +216,7 @@ def build_host_gateway(
         gemini=GeminiExecutor(GoogleGenAITransport(gemini_client)),
         gemma=GemmaMaaSExecutor(OpenAICompatibleClientTransport(gemma_client)),
         invocation_ledger=invocation_ledger,
+        max_llm_calls_by_run=max_llm_calls_by_run,
     )
 
 

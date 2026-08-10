@@ -20,16 +20,24 @@ def _canonical_hash(value: Mapping[str, Any]) -> str:
 
 
 def worst_case_cost_usd(
-    profile: ModelProfile, *, max_input_tokens: int, max_output_tokens: int, max_attempts: int,
+    profile: ModelProfile, *, max_input_tokens: int, max_output_tokens: int,
+    max_llm_calls: int, max_attempts: int,
 ) -> float:
-    """Return the conservative reservation from the pinned profile price."""
-    if max_input_tokens <= 0 or max_output_tokens <= 0 or not 1 <= max_attempts <= 3:
-        raise ValueError("runtime cost requires positive token caps and one to three attempts")
+    """Return the whole-cell reservation from pinned price and protocol caps."""
+    if (
+        max_input_tokens <= 0
+        or max_output_tokens <= 0
+        or max_llm_calls <= 0
+        or not 1 <= max_attempts <= 3
+    ):
+        raise ValueError(
+            "runtime cost requires positive token/call caps and one to three attempts"
+        )
     per_attempt = (
         max_input_tokens * float(profile.pricing["input_per_million"])
         + max_output_tokens * float(profile.pricing["output_per_million"])
     ) / 1_000_000
-    return per_attempt * max_attempts
+    return per_attempt * max_llm_calls * max_attempts
 
 
 def build_canary_smoke_plan(
@@ -39,8 +47,9 @@ def build_canary_smoke_plan(
     model_resolution_lock_hash: str = "", evaluator_hash: str = "", oracle_hash: str = "",
     image_digests: Mapping[str, str] | None = None, native_identity_hash: str = "",
     target_runtime_lock_hash: str = "",
+    source_snapshot_hash: str = "",
     gateway_relay_lock_hash: str = "",
-    max_input_tokens: int = 0, max_output_tokens: int = 0,
+    max_input_tokens: int = 0, max_output_tokens: int = 0, max_llm_calls: int = 0,
     retry_policy: Mapping[str, Any] | None = None, strict: bool = False,
 ) -> dict[str, Any]:
     """Make exactly 3 canaries plus the 15 required framework/model smokes."""
@@ -58,11 +67,12 @@ def build_canary_smoke_plan(
             "oracle_hash": oracle_hash,
             "native_identity_hash": native_identity_hash,
             "target_runtime_lock_hash": target_runtime_lock_hash,
+            "source_snapshot_hash": source_snapshot_hash,
         }
         if any(len(str(value)) != 64 for value in required_digests.values()):
             raise ValueError("strict runtime plan requires all upstream SHA-256 identities")
-        if max_input_tokens <= 0 or max_output_tokens <= 0:
-            raise ValueError("strict runtime plan requires positive token caps")
+        if max_input_tokens <= 0 or max_output_tokens <= 0 or max_llm_calls <= 0:
+            raise ValueError("strict runtime plan requires positive token/call caps")
         if not retry_policy or not 1 <= int(retry_policy.get("max_attempts", 0)) <= 3:
             raise ValueError("strict runtime plan requires a retry policy")
         if framework_costs is not None or canary_cost is not None:
@@ -85,9 +95,12 @@ def build_canary_smoke_plan(
 
     def identity(*, kind: str, label: str, framework: str = "") -> dict[str, Any]:
         profile = next(profile for profile in profiles if profile.logical_label == label)
+        production_semantics = bool(source_snapshot_hash and gateway_relay_lock_hash)
+        cell_calls = 1 if kind == "vertex_canary" and production_semantics else max_llm_calls
         cost = (
             worst_case_cost_usd(profile, max_input_tokens=max_input_tokens,
-                                max_output_tokens=max_output_tokens, max_attempts=attempts)
+                                max_output_tokens=max_output_tokens,
+                                max_llm_calls=cell_calls, max_attempts=attempts)
             if strict else (legacy_canary_cost if not framework else float(legacy_framework_costs[framework]))
         )
         record: dict[str, Any] = {
@@ -102,9 +115,11 @@ def build_canary_smoke_plan(
             "evaluator_hash": evaluator_hash,
             "oracle_hash": oracle_hash,
             "target_runtime_lock_hash": target_runtime_lock_hash,
+            "source_snapshot_hash": source_snapshot_hash,
             "image_digest": images.get(framework, "") if framework else images.get("VeriPlanPT", ""),
             "max_input_tokens": max_input_tokens,
             "max_output_tokens": max_output_tokens,
+            "max_llm_calls": cell_calls,
             "retry_policy": retry,
             "cell_worst_case_cost_usd": float(cost),
         }
@@ -122,13 +137,17 @@ def build_canary_smoke_plan(
             cell.update({"run_id": f"smoke-{framework.lower()}-{label}", "framework": framework})
             cells.append(cell)
     plan = {
-        "schema_version": "1.1.0" if gateway_relay_lock_hash else "1.0.0",
+        "schema_version": "1.2.0" if source_snapshot_hash and gateway_relay_lock_hash else (
+            "1.1.0" if gateway_relay_lock_hash else "1.0.0"
+        ),
         "stage": "canary_smoke", "cell_count": len(cells), "cells": cells,
     }
     if gateway_relay_lock_hash:
         plan["gateway_relay_lock_hash"] = gateway_relay_lock_hash
     if target_runtime_lock_hash:
         plan["target_runtime_lock_hash"] = target_runtime_lock_hash
+    if source_snapshot_hash:
+        plan["source_snapshot_hash"] = source_snapshot_hash
     plan["plan_hash"] = _canonical_hash(plan)
     if strict:
         validate_canary_smoke_plan(plan, profiles=profiles, strict=True)
@@ -168,12 +187,14 @@ def validate_canary_smoke_plan(
             "model_profile_hash", "model_resource_id", "model_revision", "dataset_lock_hash",
             "baseline_identity_hash", "native_identity_hash", "model_resolution_lock_hash",
             "evaluator_hash", "oracle_hash", "image_digest", "max_input_tokens",
-            "max_output_tokens", "retry_policy", "cell_worst_case_cost_usd", "target_runtime_lock_hash",
+            "max_output_tokens", "max_llm_calls", "retry_policy",
+            "cell_worst_case_cost_usd", "target_runtime_lock_hash",
+            "source_snapshot_hash",
         }
         for cell in cells:
             if not required.issubset(cell):
                 raise ValueError("strict canary smoke cell is missing an immutable pin")
-            production_plan = str(plan.get("schema_version")) == "1.1.0"
+            production_plan = str(plan.get("schema_version")) in {"1.1.0", "1.2.0"}
             if production_plan:
                 if not re.fullmatch(r"[0-9a-f]{64}", str(plan.get("gateway_relay_lock_hash", ""))):
                     raise ValueError("production canary smoke plan requires gateway_relay_lock_hash")
@@ -183,14 +204,28 @@ def validate_canary_smoke_plan(
                 raise ValueError("strict canary smoke plan requires target_runtime_lock_hash")
             if str(cell.get("target_runtime_lock_hash")) != str(plan["target_runtime_lock_hash"]):
                 raise ValueError("canary smoke target runtime lock binding mismatch")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(plan.get("source_snapshot_hash", ""))):
+                raise ValueError("strict canary smoke plan requires source_snapshot_hash")
+            if str(cell.get("source_snapshot_hash")) != str(plan["source_snapshot_hash"]):
+                raise ValueError("canary smoke source snapshot binding mismatch")
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(cell["image_digest"])):
                 raise ValueError("strict canary smoke cell requires an immutable image digest")
             for key in ("dataset_lock_hash", "baseline_identity_hash", "native_identity_hash",
                         "model_resolution_lock_hash", "evaluator_hash", "oracle_hash", "model_profile_hash"):
                 if len(str(cell[key])) != 64:
                     raise ValueError(f"strict canary smoke cell {key} must be SHA-256")
-            if int(cell["max_input_tokens"]) <= 0 or int(cell["max_output_tokens"]) <= 0:
-                raise ValueError("strict canary smoke cell token caps must be positive")
+            if (
+                int(cell["max_input_tokens"]) <= 0
+                or int(cell["max_output_tokens"]) <= 0
+                or int(cell["max_llm_calls"]) <= 0
+            ):
+                raise ValueError("strict canary smoke cell token/call caps must be positive")
+            production_semantics = str(plan.get("schema_version")) == "1.2.0"
+            expected_calls = int(cell["max_llm_calls"])
+            if production_semantics:
+                expected_calls = 1 if cell.get("kind") == "vertex_canary" else 40
+            if int(cell["max_llm_calls"]) != expected_calls:
+                raise ValueError("strict readiness canary/smoke call cap is invalid")
             policy = cell["retry_policy"]
             if not isinstance(policy, Mapping) or not 1 <= int(policy.get("max_attempts", 0)) <= 3:
                 raise ValueError("strict canary smoke cell retry policy is invalid")
@@ -208,6 +243,7 @@ def validate_canary_smoke_plan(
             expected_cost = worst_case_cost_usd(
                 profile, max_input_tokens=int(cell["max_input_tokens"]),
                 max_output_tokens=int(cell["max_output_tokens"]),
+                max_llm_calls=int(cell["max_llm_calls"]),
                 max_attempts=int(policy["max_attempts"]),
             )
             if abs(cost - expected_cost) > 1e-12:

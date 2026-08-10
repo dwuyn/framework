@@ -12,7 +12,11 @@ from src.pipeline.runtime_contract import (
     validate_runtime_profile,
     verify_alias_exception,
 )
+from src.pipeline.llm_budget import NormalizedUsage
+from src.pipeline.runtime_ledger import InvocationLedger
 from src.pipeline.runtime_readiness import build_canary_smoke_plan, validate_canary_smoke_plan
+from src.pipeline.vertex_gateway import GatewayError, VertexGateway
+from src.pipeline.vertex_runtime import InvocationResult
 
 
 def _profile(label: str) -> ModelProfile:
@@ -73,9 +77,9 @@ def test_strict_profiles_and_plan_pin_runtime_identities() -> None:
         dataset_lock_hash="b" * 64, baseline_identity_hash="c" * 64,
         model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64,
         oracle_hash="f" * 64, native_identity_hash="1" * 64,
-        target_runtime_lock_hash="2" * 64,
+        target_runtime_lock_hash="2" * 64, source_snapshot_hash="3" * 64,
         image_digests={name: "sha256:" + "2" * 64 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")},
-        max_input_tokens=1024, max_output_tokens=256,
+        max_input_tokens=1024, max_output_tokens=256, max_llm_calls=40,
         retry_policy={"max_attempts": 2, "retryable": ["429"]}, strict=True,
     )
     assert plan["cell_count"] == 18
@@ -98,9 +102,9 @@ def test_strict_plan_rejects_profile_drift() -> None:
         dataset_lock_hash="b" * 64, baseline_identity_hash="c" * 64,
         model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64,
         oracle_hash="f" * 64, native_identity_hash="1" * 64,
-        target_runtime_lock_hash="2" * 64,
+        target_runtime_lock_hash="2" * 64, source_snapshot_hash="3" * 64,
         image_digests={name: "sha256:" + "2" * 64 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")},
-        max_input_tokens=1024, max_output_tokens=256,
+        max_input_tokens=1024, max_output_tokens=256, max_llm_calls=40,
         retry_policy={"max_attempts": 2, "retryable": ["429"]}, strict=True,
     )
     tampered_cells = [dict(plan["cells"][0], model_profile_hash="0" * 64), *plan["cells"][1:]]
@@ -113,3 +117,36 @@ def test_strict_plan_rejects_profile_drift() -> None:
     ).hexdigest()
     with pytest.raises(ValueError, match="profile hash mismatch"):
         validate_canary_smoke_plan(tampered, profiles=profiles, strict=True)
+
+
+def test_gateway_blocks_call_41_before_provider() -> None:
+    profile = _profile("gemini-3.5-flash")
+
+    class FakeGemini:
+        calls = 0
+
+        def invoke(self, selected: ModelProfile, _contents: object) -> InvocationResult:
+            self.calls += 1
+            return InvocationResult(
+                text="ok", usage=NormalizedUsage(
+                    input_tokens=1, output_tokens=1, total_tokens=2, usd=0.01,
+                ), response_hash="a" * 64, model_id=selected.logical_label,
+                resource_revision=selected.resource_revision,
+            )
+
+    gemini = FakeGemini()
+    ledger = InvocationLedger(phase="smoke", gateway_relay_lock_hash="b" * 64)
+    gateway = VertexGateway(
+        profiles=[profile], allowed_run_ids={"medium-cell"}, token="token",
+        gemini=gemini, gemma=object(), invocation_ledger=ledger,
+        max_llm_calls_by_run={"medium-cell": 40},
+    )
+    request = {
+        "run_id": "medium-cell", "model_label": profile.logical_label,
+        "profile_hash": profile.profile_hash, "contents": "probe",
+    }
+    for _ in range(40):
+        gateway.invoke(request, token="token")
+    with pytest.raises(GatewayError, match="max_llm_calls exceeded before provider call"):
+        gateway.invoke(request, token="token")
+    assert gemini.calls == 40

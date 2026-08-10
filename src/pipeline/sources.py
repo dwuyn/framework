@@ -32,6 +32,7 @@ from urllib import error as urlerror
 from urllib import parse, request
 
 from src.pipeline.ledger import EventLedger
+from src.pipeline.source_snapshot import read_indexed_records
 
 # ── Records ───────────────────────────────────────────────────────────────────
 
@@ -113,6 +114,7 @@ class BackendStatus:
     QUERY_INVALID = "query_invalid"
     BACKEND_FAILED = "backend_failed"
     DATASET_MISSING = "dataset_missing"
+    SOURCE_NOT_IN_SNAPSHOT = "source_not_in_snapshot"
 
 
 # ── Adapters ──────────────────────────────────────────────────────────────────
@@ -186,6 +188,28 @@ class BaseAdapter:
             self._record_event(status=BackendStatus.DATASET_MISSING,
                                 detail=f"{self.name} snapshot_dir unset")
             return []
+        indexed = read_indexed_records(
+            self.snapshot_dir, source=self.name, product=product, vendor=vendor,
+        )
+        if indexed is not None:
+            if self.name != "cve_list_v5":
+                self._record_event(
+                    status=BackendStatus.SOURCE_NOT_IN_SNAPSHOT,
+                    detail=f"{self.name} is not included in the CVE List V5 snapshot",
+                    payload={"product": product, "version": version},
+                )
+                return []
+            indexed_records = [RawCveRecord.from_dict(entry) for entry in indexed]
+            self._record_event(
+                status=BackendStatus.OK if indexed_records else BackendStatus.NO_MATCH,
+                detail=(
+                    f"{self.name} indexed snapshot records"
+                    if indexed_records
+                    else f"{self.name} snapshot had no match"
+                ),
+                payload={"count": len(indexed_records), "product": product, "version": version},
+            )
+            return indexed_records
         path = os.path.join(self.snapshot_dir, "cves.json")
         if not os.path.exists(path):
             self._record_event(status=BackendStatus.DATASET_MISSING,

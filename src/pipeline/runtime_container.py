@@ -39,6 +39,8 @@ class ReadinessContainerExecutor:
         evaluator_commit: str,
         training_protocol_hash: str,
         gateway_relay_lock_hash: str,
+        source_snapshot_root: str = "",
+        source_snapshot_hash: str = "",
     ) -> None:
         self.profiles = {profile.logical_label: profile for profile in profiles}
         self.topology = topology
@@ -49,6 +51,8 @@ class ReadinessContainerExecutor:
         self.evaluator_commit = evaluator_commit
         self.training_protocol_hash = training_protocol_hash
         self.gateway_relay_lock_hash = gateway_relay_lock_hash
+        self.source_snapshot_root = source_snapshot_root
+        self.source_snapshot_hash = source_snapshot_hash
         if not self.public_task or not str(self.public_task.get("case_id", "")):
             raise ReadinessContainerError("readiness requires one public validation task")
 
@@ -78,6 +82,7 @@ class ReadinessContainerExecutor:
             "framework_repository_url": str(identity["repository_url"]),
             "evaluator_commit": self.evaluator_commit,
             "target_runtime_lock_hash": target_runtime_lock_hash,
+            "source_snapshot_hash": str(cell.get("source_snapshot_hash") or self.source_snapshot_hash),
         }
         invocation = {
             "schema_version": "2.0.0",
@@ -120,7 +125,11 @@ class ReadinessContainerExecutor:
             "VERIPLANPT_TRAINING_PROTOCOL_HASH": self.training_protocol_hash,
             "VERIPLANPT_REPOSITORY_URL": str(identity["repository_url"]),
             "VERIPLANPT_FRAMEWORK_COMMIT": str(identity["commit"]),
+            "PENTEST_SOURCE_SNAPSHOT": self.source_snapshot_root,
+            "PENTEST_SOURCE_SNAPSHOT_HASH": str(cell.get("source_snapshot_hash") or self.source_snapshot_hash),
         })
+        if str(cell["kind"]) == "vertex_canary":
+            environment["VERIPLANPT_CANARY_PROBE"] = "true"
         run_dir.mkdir(parents=True, exist_ok=True)
         result = self.topology.run_baseline(
             handle, run_id=run_id, image=str(cell["image_digest"]),

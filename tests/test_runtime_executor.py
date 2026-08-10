@@ -21,7 +21,7 @@ def test_fake_executor_produces_all_runtime_evidence(tmp_path: Path) -> None:
     profiles = [_profile(label) for label in sorted(ModelProfile.ALLOWED_MODELS)]
     by_label = {profile.logical_label: profile for profile in profiles}
     images = {name: "sha256:" + "2" * 64 for name in ("VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent")}
-    plan = build_canary_smoke_plan(profiles=profiles, dataset_lock_hash="a" * 64, baseline_identity_hash="b" * 64, native_identity_hash="c" * 64, model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64, oracle_hash="f" * 64, image_digests=images, target_runtime_lock_hash="9" * 64, max_input_tokens=10, max_output_tokens=5, retry_policy={"max_attempts": 2}, strict=True)
+    plan = build_canary_smoke_plan(profiles=profiles, dataset_lock_hash="a" * 64, baseline_identity_hash="b" * 64, native_identity_hash="c" * 64, model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64, oracle_hash="f" * 64, image_digests=images, target_runtime_lock_hash="9" * 64, source_snapshot_hash="3" * 64, max_input_tokens=10, max_output_tokens=5, max_llm_calls=40, retry_policy={"max_attempts": 2}, strict=True)
     def cleanup(run_id: str): return {"success": True, "resources": {"container": {"ids": []}, "network": {"ids": []}}, "run_id": run_id}
     def execute(cell, run_dir):
         profile = by_label[cell["model_label"]]

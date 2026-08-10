@@ -106,6 +106,7 @@ class TopologyLifecycle:
         self, *, artifact_root: str | Path, relay_lock: Mapping[str, Any],
         relay_image: str, docker: DockerBackend | None = None,
         host_uid: int | None = None, host_gid: int | None = None,
+        source_snapshot_root: str | Path = "", source_snapshot_hash: str = "",
     ) -> None:
         self.root = Path(artifact_root).resolve()
         self.relay_lock = relay_lock
@@ -114,8 +115,13 @@ class TopologyLifecycle:
         self.docker = docker or SubprocessDocker()
         self.host_uid = os.geteuid() if host_uid is None else host_uid
         self.host_gid = os.getegid() if host_gid is None else host_gid
+        self.source_snapshot_root = Path(source_snapshot_root) if source_snapshot_root else None
+        self.source_snapshot_hash = source_snapshot_hash
         if self.host_uid == 0 or self.host_gid == 0:
             raise TopologyError("relay topology requires a non-root host UID/GID")
+        if self.source_snapshot_root is not None:
+            if self.source_snapshot_root.is_symlink() or not self.source_snapshot_root.is_dir():
+                raise TopologyError("source snapshot mount must be a real directory")
         validate_gateway_relay_lock(relay_lock, strict=True)
         if str(relay_lock.get("relay", {}).get("image")) != relay_image:
             raise TopologyError("runtime relay image does not match the relay lock")
@@ -220,8 +226,10 @@ class TopologyLifecycle:
             "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
             "--mount", f"type=bind,src={output},dst=/run/veriplanpt/output",
-            *(_label_args(labels)), *env_args, image, *command,
         ]
+        if self.source_snapshot_root is not None:
+            args.extend(["--mount", f"type=bind,src={self.source_snapshot_root.resolve()},dst=/run/veriplanpt/source-snapshot,readonly"])
+        args.extend([*(_label_args(labels)), *env_args, image, *command])
         return self.docker.run(args, input_bytes=public_payload)
 
     @staticmethod
