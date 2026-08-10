@@ -80,3 +80,24 @@ def test_unsupported_stage_fails_closed_before_reading_invocation(monkeypatch) -
     monkeypatch.setenv("VERIPLANPT_STAGE", "not-a-stage")
     with pytest.raises(module.RuntimeBoundaryError, match="unsupported execution stage"):
         module.main()
+
+
+@pytest.mark.parametrize("mutation", ["missing", "drift"])
+def test_target_runtime_lock_hash_fails_before_provider_call(monkeypatch, mutation: str) -> None:
+    module = _module()
+    invocation = _invocation()
+    if mutation == "missing":
+        del invocation["provenance"]["target_runtime_lock_hash"]  # type: ignore[index]
+    else:
+        invocation["provenance"]["target_runtime_lock_hash"] = "8" * 64  # type: ignore[index]
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(invocation)))
+    for key, value in {
+        "VERIPLANPT_RUN_ID": invocation["run_id"],
+        "VERIPLANPT_MODEL_LABEL": invocation["model_label"],
+        "VERIPLANPT_PROFILE_HASH": "f" * 64,
+        "VERIPLANPT_FRAMEWORK_NAME": "VeriPlanPT",
+        "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": "9" * 64,
+    }.items():
+        monkeypatch.setenv(key, str(value))
+    with pytest.raises(module.RuntimeBoundaryError, match="target runtime lock hash"):
+        module._load_public_invocation()

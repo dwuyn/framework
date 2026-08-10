@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,13 @@ from src.pipeline.runtime_topology import TopologyHandle, TopologyLifecycle
 
 class ReadinessContainerError(RuntimeError):
     """A readiness container failed its public boundary or evidence contract."""
+
+
+def _require_sha256(value: Any, name: str) -> str:
+    candidate = str(value)
+    if not re.fullmatch(r"[0-9a-f]{64}", candidate):
+        raise ReadinessContainerError(f"{name} must be a lowercase SHA-256")
+    return candidate
 
 
 class ReadinessContainerExecutor:
@@ -59,6 +67,9 @@ class ReadinessContainerExecutor:
         if identity is None:
             raise ReadinessContainerError(f"missing locked framework identity: {framework}")
         profile = self.profiles[str(cell["model_label"])]
+        target_runtime_lock_hash = _require_sha256(
+            cell.get("target_runtime_lock_hash", ""), "cell target runtime lock hash",
+        )
         provenance = {
             "dataset_lock_hash": str(cell["dataset_lock_hash"]),
             "protocol_hash": self.training_protocol_hash,
@@ -66,6 +77,7 @@ class ReadinessContainerExecutor:
             "framework_image_digest": str(cell["image_digest"]),
             "framework_repository_url": str(identity["repository_url"]),
             "evaluator_commit": self.evaluator_commit,
+            "target_runtime_lock_hash": target_runtime_lock_hash,
         }
         invocation = {
             "schema_version": "2.0.0",
@@ -91,7 +103,7 @@ class ReadinessContainerExecutor:
             "VERIPLANPT_STAGE": "canary_smoke",
             "VERIPLANPT_FRAMEWORK_NAME": framework,
             "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": self.gateway_relay_lock_hash,
-            "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": str(cell["target_runtime_lock_hash"]),
+            "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": target_runtime_lock_hash,
             "VERIPLANPT_ADAPTER_PRODUCTION": "true",
             "VERIPLANPT_IMAGE_DIGEST": str(cell["image_digest"]),
             "VERIPLANPT_DATASET_LOCK_HASH": str(cell["dataset_lock_hash"]),
@@ -119,6 +131,9 @@ class ReadinessContainerExecutor:
         validate_run_artifact(value, official=True, strict_runtime=True)
         if str(value.get("run_id", "")) != run_id:
             raise ReadinessContainerError("readiness RunArtifact run ID drifted")
+        context = value.get("run_context")
+        if not isinstance(context, Mapping) or str(context.get("target_runtime_lock_hash", "")) != target_runtime_lock_hash:
+            raise ReadinessContainerError("readiness RunArtifact target lock binding drifted")
         observed = ledger.aggregate(run_id)
         value["usage"] = {
             **dict(value["usage"]),

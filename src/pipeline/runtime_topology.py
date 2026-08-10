@@ -33,9 +33,14 @@ class SubprocessDocker:
     def run(
         self, args: Sequence[str], input_bytes: bytes | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["docker", *args], input=input_bytes.decode("utf-8") if input_bytes is not None else None,
-            capture_output=True, text=True, check=False,
+        completed = subprocess.run(
+            ["docker", *args], input=input_bytes,
+            capture_output=True, text=False, check=False,
+        )
+        return subprocess.CompletedProcess(
+            completed.args, completed.returncode,
+            stdout=completed.stdout.decode("utf-8", errors="replace"),
+            stderr=completed.stderr.decode("utf-8", errors="replace"),
         )
 
 
@@ -203,16 +208,13 @@ class TopologyLifecycle:
             raise TopologyError("baseline output directory must be a real directory")
         env_args.extend(["--env", "VERIPLANPT_OUTPUT_DIR=/run/veriplanpt/output"])
         args = [
-            "run", "--rm", "--name", name, "--network", handle.network_name,
+            "run", "--interactive", "--rm", "--name", name, "--network", handle.network_name,
             "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
-            "--mount", f"type=bind,src={output},dst=/run/veriplanpt/output,rw",
+            "--mount", f"type=bind,src={output},dst=/run/veriplanpt/output",
             *(_label_args(labels)), *env_args, image, *command,
         ]
-        try:
-            return self.docker.run(args, input_bytes=public_payload)
-        except TypeError:
-            return self.docker.run(args)
+        return self.docker.run(args, input_bytes=public_payload)
 
     @staticmethod
     def runtime_environment(

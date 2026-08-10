@@ -70,6 +70,8 @@ def _load_public_invocation() -> dict[str, Any]:
     target_hash = str(provenance.get("target_runtime_lock_hash", ""))
     if len(target_hash) != 64 or set(target_hash.lower()) - _HEX64:
         raise RuntimeBoundaryError("provenance target runtime lock hash is invalid")
+    if target_hash != _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH"):
+        raise RuntimeBoundaryError("public invocation target runtime lock hash differs from the approved environment")
     return invocation
 
 

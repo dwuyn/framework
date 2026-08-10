@@ -96,7 +96,8 @@ def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
         if artifact.framework_identity.get("image_digest") != cell["image_digest"]:
             raise ValueError("RunArtifact framework image identity does not match cell")
         expected_context = {"dataset_lock_hash": cell["dataset_lock_hash"], "training_protocol_hash": training_protocol_hash,
-                            "framework_commit": framework_commit, "evaluator_commit": evaluator_commit, "stage": "canary_smoke"}
+                            "framework_commit": framework_commit, "evaluator_commit": evaluator_commit, "stage": "canary_smoke",
+                            "target_runtime_lock_hash": cell["target_runtime_lock_hash"]}
         if production:
             expected_context["gateway_relay_lock_hash"] = gateway_relay_lock_hash
         if any(artifact.run_context.get(key) != value for key, value in expected_context.items()):
