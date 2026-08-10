@@ -8,7 +8,6 @@ from utils.model_manager import get_model
 from recon_agent import ReconAgent
 from langchain.memory import ConversationBufferMemory
 from langchain_core.messages import HumanMessage, AIMessage
-from git import Repo
 import dotenv
 import subprocess
 import logging
@@ -125,7 +124,8 @@ def main():
         doc_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), execution_config['doc_dir'], execution_config['repo_url'].split('/')[-1].replace('.git', '')))
         os.makedirs(doc_dir, exist_ok=True)
         if not os.listdir(doc_dir):
-            Repo.clone_from(execution_config['repo_url'], doc_dir)
+            from dulwich import porcelain  # type: ignore[import-not-found]
+            porcelain.clone(execution_config['repo_url'], doc_dir)
     else: doc_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), execution_config['doc_dir'])
     logger.info(f"Trying to execute exploit poc in {doc_dir}\n\n")
     start_time = time.time()

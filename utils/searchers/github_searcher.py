@@ -5,7 +5,6 @@ import datetime
 import dotenv
 from tqdm import tqdm
 import requests
-from git import Repo
 from urllib.parse import quote_plus
 from utils.searchers.Domain_Filter import repository_filter, code_white_list
 from utils.searchers.Extension_Filter import for_github_repo_file, for_github_code_file
@@ -326,7 +325,8 @@ class GithubSearcher:
             return repo_directory
         try:
             if repo_url:
-                Repo.clone_from(repo_url, repo_directory)
+                from dulwich import porcelain  # type: ignore[import-not-found]
+                porcelain.clone(repo_url, repo_directory)
                 return repo_directory
         except Exception:
             pass
@@ -384,7 +384,8 @@ class GithubSearcher:
                                                 f'{repo_star}_{repo_name}_{repo_language}')
                     if not os.path.exists(repo_directory):
                         os.mkdir(repo_directory)
-                        Repo.clone_from(repo_url, repo_directory)
+                        from dulwich import porcelain  # type: ignore[import-not-found]
+                        porcelain.clone(repo_url, repo_directory)
                         if filter_on:
                             file_count_0, _ = count_files_and_size(repo_directory)
                             # filter files, turn off when running pentestagent
