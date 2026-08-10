@@ -63,3 +63,4 @@ def test_readiness_binds_framework_run_dir_to_output_mount(tmp_path) -> None:
         executor(cell, tmp_path, {}, "canary", SimpleNamespace(), SimpleNamespace())
 
     assert captured["VERIPLANPT_RUN_DIR"] == "/run/veriplanpt/output"
+    assert captured["LOG_DIR"] == "/run/veriplanpt/output"

@@ -107,6 +107,10 @@ class ReadinessContainerExecutor:
             # bind mount; never let the baked /run/veriplanpt default escape
             # the writable evidence boundary.
             "VERIPLANPT_RUN_DIR": "/run/veriplanpt/output",
+            # Structured logging is initialized during graph import. Keep it
+            # inside the same writable bind mount when the image root is
+            # read-only.
+            "LOG_DIR": "/run/veriplanpt/output",
             "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": self.gateway_relay_lock_hash,
             "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": target_runtime_lock_hash,
             "VERIPLANPT_ADAPTER_PRODUCTION": "true",
