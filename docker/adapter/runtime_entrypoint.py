@@ -194,6 +194,23 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
     proof = [{"status": "ready", "kind": "controlled_provider_path"}]
     provenance = _object(invocation.get("provenance"), "provenance")
     framework = str(invocation["framework"])
+    run_context = {
+        "dataset_lock_hash": str(provenance.get("dataset_lock_hash", "")),
+        "training_protocol_hash": str(provenance.get("protocol_hash", "")),
+        "gateway_relay_lock_hash": _required_env("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH"),
+        "framework_commit": str(provenance.get("framework_commit", "")),
+        "evaluator_commit": str(provenance.get("evaluator_commit", "")),
+        "target_runtime_lock_hash": _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH"),
+        "stage": _required_env("VERIPLANPT_STAGE"),
+        "control_condition": "runtime",
+    }
+    # Readiness has no policy or matrix lock yet.  Omitting these optional
+    # bindings is distinct from emitting an invalid empty string; later paid
+    # stages include them in the public invocation provenance.
+    for key in ("policy_lock_hash", "matrix_hash"):
+        value = str(provenance.get(key, ""))
+        if value:
+            run_context[key] = value
     return {
         "schema_version": "2.1.0",
         "run_id": invocation["run_id"],
@@ -217,18 +234,7 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
             "image_digest": str(provenance.get("framework_image_digest", "")),
             "adapter_version": "adapter-3.0",
         },
-        "run_context": {
-            "dataset_lock_hash": str(provenance.get("dataset_lock_hash", "")),
-            "training_protocol_hash": str(provenance.get("protocol_hash", "")),
-            "policy_lock_hash": str(provenance.get("policy_lock_hash", "")),
-            "matrix_hash": str(provenance.get("matrix_hash", "")),
-            "gateway_relay_lock_hash": _required_env("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH"),
-            "framework_commit": str(provenance.get("framework_commit", "")),
-            "evaluator_commit": str(provenance.get("evaluator_commit", "")),
-            "target_runtime_lock_hash": _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH"),
-            "stage": _required_env("VERIPLANPT_STAGE"),
-            "control_condition": "runtime",
-        },
+        "run_context": run_context,
         "transcript": event_ledger,
         "proof_submissions": proof,
         "usage": {
