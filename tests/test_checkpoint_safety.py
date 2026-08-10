@@ -2,6 +2,7 @@
 Tests for checkpoint saver thread-safety and atomic write behavior.
 """
 
+import importlib
 import os
 import pickle
 import tempfile
@@ -9,6 +10,7 @@ import threading
 import time
 import unittest
 
+import src.graph as graph_module
 from src.graph import _DiskBackedSaver
 
 
@@ -39,6 +41,19 @@ class TestCheckpointPutSafety(unittest.TestCase):
 
     def _make_saver(self, path):
         return _DiskBackedSaver(path)
+
+    def test_checkpoint_root_follows_runtime_output_dir(self):
+        previous = os.environ.get("VERIPLANPT_RUN_DIR")
+        os.environ["VERIPLANPT_RUN_DIR"] = "/run/veriplanpt/output"
+        try:
+            reloaded = importlib.reload(graph_module)
+            self.assertEqual(reloaded._CHECKPOINT_DIR, "/run/veriplanpt/output/checkpoints")
+        finally:
+            if previous is None:
+                os.environ.pop("VERIPLANPT_RUN_DIR", None)
+            else:
+                os.environ["VERIPLANPT_RUN_DIR"] = previous
+            importlib.reload(graph_module)
 
     def test_single_put_succeeds(self):
         with tempfile.TemporaryDirectory(prefix="ckpt-") as tmp:

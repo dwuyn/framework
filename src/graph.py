@@ -92,7 +92,10 @@ logger = logging.getLogger(__name__)
 
 # ── Checkpoint directory ──────────────────────────────────────────────────────
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CHECKPOINT_DIR = os.path.join(_ROOT, "data", "checkpoints")
+_CHECKPOINT_DIR = os.path.join(
+    os.environ.get("VERIPLANPT_RUN_DIR", os.path.join(_ROOT, "data")),
+    "checkpoints",
+)
 
 
 def _to_dict(d):
