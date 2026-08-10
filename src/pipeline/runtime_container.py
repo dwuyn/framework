@@ -102,6 +102,11 @@ class ReadinessContainerExecutor:
         environment.update({
             "VERIPLANPT_STAGE": "canary_smoke",
             "VERIPLANPT_FRAMEWORK_NAME": framework,
+            # The image root is read-only. Framework-owned checkpoints and
+            # RunArtifact intermediates must stay inside the per-cell output
+            # bind mount; never let the baked /run/veriplanpt default escape
+            # the writable evidence boundary.
+            "VERIPLANPT_RUN_DIR": "/run/veriplanpt/output",
             "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": self.gateway_relay_lock_hash,
             "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": target_runtime_lock_hash,
             "VERIPLANPT_ADAPTER_PRODUCTION": "true",
