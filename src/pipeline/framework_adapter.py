@@ -727,6 +727,22 @@ class FrameworkAdapter:
                 "budget_llm_calls": budget_state.get("llm_calls", 0),
             })
 
+        run_context = {
+            "dataset_lock_hash": os.environ.get("VERIPLANPT_DATASET_LOCK_HASH", ""),
+            "training_protocol_hash": os.environ.get("VERIPLANPT_TRAINING_PROTOCOL_HASH", ""),
+            "gateway_relay_lock_hash": os.environ.get("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH", ""),
+            "target_runtime_lock_hash": os.environ.get("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH", ""),
+            "framework_commit": env.framework_commit,
+            "evaluator_commit": os.environ.get("VERIPLANPT_EVALUATOR_COMMIT", ""),
+            "stage": os.environ.get("VERIPLANPT_STAGE", "benchmark"),
+        }
+        # Readiness does not have policy or matrix locks yet. Omit optional
+        # bindings until the paid sweep/benchmark stages provide real hashes.
+        for key in ("policy_lock_hash", "matrix_hash"):
+            value = os.environ.get(f"VERIPLANPT_{key.upper()}", "")
+            if value:
+                run_context[key] = value
+
         artifact = RunArtifact(
             case_id=task.case_id,
             repetition=repetition,
@@ -759,17 +775,7 @@ class FrameworkAdapter:
                 "image_digest": os.environ.get("VERIPLANPT_IMAGE_DIGEST", ""),
                 "adapter_version": "veriplanpt-adapter-3.0",
             },
-            run_context={
-                "dataset_lock_hash": os.environ.get("VERIPLANPT_DATASET_LOCK_HASH", ""),
-                "training_protocol_hash": os.environ.get("VERIPLANPT_TRAINING_PROTOCOL_HASH", ""),
-                "gateway_relay_lock_hash": os.environ.get("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH", ""),
-                "target_runtime_lock_hash": os.environ.get("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH", ""),
-                "policy_lock_hash": os.environ.get("VERIPLANPT_POLICY_LOCK_HASH", ""),
-                "matrix_hash": os.environ.get("VERIPLANPT_MATRIX_HASH", ""),
-                "framework_commit": env.framework_commit,
-                "evaluator_commit": os.environ.get("VERIPLANPT_EVALUATOR_COMMIT", ""),
-                "stage": os.environ.get("VERIPLANPT_STAGE", "benchmark"),
-            },
+            run_context=run_context,
             event_ledger_hash=_json_sha256(transcript),
             proof_hash=_json_sha256(proof_submissions),
         )
