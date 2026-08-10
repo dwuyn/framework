@@ -91,7 +91,10 @@ def _provider_probe(invocation: Mapping[str, Any], *, phase: str = "runtime-read
         "objective": task.get("objective", "Verify the controlled model path."),
         "target": task.get("target", {}),
     }
-    return request({"contents": json.dumps(prompt, sort_keys=True)})
+    contents: Any = json.dumps(prompt, sort_keys=True)
+    if invocation["model_label"] == "gemma-4-26b-a4b-it":
+        contents = [{"role": "user", "content": contents}]
+    return request({"contents": contents})
 
 
 def _adapter_phases(framework: str) -> tuple[str, ...]:
