@@ -55,6 +55,10 @@ def test_topology_is_internal_readonly_and_label_owned(tmp_path: Path) -> None:
     assert "--read-only" in relay
     assert "--network-alias" in relay and "gateway-relay" in relay
     assert "readonly" in " ".join(relay)
+    cleanup_commands = docker.commands[2:]
+    assert cleanup_commands
+    assert all("--filter" in command for command in cleanup_commands)
+    assert all("--label" not in command for command in cleanup_commands)
     assert not list((tmp_path / "runtime-sockets").glob("*/gateway.sock"))
 
 

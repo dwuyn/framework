@@ -74,6 +74,13 @@ def _label_args(labels: Mapping[str, str]) -> list[str]:
     return values
 
 
+def _label_filters(labels: Mapping[str, str]) -> list[str]:
+    values: list[str] = []
+    for key, value in sorted(labels.items()):
+        values.extend(["--filter", f"label={key}={value}"])
+    return values
+
+
 def validate_runtime_topology_evidence(value: Mapping[str, Any]) -> None:
     if str(value.get("schema_version")) != TOPOLOGY_SCHEMA:
         raise ValueError("runtime topology evidence schema_version must be 1.0.0")
@@ -259,7 +266,7 @@ class TopologyLifecycle:
         except OSError as exc:
             errors.append(f"socket cleanup: {exc}")
         for kind in ("container", "network"):
-            listed = self.docker.run([kind, "ls", "-q", *(_label_args(handle.labels))])
+            listed = self.docker.run([kind, "ls", "-q", *(_label_filters(handle.labels))])
             ids = [item for item in listed.stdout.splitlines() if item]
             if listed.returncode != 0:
                 errors.append(f"{kind} list: {listed.stderr[-1000:]}")
