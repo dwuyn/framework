@@ -208,7 +208,8 @@ class TopologyLifecycle:
             raise TopologyError("baseline output directory must be a real directory")
         env_args.extend(["--env", "VERIPLANPT_OUTPUT_DIR=/run/veriplanpt/output"])
         args = [
-            "run", "--interactive", "--rm", "--name", name, "--network", handle.network_name,
+            "run", "--interactive", "--rm", "--name", name, "--user", f"{self.host_uid}:{self.host_gid}",
+            "--network", handle.network_name,
             "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
             "--mount", f"type=bind,src={output},dst=/run/veriplanpt/output",

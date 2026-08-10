@@ -88,6 +88,7 @@ def test_baseline_receives_only_public_stdin_and_output_mount(tmp_path: Path) ->
     assert "--rm" in command and "--read-only" in command
     assert "--interactive" in command
     assert "--tty" not in command
+    assert command[command.index("--user") + 1] == "1000:1000"
     mount = command[command.index("--mount") + 1]
     assert mount == f"type=bind,src={output.resolve()},dst=/run/veriplanpt/output"
     assert docker.inputs[-1] == b"{}"

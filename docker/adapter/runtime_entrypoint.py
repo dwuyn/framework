@@ -76,7 +76,12 @@ def _load_public_invocation() -> dict[str, Any]:
 
 
 def _provider_probe(invocation: Mapping[str, Any], *, phase: str = "runtime-readiness") -> Mapping[str, Any]:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    # The immutable image copies this entrypoint to /runner/run while the
+    # provider shim remains in /opt/adapter.  Add both locations explicitly so
+    # the public stdin boundary cannot depend on the image working directory.
+    for adapter_dir in (Path(__file__).resolve().parent, Path("/opt/adapter")):
+        if str(adapter_dir) not in sys.path:
+            sys.path.insert(0, str(adapter_dir))
     from provider_shim import request  # type: ignore[import-not-found]
 
     task = _object(invocation["task"], "public task")
