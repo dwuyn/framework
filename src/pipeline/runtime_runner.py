@@ -199,6 +199,13 @@ class RuntimeRunner:
                             ("cost", normalized_cost), ("cleanup", result.cleanup)):
             source_paths[name].parent.mkdir(parents=True, exist_ok=True)
             source_paths[name].write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        # The independent evaluator consumes the framework-phase cleanup
+        # seal. Readiness uses the same cleanup result as the per-cell
+        # evidence, so persist it under the evaluator's protocol name before
+        # invoking either independent bundle.
+        (run_dir / "framework-cleanup.json").write_text(
+            json.dumps(result.cleanup, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
         evaluator_verdict = self.bundle_executor(self.evaluator_bundle, run_dir, result.run_artifact)
         if evaluator_verdict.get("status") != "passed" and evaluator_verdict.get("evaluator", {}).get("status") != "passed":
             raise RuntimeHalt("evaluator bundle failed")
