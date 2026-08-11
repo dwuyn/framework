@@ -301,7 +301,13 @@ def main() -> int:
             "response_hash": _canonical(events),
         }
         candidate = output / "run_artifact.json"
-        if not fake and termination == "completed":
+        # Vertex canaries intentionally run only the controlled provider
+        # probe; unlike framework/model smoke they do not invoke a production
+        # driver that can emit its own RunArtifact.  Materialize the strict
+        # controlled-probe artifact for that path instead of treating the
+        # missing driver artifact as a post-response failure.
+        is_vertex_canary = str(invocation.get("condition")) == "vertex_canary"
+        if not fake and termination == "completed" and not is_vertex_canary:
             if not candidate.is_file() or candidate.is_symlink():
                 raise RuntimeBoundaryError("production adapter did not emit run_artifact.json")
             artifact = _object(json.loads(candidate.read_text(encoding="utf-8")), "production RunArtifact")

@@ -84,3 +84,42 @@ def test_paid_adapter_uses_same_fake_provider_path(tmp_path, monkeypatch, framew
     assert [item["event"]["phase"] for item in artifact["transcript"]] == ["recon", "planning", "execution"]
     assert len(calls) == 3
     assert artifact["run_context"]["target_runtime_lock_hash"] == "9" * 64
+
+
+def test_production_canary_probe_emits_controlled_run_artifact(tmp_path, monkeypatch) -> None:
+    module = _module()
+    calls: list[dict[str, object]] = []
+
+    def request(payload: dict[str, object]) -> dict[str, object]:
+        calls.append(payload)
+        return {
+            "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3, "usd": 0.01},
+            "response_hash": "2" * 64,
+        }
+
+    invocation = _invocation("VeriPlanPT")
+    invocation["run_id"] = "canary-veriplanpt"
+    invocation["condition"] = "vertex_canary"
+    monkeypatch.setitem(sys.modules, "provider_shim", SimpleNamespace(request=request))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(invocation)))
+    output = tmp_path / "canary"
+    output.mkdir()
+    for key, value in {
+        "VERIPLANPT_STAGE": "canary_smoke",
+        "VERIPLANPT_ADAPTER_PRODUCTION": "true",
+        "VERIPLANPT_RUN_ID": "canary-veriplanpt",
+        "VERIPLANPT_MODEL_LABEL": "gemini-3.5-flash",
+        "VERIPLANPT_PROFILE_HASH": "f" * 64,
+        "VERIPLANPT_FRAMEWORK_NAME": "VeriPlanPT",
+        "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": "2" * 64,
+        "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": "9" * 64,
+        "VERIPLANPT_OUTPUT_DIR": str(output),
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("VERIPLANPT_FAKE_PROVIDER", raising=False)
+
+    assert module.main() == 0
+    artifact = json.loads((output / "run_artifact.json").read_text(encoding="utf-8"))
+    assert artifact["run_id"] == "canary-veriplanpt"
+    assert artifact["termination_status"] == "completed"
+    assert len(calls) == 1
