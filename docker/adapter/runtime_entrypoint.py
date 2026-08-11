@@ -118,7 +118,8 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
     framework = str(invocation["framework"])
     phases = _adapter_phases(framework)
     started = time.monotonic()
-    driver_input = Path(_required_env("VERIPLANPT_OUTPUT_DIR")) / "public-invocation.json"
+    output = Path(_required_env("VERIPLANPT_OUTPUT_DIR"))
+    driver_input = output / "public-invocation.json"
     if driver_input.exists() or driver_input.is_symlink():
         raise RuntimeBoundaryError("refusing to overwrite public driver input")
     driver_input.write_text(json.dumps(dict(invocation), sort_keys=True) + "\n", encoding="utf-8")
@@ -142,18 +143,19 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
     # boundary.  A live image may opt into its pinned upstream driver, but the
     # driver command is image-owned and never accepted from stdin or env.
     if not fake:
-        command_map: dict[str, tuple[str, ...]] = {
-            "VeriPlanPT": (sys.executable, "-m", "src.pipeline.production_driver"),
-            "PentestAgent": (sys.executable, "/opt/adapter/baseline_driver.py"),
-            "PentestGPT": (sys.executable, "-m", "pentestgpt.main"),
-            "VulnBot": (sys.executable, "cli.py", "vulnbot"),
-            "HackSynth": (sys.executable, "run_bench.py"),
-        }
-        command = command_map[framework]
+        command = (
+            (sys.executable, "-m", "src.pipeline.production_driver")
+            if framework == "VeriPlanPT"
+            else (sys.executable, "/opt/adapter/baseline_driver.py")
+        )
         try:
             completed = subprocess.run(
                 command,
-                cwd=os.environ.get("VERIPLANPT_SOURCE_DIR", "/opt/upstream"),
+                # The image root and upstream checkout are read-only.  The
+                # image-owned baseline dispatcher receives the pinned source
+                # through PYTHONPATH and writes logs/config/checkpoints in the
+                # per-cell output mount.
+                cwd=output,
                 capture_output=True,
                 text=True,
                 timeout=int(os.environ.get("VERIPLANPT_MAX_RUNTIME_SECONDS", "3600")),

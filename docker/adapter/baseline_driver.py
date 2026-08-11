@@ -22,30 +22,36 @@ def _framework() -> str:
     return value
 
 
-def _commands(framework: str, run_dir: Path) -> tuple[tuple[str, ...], ...]:
+def _commands(framework: str, run_dir: Path, source: Path) -> tuple[tuple[str, ...], ...]:
     if framework == "PentestAgent":
         return (
-            (sys.executable, "agents/recon_agent.py"),
-            (sys.executable, "agents/planning_agent.py"),
-            (sys.executable, "agents/execution_agent.py"),
+            (sys.executable, str(source / "agents/recon_agent.py")),
+            (sys.executable, str(source / "agents/planning_agent.py")),
+            (sys.executable, str(source / "agents/execution_agent.py")),
         )
     if framework == "PentestGPT":
         return ((sys.executable, "-m", "pentestgpt.main"),)
     if framework == "VulnBot":
-        return ((sys.executable, "cli.py", "vulnbot", "--max_interactions", os.environ.get("VERIPLANPT_MAX_LLM_CALLS", "1")),)
+        return ((sys.executable, str(source / "cli.py"), "vulnbot", "--max_interactions", os.environ.get("VERIPLANPT_MAX_LLM_CALLS", "1")),)
     benchmark = run_dir / "hacksynth-benchmark.json"
     config = run_dir / "hacksynth-config.json"
     task = json.loads(Path(os.environ["VERIPLANPT_PUBLIC_INVOCATION_FILE"]).read_text(encoding="utf-8"))
     benchmark.write_text(json.dumps({task["case_id"]: {"description": task["task"].get("objective", ""), "target": "lab.local"}}, sort_keys=True) + "\n", encoding="utf-8")
     config.write_text(json.dumps({"attackbox": "lab.local", "llm": {"model_id": task["model_label"], "model_local": False}, "max_tries": int(os.environ.get("VERIPLANPT_MAX_LLM_CALLS", "1"))}, sort_keys=True) + "\n", encoding="utf-8")
-    return ((sys.executable, "run_bench.py", "-b", str(benchmark), "-c", str(config)),)
+    return ((sys.executable, str(source / "run_bench.py"), "-b", str(benchmark), "-c", str(config)),)
 
 
 def main() -> int:
     run_dir = Path(os.environ.get("VERIPLANPT_RUN_DIR", "/run/veriplanpt"))
     source = Path(os.environ.get("VERIPLANPT_SOURCE_DIR", "/opt/upstream"))
-    for command in _commands(_framework(), run_dir):
-        result = subprocess.run(command, cwd=source, check=False)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    child_environment = os.environ.copy()
+    source_string = str(source)
+    child_environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (source_string, child_environment.get("PYTHONPATH", "")) if item
+    )
+    for command in _commands(_framework(), run_dir, source):
+        result = subprocess.run(command, cwd=run_dir, env=child_environment, check=False)
         if result.returncode:
             return result.returncode
     return 0
