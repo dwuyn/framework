@@ -139,7 +139,7 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
         signature_path=signature, public_key="test", evaluator_bundle=evaluator, oracle_bundle=oracle,
         evaluator_bundle_hash=_bundle_hash(evaluator), oracle_bundle_hash=_bundle_hash(oracle),
         cell_executor=execute, bundle_executor=IndependentBundleExecutor(
-            evaluator_bundle=evaluator, oracle_bundle=oracle,
+            evaluator_bundle=evaluator, oracle_bundle=oracle, hidden_case_root=tmp_path,
         ),
         topology=_Topology(tmp_path, relay_hash),
     )

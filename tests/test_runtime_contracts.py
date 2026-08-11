@@ -7,12 +7,12 @@ import pytest
 
 from src.pipeline.experiment_runner import validate_runtime_preflight
 from src.pipeline.framework_adapter import ModelProfile
+from src.pipeline.llm_budget import NormalizedUsage
 from src.pipeline.runtime_contract import (
     LOCKED_MODEL_LABELS,
     validate_runtime_profile,
     verify_alias_exception,
 )
-from src.pipeline.llm_budget import NormalizedUsage
 from src.pipeline.runtime_ledger import InvocationLedger
 from src.pipeline.runtime_readiness import build_canary_smoke_plan, validate_canary_smoke_plan
 from src.pipeline.vertex_gateway import GatewayError, VertexGateway

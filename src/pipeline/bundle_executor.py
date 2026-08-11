@@ -177,6 +177,7 @@ class IndependentBundleExecutor:
 
     def __init__(
         self, *, evaluator_bundle: str | Path, oracle_bundle: str | Path,
+        hidden_case_root: str | Path | None = None,
         timeout_seconds: float = 30.0, max_output_bytes: int = _MAX_OUTPUT_BYTES,
     ) -> None:
         if timeout_seconds <= 0:
@@ -187,7 +188,11 @@ class IndependentBundleExecutor:
         oracle = Path(oracle_bundle).resolve()
         if evaluator == oracle:
             raise ValueError("evaluator and oracle bundles must be independent")
+        hidden_root = Path(hidden_case_root).resolve() if hidden_case_root is not None else None
+        if hidden_root is not None and (hidden_root.is_symlink() or not hidden_root.is_dir()):
+            raise BundleExecutionError("oracle hidden case root must be a real directory")
         self._registered = {evaluator: "evaluator", oracle: "oracle"}
+        self.hidden_case_root = hidden_root
         self.timeout_seconds = timeout_seconds
         self.max_output_bytes = max_output_bytes
 
@@ -221,6 +226,10 @@ class IndependentBundleExecutor:
                 str(entrypoint), "--run-dir", str(run_root),
                 "--run-artifact", str(input_path), "--output", str(output_path),
             ]
+            if expected_kind == "oracle":
+                if self.hidden_case_root is None:
+                    raise BundleExecutionError("oracle execution requires a hidden case root")
+                argv.extend(["--hidden-case-root", str(self.hidden_case_root)])
             try:
                 completed = subprocess.run(
                     argv, cwd=str(run_root), env=environment, stdin=subprocess.DEVNULL,

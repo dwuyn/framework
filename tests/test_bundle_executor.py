@@ -59,6 +59,32 @@ def test_independent_bundle_executor_passes_and_strips_cloud_environment(tmp_pat
     assert verdict == {"schema_version": "2.0.0", "kind": "evaluator", "status": "passed", "outcome": {}}
 
 
+def test_independent_bundle_executor_passes_hidden_root_to_oracle(tmp_path: Path) -> None:
+    hidden_root = tmp_path / "hidden"
+    hidden_root.mkdir()
+    oracle_script = """
+        #!/usr/bin/env python3
+        import argparse, json
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--run-dir', required=True)
+        parser.add_argument('--run-artifact', required=True)
+        parser.add_argument('--output', required=True)
+        parser.add_argument('--hidden-case-root', required=True)
+        args = parser.parse_args()
+        assert args.hidden_case_root == __import__('pathlib').Path("HIDDEN").resolve().as_posix()
+        json.dump({'schema_version': '2.0.0', 'kind': 'oracle', 'status': 'passed', 'outcome': {}}, open(args.output, 'w', encoding='utf-8'))
+    """.replace("HIDDEN", str(hidden_root).replace("\\", "\\\\"))
+    evaluator = _write_bundle(tmp_path, "evaluator", _PASS.replace("KIND", "evaluator"))
+    oracle = _write_bundle(tmp_path, "oracle", oracle_script)
+    executor = IndependentBundleExecutor(
+        evaluator_bundle=evaluator, oracle_bundle=oracle, hidden_case_root=hidden_root,
+    )
+
+    verdict = executor(oracle, tmp_path, {"case_id": "vp-test-0001"})
+
+    assert verdict == {"schema_version": "2.0.0", "kind": "oracle", "status": "passed", "outcome": {}}
+
+
 def test_independent_bundle_executor_rejects_wrong_bundle_kind(tmp_path: Path) -> None:
     evaluator = _write_bundle(tmp_path, "evaluator", _PASS.replace("KIND", "evaluator"))
     oracle = _write_bundle(tmp_path, "oracle", _PASS.replace("KIND", "oracle"))
