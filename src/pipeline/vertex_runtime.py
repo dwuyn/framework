@@ -540,7 +540,36 @@ def _response_mapping(response: Any) -> Mapping[str, Any]:
     raise VertexContractError("provider response must expose a mapping for evidence hashing")
 
 
+def _gemini_visible_text(payload: Mapping[str, Any]) -> str | None:
+    """Extract visible Gemini text while excluding thought parts."""
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, ABCSequence) or isinstance(candidates, (str, bytes)):
+        return None
+    visible: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, ABCMapping):
+            continue
+        content = candidate.get("content")
+        if not isinstance(content, ABCMapping):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, ABCSequence) or isinstance(parts, (str, bytes)):
+            continue
+        for part in parts:
+            if not isinstance(part, ABCMapping) or part.get("thought") is True:
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                visible.append(text)
+    return "".join(visible)
+
+
 def _response_text(response: Any, payload: Mapping[str, Any]) -> str:
+    gemini_text = _gemini_visible_text(payload)
+    if gemini_text is not None:
+        if gemini_text:
+            return gemini_text
+        raise VertexContractError("Gemini provider response has no visible text content")
     direct = payload.get("text")
     if isinstance(direct, str):
         return direct
@@ -553,7 +582,10 @@ def _response_text(response: Any, payload: Mapping[str, Any]) -> str:
                 return str(message["content"])
             if isinstance(first.get("text"), str):
                 return str(first["text"])
-    value = getattr(response, "text", None)
+    try:
+        value = getattr(response, "text", None)
+    except Exception:  # SDK response.text may evaluate provider-specific fields
+        value = None
     if isinstance(value, str):
         return value
     raise VertexContractError("provider response has no text content")

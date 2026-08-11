@@ -788,7 +788,7 @@ def pipeline_retrieve_node(state: PentestState) -> dict:
                 "retrieval_status": "dataset_missing",
                 "source_snapshot_hash": str(state.get("source_snapshot_hash") or ""),
             }
-        state = dict(state)
+        state = cast(PentestState, dict(state))
         state["source_snapshot_hash"] = str(source_manifest["snapshot_hash"])
     runner = _runner(state, manifest, ledger)
     observations = _observations_from_state(state)
