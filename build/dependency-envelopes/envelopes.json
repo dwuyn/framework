@@ -65,6 +65,13 @@
         "pyproject.toml": "ffb0e0638ff7e3c2300677b64f7d40a3f8161c10c019d0e0f31d318a00c687cf"
       },
       "name": "PentestAgent",
+      "os_package_envelope": {
+        "architecture": "amd64",
+        "lock_path": "build/os-packages.lock.json",
+        "lock_sha256": "5caf7e56bf9951e8e3d52027f58a14c32d0cfc642a3340d5823fbf5d166b5677",
+        "root_package": "git=1:2.39.5-0+deb12u3",
+        "suite": "bookworm"
+      },
       "os_package_requirements": [
         "git"
       ],

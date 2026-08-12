@@ -171,6 +171,32 @@ def materialize_lock(lock: Path, wheelhouse: Path, destination: Path) -> None:
     destination.write_text(text, encoding="utf-8")
 
 
+def materialize_os_package_envelope(lock: Path, package_root: Path, context: Path) -> dict[str, Any]:
+    """Copy only the hash-verified Debian packages selected by the lock."""
+    lock_hash = _sha256_file(lock)
+    lock_value = json.loads(lock.read_text(encoding="utf-8"))
+    if lock_value.get("aggregate_lock_hash") is None or not isinstance(lock_value.get("packages"), list):
+        raise SystemExit("OS package lock is malformed")
+    destination = context / "os-packages"
+    destination.mkdir(parents=True, exist_ok=False)
+    for package in lock_value["packages"]:
+        filename = str(package["filename"])
+        source = package_root / filename
+        if not source.is_file() or source.is_symlink():
+            raise SystemExit(f"OS package is missing: {source}")
+        if source.stat().st_size != int(package["size_bytes"]) or _sha256_file(source) != str(package["sha256"]):
+            raise SystemExit(f"OS package checksum mismatch: {source}")
+        shutil.copyfile(source, destination / filename)
+    shutil.copyfile(lock, context / "os-packages.lock.json")
+    return {
+        "lock_path": str(context / "os-packages.lock.json"),
+        "lock_sha256": lock_hash,
+        "aggregate_lock_hash": str(lock_value["aggregate_lock_hash"]),
+        "package_count": len(lock_value["packages"]),
+        "package_root": str(destination),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--metadata", default=str(ROOT / "build/dependency-envelopes/envelopes.json"))
@@ -178,12 +204,15 @@ def main() -> int:
                         help="new, empty staging root; historical contexts are never reused")
     parser.add_argument("--wheelhouse-root", required=True,
                         help="read-only verified wheelhouse root containing one directory per framework")
+    parser.add_argument("--os-package-root", default="",
+                        help="read-only host directory containing the locked Debian packages")
     args = parser.parse_args()
     metadata_path = Path(args.metadata).resolve()
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata_sha256 = _sha256_file(metadata_path)
     artifact_root = Path(args.staging_root).resolve()
     wheelhouse_root = Path(args.wheelhouse_root).resolve()
+    os_package_root = Path(args.os_package_root).resolve() if args.os_package_root else None
     if artifact_root == wheelhouse_root or artifact_root in wheelhouse_root.parents:
         raise SystemExit("staging root must not overlap the verified wheelhouse root")
     if artifact_root.exists() and any(artifact_root.iterdir()):
@@ -223,6 +252,15 @@ def main() -> int:
         for wheel in wheelhouse.iterdir():
             if wheel.is_file():
                 shutil.copyfile(wheel, context / "wheelhouse" / wheel.name)
+        os_package_record: dict[str, Any] | None = None
+        if envelope.get("os_package_envelope") is not None:
+            if os_package_root is None:
+                raise SystemExit("--os-package-root is required for an OS package envelope")
+            os_lock = ROOT / str(envelope["os_package_envelope"]["lock_path"])
+            expected_lock_hash = str(envelope["os_package_envelope"]["lock_sha256"])
+            if _sha256_file(os_lock) != expected_lock_hash:
+                raise SystemExit(f"OS package lock hash mismatch: {os_lock}")
+            os_package_record = materialize_os_package_envelope(os_lock, os_package_root, context)
         for role, source_path in dict(envelope["adapter_paths"]).items():
             source = Path(str(source_path))
             destination = context / "adapter" / f"{role}-{source.name}"
@@ -248,6 +286,8 @@ def main() -> int:
             "dependency_lock": str(context / "envelope" / lock.name),
             "wheelhouse": str(context / "wheelhouse"),
         }
+        if os_package_record is not None:
+            manifest["contexts"][name]["os_package_envelope"] = os_package_record
     relay_context = artifact_root / "gateway-relay-context"
     if relay_context.exists():
         raise SystemExit(f"refusing to overwrite staged relay context: {relay_context}")

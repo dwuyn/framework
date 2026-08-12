@@ -60,3 +60,17 @@ def test_hacksynth_lock_contains_hashes_and_no_gpu_packages() -> None:
     assert "torchaudio==2.3.0+cpu" in lock
     assert not re.search(r"(^|\n)(nvidia-[^=\s]+|triton)==", lock)
     assert "--hash=sha256:" in lock
+
+
+def test_pentestagent_uses_locked_offline_os_package_envelope() -> None:
+    recipe = (ROOT / "docker/baselines/PentestAgent.Dockerfile").read_text()
+    lock = json.loads((ROOT / "build/os-packages.lock.json").read_text())
+    assert lock["suite"] == "bookworm"
+    assert lock["architecture"] == "amd64"
+    assert lock["install_policy"]["no_install_recommends"] is True
+    assert lock["install_policy"]["root_package"] == {"name": "git", "version": "1:2.39.5-0+deb12u3"}
+    assert "apt-get" not in recipe
+    assert "COPY os-packages/" in recipe
+    assert "dpkg -i" in recipe
+    assert "dpkg --audit" in recipe
+    assert "com.veriplanpt.os-package-lock-hash" in recipe

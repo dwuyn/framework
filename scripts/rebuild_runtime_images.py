@@ -80,6 +80,38 @@ def _dependency_lock(context: Mapping[str, Any], envelope: Mapping[str, Any]) ->
     return lock_path, expected
 
 
+def _os_package_envelope(context: Path, envelope: Mapping[str, Any]) -> tuple[str, list[tuple[str, str]]]:
+    spec = envelope.get("os_package_envelope")
+    if not isinstance(spec, Mapping):
+        raise RuntimeError("PentestAgent OS package envelope is missing")
+    lock_path = context / "os-packages.lock.json"
+    expected_lock_sha256 = str(spec["lock_sha256"])
+    if not lock_path.is_file() or _sha(lock_path) != expected_lock_sha256:
+        raise RuntimeError("PentestAgent OS package lock hash mismatch")
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    aggregate = str(lock.get("aggregate_lock_hash", ""))
+    body = dict(lock)
+    body.pop("aggregate_lock_hash", None)
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if hashlib.sha256(canonical).hexdigest() != aggregate:
+        raise RuntimeError("PentestAgent aggregate OS package lock hash mismatch")
+    package_dir = context / "os-packages"
+    packages = lock.get("packages")
+    if not package_dir.is_dir() or not isinstance(packages, list):
+        raise RuntimeError("PentestAgent OS package context is incomplete")
+    expected_files = {str(item["filename"]) for item in packages}
+    actual_files = {path.name for path in package_dir.glob("*.deb")}
+    if actual_files != expected_files:
+        raise RuntimeError("PentestAgent OS package file set mismatch")
+    versions: list[tuple[str, str]] = []
+    for item in packages:
+        path = package_dir / str(item["filename"])
+        if path.stat().st_size != int(item["size_bytes"]) or _sha(path) != str(item["sha256"]):
+            raise RuntimeError(f"PentestAgent OS package checksum mismatch: {path.name}")
+        versions.append((str(item["name"]), str(item["version"])))
+    return aggregate, versions
+
+
 def _build_arguments(
     name: str,
     envelope: Mapping[str, Any],
@@ -142,6 +174,11 @@ def main(argv: list[str] | None = None) -> int:
         commit, tree_hash, args_for_build = _build_arguments(
             name, envelope, dependency_hash=dependency_hash, recipe_hash=recipe_hash, adapter_hash=adapter_hash,
         )
+        os_package_hash = ""
+        os_package_versions: list[tuple[str, str]] = []
+        if name == "PentestAgent":
+            os_package_hash, os_package_versions = _os_package_envelope(context, envelope)
+            args_for_build["OS_PACKAGE_LOCK_HASH"] = os_package_hash
         command = ["docker", "build", "--network=none", "--pull=false", "--tag", image, "--file", str(recipe)]
         for key, value in sorted(args_for_build.items()):
             command.extend(["--build-arg", f"{key}={value}"])
@@ -155,6 +192,26 @@ def main(argv: list[str] | None = None) -> int:
         tree_label = labels.get("com.veriplanpt.git-tree-hash")
         if commit_label != commit or tree_label != tree_hash:
             raise RuntimeError(f"Docker labels do not match receipt-scoped metadata for {name}")
+        if name == "PentestAgent" and labels.get("com.veriplanpt.os-package-lock-hash") != os_package_hash:
+            raise RuntimeError("Docker label does not match the PentestAgent OS package lock")
+        if name == "PentestAgent":
+            expected = " ".join(f"{package}={version}" for package, version in os_package_versions)
+            contract = (
+                "set -eu; test -z \"$(dpkg --audit)\"; "
+                f"for spec in {expected}; do package=\"${{spec%%=*}}\"; version=\"${{spec#*=}}\"; "
+                "test \"$(dpkg-query -W -f='${Version}' \"$package\")\" = \"$version\"; done; "
+                "git --version; work=$(mktemp -d); mkdir \"$work/src\"; "
+                "git init \"$work/src\" >/dev/null; printf ok >\"$work/src/file\"; "
+                "git -C \"$work/src\" -c user.name=offline -c user.email=offline@example.invalid add file; "
+                "git -C \"$work/src\" -c user.name=offline -c user.email=offline@example.invalid commit -m offline >/dev/null; "
+                "git clone \"file://$work/src\" \"$work/clone\" >/dev/null; test -f \"$work/clone/file\""
+            )
+            package_contract = subprocess.run(
+                ["docker", "run", "--rm", "--network", "none", "--entrypoint", "/bin/sh", image, "-c", contract],
+                capture_output=True, text=True, check=False,
+            )
+            if package_contract.returncode:
+                raise RuntimeError(f"PentestAgent offline OS package contract failed: {(package_contract.stderr or package_contract.stdout).strip()[-2000:]}")
         identity = {
             "name": name, "image": image, "image_id": digest, "image_digest": digest,
             "adapter_bundle_hash": adapter_hash, "adapter_contract_version": "adapter-3.0",
@@ -162,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
             "source_commit": commit, "source_tree_hash": tree_hash, "image_labels": labels,
             "metadata_sha256": metadata_sha256,
         }
+        if name == "PentestAgent":
+            identity["os_package_lock_hash"] = os_package_hash
         if name == "VeriPlanPT":
             native = {
                 "schema_version": "2.0.0", "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),

@@ -1,0 +1,902 @@
+{
+  "aggregate_lock_hash": "518c567b4c6d90086f57e0b9f44184dba5abf5d5b520da036c318bdde773003d",
+  "architecture": "amd64",
+  "base_image": {
+    "digest": "sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba",
+    "reference": "python:3.11.15-slim-bookworm"
+  },
+  "distribution": "Debian",
+  "install_policy": {
+    "method": "dpkg -i",
+    "network": "none",
+    "no_install_recommends": true,
+    "root_package": {
+      "name": "git",
+      "version": "1:2.39.5-0+deb12u3"
+    }
+  },
+  "kind": "debian-os-package-lock",
+  "packages": [
+    {
+      "architecture": "amd64",
+      "depends": "tar (>= 1.28-1)",
+      "filename": "dpkg_1.21.23_amd64.deb",
+      "name": "dpkg",
+      "pre_depends": "libbz2-1.0, libc6 (>= 2.34), liblzma5 (>= 5.4.0), libmd0 (>= 0.0.0), libselinux1 (>= 3.1~), libzstd1 (>= 1.5.2), zlib1g (>= 1:1.1.4)",
+      "sha256": "f89e9f8d1a4a50ade44be3ed59a6ec55460fce205d2f8520c5c492137c5b609b",
+      "size_bytes": 1567804,
+      "source_url": "https://deb.debian.org/debian/pool/main/d/dpkg/dpkg_1.21.23_amd64.deb",
+      "version": "1.21.23"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "",
+      "filename": "gcc-12-base_12.2.0-14+deb12u1_amd64.deb",
+      "name": "gcc-12-base",
+      "pre_depends": "",
+      "sha256": "1896a2aacf4ad681ff5eacc24a5b0ca4d5d9c9b9c9e4b6de5197bc1e116ea619",
+      "size_bytes": 37596,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/gcc-12/gcc-12-base_12.2.0-14+deb12u1_amd64.deb",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34), libcurl3-gnutls (>= 7.56.1), libexpat1 (>= 2.0.1), libpcre2-8-0 (>= 10.34), zlib1g (>= 1:1.2.2), perl, liberror-perl, git-man (>> 1:2.39.5), git-man (<< 1:2.39.5-.)",
+      "filename": "git_2.39.5-0+deb12u3_amd64.deb",
+      "name": "git",
+      "pre_depends": "",
+      "sha256": "637a85ddd6247fab13bdd0592f2f39aff04ce4dbf0655d3ab553ac359a38ce6f",
+      "size_bytes": 7264380,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/git/git_2.39.5-0+deb12u3_amd64.deb",
+      "version": "1:2.39.5-0+deb12u3"
+    },
+    {
+      "architecture": "all",
+      "depends": "",
+      "filename": "git-man_2.39.5-0+deb12u3_all.deb",
+      "name": "git-man",
+      "pre_depends": "",
+      "sha256": "904dbd8dbc3db34c6780fb0abfe35816d4a90a490126ef0a055a77a0c5dcab82",
+      "size_bytes": 2053236,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/git/git-man_2.39.5-0+deb12u3_all.deb",
+      "version": "1:2.39.5-0+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.33)",
+      "filename": "libacl1_2.3.1-3_amd64.deb",
+      "name": "libacl1",
+      "pre_depends": "",
+      "sha256": "8be9df5795114bfe90e2be3d208ef47a5edd3fc7b3e20d387a597486d444e5e2",
+      "size_bytes": 31488,
+      "source_url": "https://deb.debian.org/debian/pool/main/a/acl/libacl1_2.3.1-3_amd64.deb",
+      "version": "2.3.1-3"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.29)",
+      "filename": "libbrotli1_1.0.9-2+b6_amd64.deb",
+      "name": "libbrotli1",
+      "pre_depends": "",
+      "sha256": "563b4caec1aa5e876bd3355b36e7a38e1484baf5a293b48d1e8bd22db786e4d7",
+      "size_bytes": 275248,
+      "source_url": "https://deb.debian.org/debian/pool/main/b/brotli/libbrotli1_1.0.9-2+b6_amd64.deb",
+      "version": "1.0.9-2+b6"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.4)",
+      "filename": "libbz2-1.0_1.0.8-5+b1_amd64.deb",
+      "name": "libbz2-1.0",
+      "pre_depends": "",
+      "sha256": "54149da3f44b22d523b26b692033b84503d822cc5122fed606ea69cc83ca5aeb",
+      "size_bytes": 47348,
+      "source_url": "https://deb.debian.org/debian/pool/main/b/bzip2/libbz2-1.0_1.0.8-5+b1_amd64.deb",
+      "version": "1.0.8-5+b1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libgcc-s1",
+      "filename": "libc6_2.36-9+deb12u14_amd64.deb",
+      "name": "libc6",
+      "pre_depends": "",
+      "sha256": "ba4f88f73dbc3ae9055f3c20f4523bfdbaf1ad13ff95e258924f77d20b4fbedf",
+      "size_bytes": 2759320,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/glibc/libc6_2.36-9+deb12u14_amd64.deb",
+      "version": "2.36-9+deb12u14"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.17)",
+      "filename": "libcom-err2_1.47.0-2+b2_amd64.deb",
+      "name": "libcom-err2",
+      "pre_depends": "",
+      "sha256": "a2bac7015e78fbc0c504df3e441f3a22292f1d2d77f9ccda760057f3690e22f2",
+      "size_bytes": 20044,
+      "source_url": "https://deb.debian.org/debian/pool/main/e/e2fsprogs/libcom-err2_1.47.0-2+b2_amd64.deb",
+      "version": "1.47.0-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.36)",
+      "filename": "libcrypt1_4.4.33-2_amd64.deb",
+      "name": "libcrypt1",
+      "pre_depends": "",
+      "sha256": "f5f60a5cdfd4e4eaa9438ade5078a57741a7a78d659fcb0c701204f523e8bd29",
+      "size_bytes": 89464,
+      "source_url": "https://deb.debian.org/debian/pool/main/libx/libxcrypt/libcrypt1_4.4.33-2_amd64.deb",
+      "version": "1:4.4.33-2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libbrotli1 (>= 0.6.0), libc6 (>= 2.34), libgnutls30 (>= 3.7.5), libgssapi-krb5-2 (>= 1.17), libidn2-0 (>= 0.6), libldap-2.5-0 (>= 2.5.4), libnettle8, libnghttp2-14 (>= 1.50.0), libpsl5 (>= 0.16.0), librtmp1 (>= 2.3), libssh2-1 (>= 1.7.0), libzstd1 (>= 1.5.2), zlib1g (>= 1:1.1.4)",
+      "filename": "libcurl3-gnutls_7.88.1-10+deb12u15_amd64.deb",
+      "name": "libcurl3-gnutls",
+      "pre_depends": "",
+      "sha256": "bf430ecf80f7808704e0187cddc582fd57fc98789ea356d4797651edad387ef3",
+      "size_bytes": 386008,
+      "source_url": "https://deb.debian.org/debian/pool/main/c/curl/libcurl3-gnutls_7.88.1-10+deb12u15_amd64.deb",
+      "version": "7.88.1-10+deb12u15"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "libdb5.3_5.3.28+dfsg2-1_amd64.deb",
+      "name": "libdb5.3",
+      "pre_depends": "",
+      "sha256": "7dc5127b8dd0da80e992ba594954c005ae4359d839a24eb65d0d8129b5235c84",
+      "size_bytes": 697412,
+      "source_url": "https://deb.debian.org/debian/pool/main/d/db5.3/libdb5.3_5.3.28+dfsg2-1_amd64.deb",
+      "version": "5.3.28+dfsg2-1"
+    },
+    {
+      "architecture": "all",
+      "depends": "perl:any",
+      "filename": "liberror-perl_0.17029-2_all.deb",
+      "name": "liberror-perl",
+      "pre_depends": "",
+      "sha256": "5a466348531b9c38c8e5ccb18c231f27a98b9fdab61b37ea22592553de5d2ced",
+      "size_bytes": 29032,
+      "source_url": "https://deb.debian.org/debian/pool/main/libe/liberror-perl/liberror-perl_0.17029-2_all.deb",
+      "version": "0.17029-2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.36)",
+      "filename": "libexpat1_2.5.0-1+deb12u2_amd64.deb",
+      "name": "libexpat1",
+      "pre_depends": "",
+      "sha256": "2255e62fc22a86d2c544b8a3f516da9aee19383ad5742722ab4ce7f66a30dbc8",
+      "size_bytes": 99888,
+      "source_url": "https://deb.debian.org/debian/pool/main/e/expat/libexpat1_2.5.0-1+deb12u2_amd64.deb",
+      "version": "2.5.0-1+deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "libffi8_3.4.4-1_amd64.deb",
+      "name": "libffi8",
+      "pre_depends": "",
+      "sha256": "6d9f6c25c30efccce6d4bceaa48ea86c329a3432abb360a141f76ac223a4c34a",
+      "size_bytes": 22856,
+      "source_url": "https://deb.debian.org/debian/pool/main/libf/libffi/libffi8_3.4.4-1_amd64.deb",
+      "version": "3.4.4-1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "gcc-12-base (= 12.2.0-14+deb12u1), libc6 (>= 2.35)",
+      "filename": "libgcc-s1_12.2.0-14+deb12u1_amd64.deb",
+      "name": "libgcc-s1",
+      "pre_depends": "",
+      "sha256": "3016e62cb4b7cd8038822870601f5ed131befe942774d0f745622cc77d8a88f7",
+      "size_bytes": 49856,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/gcc-12/libgcc-s1_12.2.0-14+deb12u1_amd64.deb",
+      "version": "12.2.0-14+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.33), libgdbm6 (>= 1.16)",
+      "filename": "libgdbm-compat4_1.23-3_amd64.deb",
+      "name": "libgdbm-compat4",
+      "pre_depends": "",
+      "sha256": "4af36a590b68d415a78d9238b932b6a4579f515ec8a8016597498acff5b515a4",
+      "size_bytes": 48156,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/gdbm/libgdbm-compat4_1.23-3_amd64.deb",
+      "version": "1.23-3"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "libgdbm6_1.23-3_amd64.deb",
+      "name": "libgdbm6",
+      "pre_depends": "",
+      "sha256": "95fe4a1336532450e67bd067892f46eaa484139919ea8d067a9ffcbf5a4bf883",
+      "size_bytes": 72248,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/gdbm/libgdbm6_1.23-3_amd64.deb",
+      "version": "1.23-3"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14)",
+      "filename": "libgmp10_6.2.1+dfsg1-1.1_amd64.deb",
+      "name": "libgmp10",
+      "pre_depends": "",
+      "sha256": "187aedef2ed763f425c1e523753b9719677633c7eede660401739e9c893482bd",
+      "size_bytes": 562588,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/gmp/libgmp10_6.2.1+dfsg1-1.1_amd64.deb",
+      "version": "2:6.2.1+dfsg1-1.1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34), libgmp10 (>= 2:6.2.1+dfsg1), libhogweed6 (>= 3.6), libidn2-0 (>= 2.0.0), libnettle8 (>= 3.7~), libp11-kit0 (>= 0.23.18.1), libtasn1-6 (>= 4.14), libunistring2 (>= 0.9.7)",
+      "filename": "libgnutls30_3.7.9-2+deb12u7_amd64.deb",
+      "name": "libgnutls30",
+      "pre_depends": "",
+      "sha256": "30abec8c824feb1d2d7e9000a34083cccd19d139625e1b21547e3ac53b922f8e",
+      "size_bytes": 1409084,
+      "source_url": "https://deb.debian.org/debian/pool/main/g/gnutls28/libgnutls30_3.7.9-2+deb12u7_amd64.deb",
+      "version": "3.7.9-2+deb12u7"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.33), libcom-err2 (>= 1.43.9), libk5crypto3 (>= 1.20), libkrb5-3 (= 1.20.1-2+deb12u5), libkrb5support0 (>= 1.15~beta1)",
+      "filename": "libgssapi-krb5-2_1.20.1-2+deb12u5_amd64.deb",
+      "name": "libgssapi-krb5-2",
+      "pre_depends": "",
+      "sha256": "d8b87aea91b956b416c01a28c44ff6228315ae3b73de40acddac3dc5043607d2",
+      "size_bytes": 135168,
+      "source_url": "https://deb.debian.org/debian/pool/main/k/krb5/libgssapi-krb5-2_1.20.1-2+deb12u5_amd64.deb",
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14), libgmp10 (>= 2:6.2.1+dfsg1), libnettle8",
+      "filename": "libhogweed6_3.8.1-2_amd64.deb",
+      "name": "libhogweed6",
+      "pre_depends": "",
+      "sha256": "ed8185c28b2cb519744a5a462dcd720d3b332c9b88a1d0002eac06dc8550cb94",
+      "size_bytes": 327524,
+      "source_url": "https://deb.debian.org/debian/pool/main/n/nettle/libhogweed6_3.8.1-2_amd64.deb",
+      "version": "3.8.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14), libunistring2 (>= 0.9.7)",
+      "filename": "libidn2-0_2.3.3-1+b1_amd64.deb",
+      "name": "libidn2-0",
+      "pre_depends": "",
+      "sha256": "d50716d5824083d667427817d506b45d3f59dc77e1ca52de000f3f62d4918afa",
+      "size_bytes": 123636,
+      "source_url": "https://deb.debian.org/debian/pool/main/libi/libidn2/libidn2-0_2.3.3-1+b1_amd64.deb",
+      "version": "2.3.3-1+b1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.33), libkrb5support0 (>= 1.20)",
+      "filename": "libk5crypto3_1.20.1-2+deb12u5_amd64.deb",
+      "name": "libk5crypto3",
+      "pre_depends": "",
+      "sha256": "7b6e47d15c5c9cdcd456137533d8308aeba608a54cec73b28bd59bfc4b54cf06",
+      "size_bytes": 79712,
+      "source_url": "https://deb.debian.org/debian/pool/main/k/krb5/libk5crypto3_1.20.1-2+deb12u5_amd64.deb",
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14)",
+      "filename": "libkeyutils1_1.6.3-2_amd64.deb",
+      "name": "libkeyutils1",
+      "pre_depends": "",
+      "sha256": "cfac89e6a7a54ff3c6a4f843310e25efeddaa771baeae470bd98bd588c373563",
+      "size_bytes": 8808,
+      "source_url": "https://deb.debian.org/debian/pool/main/k/keyutils/libkeyutils1_1.6.3-2_amd64.deb",
+      "version": "1.6.3-2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34), libcom-err2 (>= 1.43.9), libk5crypto3 (>= 1.20), libkeyutils1 (>= 1.5.9), libkrb5support0 (= 1.20.1-2+deb12u5), libssl3 (>= 3.0.0)",
+      "filename": "libkrb5-3_1.20.1-2+deb12u5_amd64.deb",
+      "name": "libkrb5-3",
+      "pre_depends": "",
+      "sha256": "c90801be09701af221b54dd502a59cb378b7284ff31e480738baca317d2f7653",
+      "size_bytes": 332280,
+      "source_url": "https://deb.debian.org/debian/pool/main/k/krb5/libkrb5-3_1.20.1-2+deb12u5_amd64.deb",
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "libkrb5support0_1.20.1-2+deb12u5_amd64.deb",
+      "name": "libkrb5support0",
+      "pre_depends": "",
+      "sha256": "8b9c05f2d8d461a10d657b118f572af5bf8fd6c8f93dcef81e852c5ab0f428ab",
+      "size_bytes": 33212,
+      "source_url": "https://deb.debian.org/debian/pool/main/k/krb5/libkrb5support0_1.20.1-2+deb12u5_amd64.deb",
+      "version": "1.20.1-2+deb12u5"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34), libgnutls30 (>= 3.7.5), libsasl2-2 (>= 2.1.28+dfsg)",
+      "filename": "libldap-2.5-0_2.5.13+dfsg-5_amd64.deb",
+      "name": "libldap-2.5-0",
+      "pre_depends": "",
+      "sha256": "4b6c30f6554149c594628d945edc6003f0eea8d0cc1341638c0e71375db147ed",
+      "size_bytes": 183248,
+      "source_url": "https://deb.debian.org/debian/pool/main/o/openldap/libldap-2.5-0_2.5.13+dfsg-5_amd64.deb",
+      "version": "2.5.13+dfsg-5"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "liblzma5_5.4.1-1+deb12u1_amd64.deb",
+      "name": "liblzma5",
+      "pre_depends": "",
+      "sha256": "f96d8876b53ec89d76a992bc199679b818cf518225a768954d9451fb556a4eb7",
+      "size_bytes": 205732,
+      "source_url": "https://deb.debian.org/debian/pool/main/x/xz-utils/liblzma5_5.4.1-1+deb12u1_amd64.deb",
+      "version": "5.4.1-1+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.33)",
+      "filename": "libmd0_1.0.4-2_amd64.deb",
+      "name": "libmd0",
+      "pre_depends": "",
+      "sha256": "03539fd30c509e27101d13a56e52eda9062bdf1aefe337c07ab56def25a13eab",
+      "size_bytes": 29456,
+      "source_url": "https://deb.debian.org/debian/pool/main/libm/libmd/libmd0_1.0.4-2_amd64.deb",
+      "version": "1.0.4-2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.17)",
+      "filename": "libnettle8_3.8.1-2_amd64.deb",
+      "name": "libnettle8",
+      "pre_depends": "",
+      "sha256": "45922e6e289ffd92f0f92d2bb9159e84236ff202d552a461bf10e5335b3f0261",
+      "size_bytes": 287764,
+      "source_url": "https://deb.debian.org/debian/pool/main/n/nettle/libnettle8_3.8.1-2_amd64.deb",
+      "version": "3.8.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.17)",
+      "filename": "libnghttp2-14_1.52.0-1+deb12u3_amd64.deb",
+      "name": "libnghttp2-14",
+      "pre_depends": "",
+      "sha256": "5a5736cee57e51c1baed869979e6ecdbc6495e939e33203d6cfe3b6e5a149e3f",
+      "size_bytes": 72404,
+      "source_url": "https://deb.debian.org/debian/pool/main/n/nghttp2/libnghttp2-14_1.52.0-1+deb12u3_amd64.deb",
+      "version": "1.52.0-1+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34), libffi8 (>= 3.4)",
+      "filename": "libp11-kit0_0.24.1-2_amd64.deb",
+      "name": "libp11-kit0",
+      "pre_depends": "",
+      "sha256": "251330faddbf013f060fcdb41f4b0c037c8a6e89ba7c09b04bfcc4e3f0807b22",
+      "size_bytes": 345080,
+      "source_url": "https://deb.debian.org/debian/pool/main/p/p11-kit/libp11-kit0_0.24.1-2_amd64.deb",
+      "version": "0.24.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "libpcre2-8-0_10.42-1_amd64.deb",
+      "name": "libpcre2-8-0",
+      "pre_depends": "",
+      "sha256": "030db54f4d76cdfe2bf0e8eb5f9efea0233ab3c7aa942d672c7b63b52dbaf935",
+      "size_bytes": 260776,
+      "source_url": "https://deb.debian.org/debian/pool/main/p/pcre2/libpcre2-8-0_10.42-1_amd64.deb",
+      "version": "10.42-1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libbz2-1.0, libc6 (>= 2.35), libcrypt1 (>= 1:4.1.0), libdb5.3, libgdbm-compat4 (>= 1.18-3), libgdbm6 (>= 1.21), zlib1g (>= 1:1.2.2.3), perl-modules-5.36 (>= 5.36.0-7+deb12u3)",
+      "filename": "libperl5.36_5.36.0-7+deb12u3_amd64.deb",
+      "name": "libperl5.36",
+      "pre_depends": "",
+      "sha256": "591903643119c7e1735011369287976eccab1d79b1d2f210760e2138d0a3aa46",
+      "size_bytes": 4195924,
+      "source_url": "https://deb.debian.org/debian/pool/main/p/perl/libperl5.36_5.36.0-7+deb12u3_amd64.deb",
+      "version": "5.36.0-7+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libidn2-0 (>= 0.16), libc6 (>= 2.33), libunistring2 (>= 0.9.7)",
+      "filename": "libpsl5_0.21.2-1_amd64.deb",
+      "name": "libpsl5",
+      "pre_depends": "",
+      "sha256": "4f0d35610204e4e754b057748719744114621f2f6f4202d846c314860a981afb",
+      "size_bytes": 58684,
+      "source_url": "https://deb.debian.org/debian/pool/main/libp/libpsl/libpsl5_0.21.2-1_amd64.deb",
+      "version": "0.21.2-1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14), libgmp10, libgnutls30 (>= 3.6.14), libhogweed6, libnettle8, zlib1g (>= 1:1.1.4)",
+      "filename": "librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb",
+      "name": "librtmp1",
+      "pre_depends": "",
+      "sha256": "e1f69020dc2c466e421ec6a58406b643be8b5c382abf0f8989011c1d3df91c87",
+      "size_bytes": 60824,
+      "source_url": "https://deb.debian.org/debian/pool/main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb",
+      "version": "2.4+20151223.gitfa8646d.1-2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libsasl2-modules-db (>= 2.1.28+dfsg-10), libc6 (>= 2.34)",
+      "filename": "libsasl2-2_2.1.28+dfsg-10_amd64.deb",
+      "name": "libsasl2-2",
+      "pre_depends": "",
+      "sha256": "11ee190ad39f8d7af441d2c8347388b9449434c73acc67b4b372445ac4152efa",
+      "size_bytes": 59712,
+      "source_url": "https://deb.debian.org/debian/pool/main/c/cyrus-sasl2/libsasl2-2_2.1.28+dfsg-10_amd64.deb",
+      "version": "2.1.28+dfsg-10"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14), libdb5.3",
+      "filename": "libsasl2-modules-db_2.1.28+dfsg-10_amd64.deb",
+      "name": "libsasl2-modules-db",
+      "pre_depends": "",
+      "sha256": "3ac4fd6cbe3b3b06e68d24b931bf3eb9385b42f15604a37ed25310e948ca0ee6",
+      "size_bytes": 20336,
+      "source_url": "https://deb.debian.org/debian/pool/main/c/cyrus-sasl2/libsasl2-modules-db_2.1.28+dfsg-10_amd64.deb",
+      "version": "2.1.28+dfsg-10"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34), libpcre2-8-0 (>= 10.22)",
+      "filename": "libselinux1_3.4-1+b6_amd64.deb",
+      "name": "libselinux1",
+      "pre_depends": "",
+      "sha256": "2b07f5287b9105f40158b56e4d70cc1652dac56a408f3507b4ab3d061eed425f",
+      "size_bytes": 73720,
+      "source_url": "https://deb.debian.org/debian/pool/main/libs/libselinux/libselinux1_3.4-1+b6_amd64.deb",
+      "version": "3.4-1+b6"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14), libssl3 (>= 3.0.0), zlib1g (>= 1:1.1.4)",
+      "filename": "libssh2-1_1.10.0-3+b1_amd64.deb",
+      "name": "libssh2-1",
+      "pre_depends": "",
+      "sha256": "d20a3ee34fa84ad8bd381e8be6e9c2c2ea32347cff5e1169c10e978d43f54f24",
+      "size_bytes": 178704,
+      "source_url": "https://deb.debian.org/debian/pool/main/libs/libssh2/libssh2-1_1.10.0-3+b1_amd64.deb",
+      "version": "1.10.0-3+b1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "libssl3_3.0.20-1~deb12u2_amd64.deb",
+      "name": "libssl3",
+      "pre_depends": "",
+      "sha256": "89be24b41bff568ee6e7caf5680a3d808e80315ed92e407056ce0fa7a5bda025",
+      "size_bytes": 2036016,
+      "source_url": "https://deb.debian.org/debian/pool/main/o/openssl/libssl3_3.0.20-1~deb12u2_amd64.deb",
+      "version": "3.0.20-1~deb12u2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14)",
+      "filename": "libtasn1-6_4.19.0-2+deb12u1_amd64.deb",
+      "name": "libtasn1-6",
+      "pre_depends": "",
+      "sha256": "2c27c613b69be248d09432839ea3d3382f6ee27fabaa65987aa2d884cd00afda",
+      "size_bytes": 48596,
+      "source_url": "https://deb.debian.org/debian/pool/main/libt/libtasn1-6/libtasn1-6_4.19.0-2+deb12u1_amd64.deb",
+      "version": "4.19.0-2+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "libunistring2_1.0-2_amd64.deb",
+      "name": "libunistring2",
+      "pre_depends": "",
+      "sha256": "d466bbfe011d764d793c1d9d777cad9c7cf65b938e11598f27408171ad95a951",
+      "size_bytes": 436708,
+      "source_url": "https://deb.debian.org/debian/pool/main/libu/libunistring/libunistring2_1.0-2_amd64.deb",
+      "version": "1.0-2"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.34)",
+      "filename": "libzstd1_1.5.4+dfsg2-5_amd64.deb",
+      "name": "libzstd1",
+      "pre_depends": "",
+      "sha256": "6315b5ac38b724a710fb96bf1042019398cb656718b1522279a5185ed39318fa",
+      "size_bytes": 290036,
+      "source_url": "https://deb.debian.org/debian/pool/main/libz/libzstd/libzstd1_1.5.4+dfsg2-5_amd64.deb",
+      "version": "1.5.4+dfsg2-5"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "perl-base (= 5.36.0-7+deb12u3), perl-modules-5.36 (>= 5.36.0-7+deb12u3), libperl5.36 (= 5.36.0-7+deb12u3)",
+      "filename": "perl_5.36.0-7+deb12u3_amd64.deb",
+      "name": "perl",
+      "pre_depends": "dpkg (>= 1.17.17)",
+      "sha256": "afa50ec7d9b1a407cd0187dae033644ef13578d4f3792435e0c41b962ffec0c4",
+      "size_bytes": 238900,
+      "source_url": "https://deb.debian.org/debian/pool/main/p/perl/perl_5.36.0-7+deb12u3_amd64.deb",
+      "version": "5.36.0-7+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "",
+      "filename": "perl-base_5.36.0-7+deb12u3_amd64.deb",
+      "name": "perl-base",
+      "pre_depends": "libc6 (>= 2.35), libcrypt1 (>= 1:4.1.0), dpkg (>= 1.17.17)",
+      "sha256": "8ec874926e211807cde71e1b0a2311d2534ab3539dffcb2c8553633f542efc1a",
+      "size_bytes": 1607712,
+      "source_url": "https://deb.debian.org/debian/pool/main/p/perl/perl-base_5.36.0-7+deb12u3_amd64.deb",
+      "version": "5.36.0-7+deb12u3"
+    },
+    {
+      "architecture": "all",
+      "depends": "perl-base (>= 5.36.0-1)",
+      "filename": "perl-modules-5.36_5.36.0-7+deb12u3_all.deb",
+      "name": "perl-modules-5.36",
+      "pre_depends": "dpkg (>= 1.17.17)",
+      "sha256": "3d237ccb1ea32727b6573d43c67d78337aa928a81148d36cef54b369a07c240a",
+      "size_bytes": 2815332,
+      "source_url": "https://deb.debian.org/debian/pool/main/p/perl/perl-modules-5.36_5.36.0-7+deb12u3_all.deb",
+      "version": "5.36.0-7+deb12u3"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "",
+      "filename": "tar_1.34+dfsg-1.2+deb12u1_amd64.deb",
+      "name": "tar",
+      "pre_depends": "libacl1 (>= 2.2.23), libc6 (>= 2.34), libselinux1 (>= 3.1~)",
+      "sha256": "24fb92e98c2969171f81a8b589263d705f6b1670f95d121cd74c810d4605acc3",
+      "size_bytes": 836288,
+      "source_url": "https://deb.debian.org/debian/pool/main/t/tar/tar_1.34+dfsg-1.2+deb12u1_amd64.deb",
+      "version": "1.34+dfsg-1.2+deb12u1"
+    },
+    {
+      "architecture": "amd64",
+      "depends": "libc6 (>= 2.14)",
+      "filename": "zlib1g_1.2.13.dfsg-1_amd64.deb",
+      "name": "zlib1g",
+      "pre_depends": "",
+      "sha256": "d7dd1d1411fedf27f5e27650a6eff20ef294077b568f4c8c5e51466dc7c08ce4",
+      "size_bytes": 86684,
+      "source_url": "https://deb.debian.org/debian/pool/main/z/zlib/zlib1g_1.2.13.dfsg-1_amd64.deb",
+      "version": "1:1.2.13.dfsg-1"
+    }
+  ],
+  "repository": {
+    "base_url": "https://deb.debian.org/debian/",
+    "inrelease_sha256": "77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa",
+    "signed_package_indexes": {
+      "contrib/binary-all/Packages.xz": {
+        "sha256": "ab52e30b172d586dda8f08db9e6acd037a3989f376a544d8eb09c95ea3fac43d",
+        "size_bytes": 24104
+      },
+      "contrib/binary-amd64/Packages.xz": {
+        "sha256": "0b0cd0be7afe97b48e1f593e40d471cc673c576408d5513b3eee0bae4b28e52f",
+        "size_bytes": 53480
+      },
+      "contrib/binary-arm64/Packages.xz": {
+        "sha256": "2c8d4d73c617dee3178b63085b037371183a44573c3c0dc929cdfd86e9555e95",
+        "size_bytes": 45664
+      },
+      "contrib/binary-armel/Packages.xz": {
+        "sha256": "873695001b902fbaa92384923e7dfadad62ef9a92cb636f0a24b6fad2edb5050",
+        "size_bytes": 39684
+      },
+      "contrib/binary-armhf/Packages.xz": {
+        "sha256": "acf1d84151f6a3d78b19d921da94dee36d34e48ac75ad78eb72e113118a11d75",
+        "size_bytes": 42884
+      },
+      "contrib/binary-i386/Packages.xz": {
+        "sha256": "44d199c263302b5cc7265703d1ca3e80c9896006e74bf347157a488e362d224e",
+        "size_bytes": 45964
+      },
+      "contrib/binary-mips64el/Packages.xz": {
+        "sha256": "1aada50f9dd47ef23fc375778aa2930de3df1a4d780d22a8ddc1aafa14b7f414",
+        "size_bytes": 39904
+      },
+      "contrib/binary-mipsel/Packages.xz": {
+        "sha256": "4cec2c459e7d29e54d0fd14b98ea7fd536d9097f8d9325013c1bae21ec0067ba",
+        "size_bytes": 40012
+      },
+      "contrib/binary-ppc64el/Packages.xz": {
+        "sha256": "ab513187d114066046243b2d6bf73eed85439c9b75c311bb2860f2c2cb1fd16e",
+        "size_bytes": 43072
+      },
+      "contrib/binary-s390x/Packages.xz": {
+        "sha256": "49aa0bb386b04009fb3dab820aaef7b4702f6f9de7a4dfcbd9cf64591bd63590",
+        "size_bytes": 39380
+      },
+      "contrib/debian-installer/binary-all/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "contrib/debian-installer/binary-amd64/Packages.xz": {
+        "sha256": "70fcd0ee50d8ae68b17c1b6972ba43e3b80ea8df06141fadd73043035faba3af",
+        "size_bytes": 448
+      },
+      "contrib/debian-installer/binary-arm64/Packages.xz": {
+        "sha256": "9446b92a9714b3032f2e445ded1f0b9cd85f3b3b24b11a766452af6afe928a98",
+        "size_bytes": 448
+      },
+      "contrib/debian-installer/binary-armel/Packages.xz": {
+        "sha256": "c7d2a5c574d60a5e7712cba0ec7695269b0d599b4cc2f7518b3c0372c9b1e370",
+        "size_bytes": 448
+      },
+      "contrib/debian-installer/binary-armhf/Packages.xz": {
+        "sha256": "44b15144afd09ed42750dc8582316b5d9c4f003fe77c7721d5ddee19613bccca",
+        "size_bytes": 452
+      },
+      "contrib/debian-installer/binary-i386/Packages.xz": {
+        "sha256": "adc34ec7744cec942bb5d13aa5fce0b86f00838c37ca77545a45f4d5fa13e84c",
+        "size_bytes": 452
+      },
+      "contrib/debian-installer/binary-mips64el/Packages.xz": {
+        "sha256": "241df14b1162d44f2e668f8ce44b60cd68bad608a606d7ecd395a69601d39308",
+        "size_bytes": 448
+      },
+      "contrib/debian-installer/binary-mipsel/Packages.xz": {
+        "sha256": "3224cd28515f5f45931e19c6e412ae741fc212b6e15c91f36c6ba28c350629e1",
+        "size_bytes": 452
+      },
+      "contrib/debian-installer/binary-ppc64el/Packages.xz": {
+        "sha256": "8b6d708c80c146c95ab5a27311878ef84a4f8153562b5193f98674f1011585f1",
+        "size_bytes": 448
+      },
+      "contrib/debian-installer/binary-s390x/Packages.xz": {
+        "sha256": "349df0187b4c02d8a628396098a92c12f3a400916a3b19cf652898dcf5a6a5bd",
+        "size_bytes": 452
+      },
+      "main/binary-all/Packages.xz": {
+        "sha256": "743228b0bd99db92c91c5c133952cea0ff0c93a2b5b47a058973f3cab40d6481",
+        "size_bytes": 4231936
+      },
+      "main/binary-amd64/Packages.xz": {
+        "sha256": "9e0b5aabb2465b3d2e7a7fe27f9913846277833f7a2826e7767acccff5b588c5",
+        "size_bytes": 8790396
+      },
+      "main/binary-arm64/Packages.xz": {
+        "sha256": "2ddb1737692e8c45c53e8d57c0ce4cd21c78c5703b830c3226b1423566a06c00",
+        "size_bytes": 8689464
+      },
+      "main/binary-armel/Packages.xz": {
+        "sha256": "8cb6ecb8023c305ee977fdeabe0b7460d9e40fc39dc9f537067f22156990af55",
+        "size_bytes": 8450116
+      },
+      "main/binary-armhf/Packages.xz": {
+        "sha256": "2352d9caa6e740390e3cb2d26c0a63b3ce3a91bddae7df6af5e3832339d41d7b",
+        "size_bytes": 8505644
+      },
+      "main/binary-i386/Packages.xz": {
+        "sha256": "900739f3ad35b689d23f4a97ee2dc7943bebb3763c7c41f9a03072d639444e4d",
+        "size_bytes": 8681800
+      },
+      "main/binary-mips64el/Packages.xz": {
+        "sha256": "b6c27aef8ab711089591bdfa0028ae47d40708c624dfb062d2508258f20136f0",
+        "size_bytes": 8512160
+      },
+      "main/binary-mipsel/Packages.xz": {
+        "sha256": "b8c6851eacb4286e0c033dde82d65644e638b86ec35da9ed4bacba49190c3d02",
+        "size_bytes": 8476220
+      },
+      "main/binary-ppc64el/Packages.xz": {
+        "sha256": "469a5fd482532c2afea9d51e2d5b6d9d60b8db69778f81bc7fdbac5e3d69716e",
+        "size_bytes": 8626972
+      },
+      "main/binary-s390x/Packages.xz": {
+        "sha256": "f7899f14044847c6e45b9051b734b9ad8ce0dd830a2b54698ec42fe095fd1079",
+        "size_bytes": 8455484
+      },
+      "main/debian-installer/binary-all/Packages.xz": {
+        "sha256": "1850c066e7c8c106a3fdb0c348b75e3fbc16682431274328457824efae817798",
+        "size_bytes": 14592
+      },
+      "main/debian-installer/binary-amd64/Packages.xz": {
+        "sha256": "4abc146a946db71e9b5214b0eeca0a5e61297a76c2cd1ab9a3840b9ff363c1f8",
+        "size_bytes": 55152
+      },
+      "main/debian-installer/binary-arm64/Packages.xz": {
+        "sha256": "d1858628542e1a3f089853581efb3cb075b6527d216117942b9415b938ce01c2",
+        "size_bytes": 53464
+      },
+      "main/debian-installer/binary-armel/Packages.xz": {
+        "sha256": "089d532c428c2659d691945668e4c959d93b190f61c3a76ba4d19396ca294cf8",
+        "size_bytes": 52384
+      },
+      "main/debian-installer/binary-armhf/Packages.xz": {
+        "sha256": "ab67110bafa10fa982800f5cdbc85c0ca494611a79971ede766796fdc39ae9ca",
+        "size_bytes": 53448
+      },
+      "main/debian-installer/binary-i386/Packages.xz": {
+        "sha256": "bf03b83898c6cceb94bd7323a8ed7e5d8cd7a1b71439f341f78b299f1b462025",
+        "size_bytes": 62980
+      },
+      "main/debian-installer/binary-mips64el/Packages.xz": {
+        "sha256": "8304cc1a9d65038bcb8b262afdd4ce07dddf2d380a5f2ff5cc16de1cc67ff145",
+        "size_bytes": 72744
+      },
+      "main/debian-installer/binary-mipsel/Packages.xz": {
+        "sha256": "e43a64578a7f7a01b66eac762300264569777bc6983ae806f0d8f40e148700c1",
+        "size_bytes": 73112
+      },
+      "main/debian-installer/binary-ppc64el/Packages.xz": {
+        "sha256": "e82fd4eb6b09e7c32dbd888dbd1bed9f3e1b56d31e83a7d375b96c6d6b6523a4",
+        "size_bytes": 53116
+      },
+      "main/debian-installer/binary-s390x/Packages.xz": {
+        "sha256": "20b1775a11210a171e97e2fa8c9b8908ddfe53a4198eab6d161e955de8dbd2a1",
+        "size_bytes": 49432
+      },
+      "non-free-firmware/binary-all/Packages.xz": {
+        "sha256": "5ef6ed1ace1dd59a9f11988ed8a013c6df1e7ea62770b8f4267bd3b2167e1074",
+        "size_bytes": 5480
+      },
+      "non-free-firmware/binary-amd64/Packages.xz": {
+        "sha256": "10f5255f96b0da4e3d59efeb8bd012f922e98868d181c688b453b000d3f37352",
+        "size_bytes": 6368
+      },
+      "non-free-firmware/binary-arm64/Packages.xz": {
+        "sha256": "a1330073ccb0787ab9864190877bccec16642f93f0dfaf9bdbff597c6326a6e3",
+        "size_bytes": 5832
+      },
+      "non-free-firmware/binary-armel/Packages.xz": {
+        "sha256": "5ef6ed1ace1dd59a9f11988ed8a013c6df1e7ea62770b8f4267bd3b2167e1074",
+        "size_bytes": 5480
+      },
+      "non-free-firmware/binary-armhf/Packages.xz": {
+        "sha256": "5ef6ed1ace1dd59a9f11988ed8a013c6df1e7ea62770b8f4267bd3b2167e1074",
+        "size_bytes": 5480
+      },
+      "non-free-firmware/binary-i386/Packages.xz": {
+        "sha256": "464e97ef33d84054a8a7d58b4ed1beb4105fc790067e596404875db0c509fad1",
+        "size_bytes": 5904
+      },
+      "non-free-firmware/binary-mips64el/Packages.xz": {
+        "sha256": "5ef6ed1ace1dd59a9f11988ed8a013c6df1e7ea62770b8f4267bd3b2167e1074",
+        "size_bytes": 5480
+      },
+      "non-free-firmware/binary-mipsel/Packages.xz": {
+        "sha256": "5ef6ed1ace1dd59a9f11988ed8a013c6df1e7ea62770b8f4267bd3b2167e1074",
+        "size_bytes": 5480
+      },
+      "non-free-firmware/binary-ppc64el/Packages.xz": {
+        "sha256": "5ef6ed1ace1dd59a9f11988ed8a013c6df1e7ea62770b8f4267bd3b2167e1074",
+        "size_bytes": 5480
+      },
+      "non-free-firmware/binary-s390x/Packages.xz": {
+        "sha256": "5ef6ed1ace1dd59a9f11988ed8a013c6df1e7ea62770b8f4267bd3b2167e1074",
+        "size_bytes": 5480
+      },
+      "non-free-firmware/debian-installer/binary-all/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-amd64/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-arm64/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-armel/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-armhf/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-i386/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-mips64el/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-mipsel/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-ppc64el/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free-firmware/debian-installer/binary-s390x/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free/binary-all/Packages.xz": {
+        "sha256": "2d8fd91ce222b08a29a45fc88f04586d6181ee70cabbb00fc6af1920ea9d4472",
+        "size_bytes": 43508
+      },
+      "non-free/binary-amd64/Packages.xz": {
+        "sha256": "8aacd1cb81b47407a43a8fa6a59b8de3da5e0336f612f7e9245d4ea380b8a49d",
+        "size_bytes": 101504
+      },
+      "non-free/binary-arm64/Packages.xz": {
+        "sha256": "5f70e8e31d64f9241904e54a83dc639d92f4eea9ad1a57b26d40f3943f474929",
+        "size_bytes": 75844
+      },
+      "non-free/binary-armel/Packages.xz": {
+        "sha256": "129323919b1945ab5518f0f4f3055ca0641ce96a3a808866cd4500409575521b",
+        "size_bytes": 54276
+      },
+      "non-free/binary-armhf/Packages.xz": {
+        "sha256": "8101aece839b6e6be56c95660cd76efeb7a0a69dee1af5dda62f08b6a8c40c70",
+        "size_bytes": 55868
+      },
+      "non-free/binary-i386/Packages.xz": {
+        "sha256": "5b9378e1bb5ee2a220e5f03dbe015b873779ba553b74a352c02ed148ad533930",
+        "size_bytes": 73440
+      },
+      "non-free/binary-mips64el/Packages.xz": {
+        "sha256": "8b8f0d619433674aa33c4e7fc12a20fd2a501d74d239ec798103f58a7b33dd1b",
+        "size_bytes": 54532
+      },
+      "non-free/binary-mipsel/Packages.xz": {
+        "sha256": "939b393f001a947d66e9a80b96f97c9806d324dda208431bfa0d0f12da102e3f",
+        "size_bytes": 54276
+      },
+      "non-free/binary-ppc64el/Packages.xz": {
+        "sha256": "8e43dd6c282540477d8ba5e6d70bacdfd39722cd85f38b8bab266f900df1c80a",
+        "size_bytes": 72632
+      },
+      "non-free/binary-s390x/Packages.xz": {
+        "sha256": "31589f9d3241dc37cdbf5647f9da996029f64097e9e9f6580ec48109572bec0b",
+        "size_bytes": 54180
+      },
+      "non-free/debian-installer/binary-all/Packages.xz": {
+        "sha256": "0040f94d11d0039505328a90b2ff48968db873e9e7967307631bf40ef5679275",
+        "size_bytes": 32
+      },
+      "non-free/debian-installer/binary-amd64/Packages.xz": {
+        "sha256": "16de86c8e7169da662100ce9ae73e2821d886a97f5aaae64ae25d460b4cb1575",
+        "size_bytes": 496
+      },
+      "non-free/debian-installer/binary-arm64/Packages.xz": {
+        "sha256": "4908a8c410440cd0cffbafb6e897c21d07dee88ba7fa70acf29f8926b93764ed",
+        "size_bytes": 500
+      },
+      "non-free/debian-installer/binary-armel/Packages.xz": {
+        "sha256": "32566b6edb7b80c4f45d63934e80147cd1ae5a262c88e6e62f853faacff7bb41",
+        "size_bytes": 496
+      },
+      "non-free/debian-installer/binary-armhf/Packages.xz": {
+        "sha256": "d3ea0d2d1b068bc776d6637d351f1fd5ee8915cf147139b0e571ab81c022edd8",
+        "size_bytes": 500
+      },
+      "non-free/debian-installer/binary-i386/Packages.xz": {
+        "sha256": "7b6dc6f5f6e4a40078020178d9a5e1185a7cd65d644356b7a876fb97ba436e74",
+        "size_bytes": 496
+      },
+      "non-free/debian-installer/binary-mips64el/Packages.xz": {
+        "sha256": "fd97852ae0125e2783e5d072d5e6dd5c7f6aa03bfac16480835e183d16616758",
+        "size_bytes": 500
+      },
+      "non-free/debian-installer/binary-mipsel/Packages.xz": {
+        "sha256": "432b2eceff926cb538827b9fea95614624ae4051d6780c20f988e8bc7483741e",
+        "size_bytes": 496
+      },
+      "non-free/debian-installer/binary-ppc64el/Packages.xz": {
+        "sha256": "3a7a21756ff2a6195a32bb071c8c3889874b25dd39832048fec9a34a8fe70ede",
+        "size_bytes": 496
+      },
+      "non-free/debian-installer/binary-s390x/Packages.xz": {
+        "sha256": "be53d7ef228b12ce59c1fd3c1078526d4999fe5d4b069a63a10d661c1385abce",
+        "size_bytes": 500
+      }
+    },
+    "valid_signers": [
+      "4D64FEC119C2029067D6E791F8D2585B8783D481"
+    ]
+  },
+  "schema_version": "1.0.0",
+  "suite": "bookworm"
+}
