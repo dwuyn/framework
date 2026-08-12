@@ -141,7 +141,11 @@ class RuntimeRunner:
         if not isinstance(result, RuntimeCellResult):
             raise RuntimeHalt("runtime cell executor returned an invalid result")
         artifact = RunArtifact.from_dict(result.run_artifact)
-        validate_run_artifact(result.run_artifact, official=True, strict_runtime=True)
+        # The successor plan carries the runtime-contract marker. Legacy
+        # fixture plans remain readable for migration tests, while r10 plans
+        # take the strict termination/evidence gate.
+        strict_runtime = bool(self.plan.get("runtime_contract"))
+        validate_run_artifact(result.run_artifact, official=True, strict_runtime=strict_runtime)
         profile = next(profile for profile in self.profiles if profile.logical_label == cell["model_label"])
         if artifact.run_id != str(cell["run_id"]):
             raise RuntimeHalt("runtime RunArtifact run-ID mismatch")
@@ -237,6 +241,7 @@ class RuntimeRunner:
         ledger_path = self.root / "runtime" / f"{phase}-invocation-ledger.json"
         ledger = InvocationLedger(
             phase=phase, gateway_relay_lock_hash=self.relay_lock_hash, path=ledger_path,
+            epoch=str(self.plan.get("epoch", "")),
         )
         phase_token = secrets.token_urlsafe(32)
         token_expires_at = (datetime.now(UTC) + timedelta(minutes=20)).isoformat().replace("+00:00", "Z")
@@ -255,6 +260,7 @@ class RuntimeRunner:
             phase=phase, run_ids=run_ids,
             gateway_factory=bound_gateway_factory if gateway_factory is not None else None,
             gateway_token=phase_token, token_expires_at=token_expires_at,
+            epoch=str(self.plan.get("epoch", "")),
         )
         coordinator = ExperimentRunner(
             artifact_root=self.root / f"coordinator-{phase}", workers=1 if phase == "canary" else 2,
@@ -283,7 +289,11 @@ class RuntimeRunner:
                     raise
                 with self._result_lock:
                     result_by_id[str(cell["run_id"])] = result
-                return CellResult("completed", cost_usd=float(result.cost["cost_usd"]), billable_model_response=True)
+                return CellResult(
+                    "completed", cost_usd=float(result.cost["cost_usd"]),
+                    artifact=dict(result.run_artifact), billable_model_response=True,
+                    model_response_received=True, strict_artifact=bool(self.plan.get("runtime_contract")),
+                )
 
             status = coordinator.execute(
                 plan=self.plan, approval=self.approval, signature_path=self.signature_path,

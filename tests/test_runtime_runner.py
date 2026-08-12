@@ -126,6 +126,7 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
             case_id="runtime", repetition=1, track="blind", condition=cell["kind"], model_profile=profile,
             budget_tier=BudgetTier.MEDIUM, schema_version="2.1.0", run_id=cell["run_id"], run_dir=str(run_dir),
             usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, "total_usd": .00002},
+            termination_status="completed",
             framework_identity={"name": cell.get("framework", "VeriPlanPT"), "repository_url": "https://example.test/repo", "commit": "a" * 40, "image_digest": cell["image_digest"], "adapter_version": "adapter-3.0"},
             run_context={"dataset_lock_hash": cell["dataset_lock_hash"], "framework_commit": "b" * 40, "evaluator_commit": "c" * 40, "stage": "canary_smoke", "gateway_relay_lock_hash": relay_hash, "target_runtime_lock_hash": cell["target_runtime_lock_hash"]},
             event_ledger_hash=digest(event), proof_hash=digest(proof),

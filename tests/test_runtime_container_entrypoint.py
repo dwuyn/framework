@@ -101,3 +101,35 @@ def test_target_runtime_lock_hash_fails_before_provider_call(monkeypatch, mutati
         monkeypatch.setenv(key, str(value))
     with pytest.raises(module.RuntimeBoundaryError, match="target runtime lock hash"):
         module._load_public_invocation()
+
+
+def test_nonzero_production_driver_writes_infrastructure_diagnostics(tmp_path, monkeypatch) -> None:
+    module = _module()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_invocation())))
+    for key, value in {
+        "VERIPLANPT_STAGE": "benchmark",
+        "VERIPLANPT_ADAPTER_PRODUCTION": "true",
+        "VERIPLANPT_RUN_ID": "smoke-veriplanpt-model",
+        "VERIPLANPT_MODEL_LABEL": "gemini-3.5-flash",
+        "VERIPLANPT_PROFILE_HASH": "f" * 64,
+        "VERIPLANPT_FRAMEWORK_NAME": "VeriPlanPT",
+        "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": "2" * 64,
+        "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": "9" * 64,
+        "VERIPLANPT_OUTPUT_DIR": str(tmp_path),
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(
+        module.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=17, stdout="Authorization: Bearer secret\n", stderr="driver failed\n",
+        ),
+    )
+
+    assert module.main() == 70
+    artifact = json.loads((tmp_path / "run_artifact.json").read_text())
+    diagnostics = json.loads((tmp_path / "driver-diagnostics.json").read_text())
+    assert artifact["termination_status"] == "infrastructure_failure"
+    assert artifact["metric_eligible"] is False
+    assert diagnostics["exit_code"] == 17
+    assert "secret" not in diagnostics["stdout"]
+    assert len(diagnostics["stdout_sha256"]) == 64

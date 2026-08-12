@@ -131,6 +131,7 @@ class HackSynthAdapter(ExternalBaselineAdapter):
                     "llm": {
                         "model_id": model_profile.logical_label,
                         "model_local": False,
+                        "base_url": "http://gateway-relay:8080/v1",
                         "temperature": 0,
                         "top_p": 1,
                         "max_new_tokens": limits["max_total_tokens"],

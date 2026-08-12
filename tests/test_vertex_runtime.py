@@ -159,6 +159,32 @@ class _GemmaTransport:
         }
 
 
+class _ThoughtOnlyGeminiTransport:
+    def generate(self, *, model_id, contents, generation_parameters):
+        assert model_id == "gemini-3.6-flash"
+        assert contents == "ping"
+        assert generation_parameters == {}
+        return {
+            "candidates": [{
+                "content": {"parts": [
+                    {"thought": True, "text": "private chain of thought"},
+                    {"text": ""},
+                ]},
+                "finish_reason": "STOP",
+            }],
+            "usage": {"input_tokens": 4, "output_tokens": 2},
+        }
+
+
+class _PinnedGeminiTransport:
+    def generate(self, *, model_id, contents, generation_parameters):
+        assert model_id == "gemini-3.6-flash"
+        assert contents == "ping"
+        assert generation_parameters["max_output_tokens"] == 2048
+        assert generation_parameters["thinking_config"] == {"thinking_level": "MEDIUM"}
+        return {"text": "pong", "usage": {"input_tokens": 4, "output_tokens": 2}}
+
+
 def test_gemini_executor_normalizes_fake_response() -> None:
     result = GeminiExecutor(_GeminiTransport()).invoke(_profile("gemini-3.6-flash"), "ping")
     assert result.text == "pong"
@@ -166,6 +192,28 @@ def test_gemini_executor_normalizes_fake_response() -> None:
     assert result.usage.output_tokens == 2
     assert result.model_id == "gemini-3.6-flash"
     assert len(result.response_hash) == 64
+
+
+def test_gemini_thought_only_response_is_protocol_valid_and_redacted() -> None:
+    result = GeminiExecutor(_ThoughtOnlyGeminiTransport()).invoke(
+        _profile("gemini-3.6-flash"), "ping"
+    )
+    assert result.text == ""
+    assert result.response_status == "no_visible_text"
+    assert result.finish_reason == "STOP"
+    assert "private chain of thought" not in result.to_dict().__repr__()
+
+
+def test_pinned_gemini_profile_sends_r10_generation_contract() -> None:
+    profile = ModelProfile.from_dict({
+        **_profile("gemini-3.6-flash").to_dict(),
+        "resource_revision": "default",
+        "resolution_mode": "provider_alias",
+        "resolution_evidence_hash": "a" * 64,
+        "resolution_resolved_at": "2026-08-05T00:00:00Z",
+    })
+    result = GeminiExecutor(_PinnedGeminiTransport()).invoke(profile, "ping")
+    assert result.text == "pong"
 
 
 def test_gemma_executor_normalizes_openai_response() -> None:

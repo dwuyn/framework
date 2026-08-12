@@ -116,7 +116,7 @@ def verify_alias_exception(
 
 
 def validate_runtime_profile(
-    profile: ModelProfile, *, strict: bool = False,
+    profile: ModelProfile, *, strict: bool = False, r10: bool = False,
 ) -> None:
     """Apply the stronger runtime rules without breaking legacy pilot fixtures."""
     if not strict:
@@ -128,6 +128,14 @@ def validate_runtime_profile(
             raise ValueError("Gemma MaaS runtime profile must use @001")
         if profile.generation_parameters.get("thinking") in {True, "true", "enabled"}:
             raise ValueError("Gemma thinking must be disabled")
+        if profile.generation_parameters.get("thinking_enabled") in {True, "true", "enabled"}:
+            raise ValueError("Gemma thinking must be disabled")
+        if r10 and profile.generation_parameters.get("thinking_enabled") is not False:
+            raise ValueError("r10 Gemma profile must explicitly disable thinking")
+        if "max_output_tokens" in profile.generation_parameters and int(profile.generation_parameters["max_output_tokens"]) != 2048:
+            raise ValueError("runtime generation cap must be max_output_tokens=2048")
+        if r10 and int(profile.generation_parameters.get("max_output_tokens", 0)) != 2048:
+            raise ValueError("r10 runtime profile must pin max_output_tokens=2048")
         if profile.usage_semantics.get("total_formula") != "input+output":
             raise ValueError("Gemma runtime profile must not bill thinking tokens")
         if profile.usage_semantics.get("output_includes_reasoning") != "true":
@@ -137,6 +145,18 @@ def validate_runtime_profile(
     else:
         if profile.resource_revision != "default" or profile.resolution_mode != "provider_alias":
             raise ValueError(f"{profile.logical_label} must use the explicit @default provider alias")
+        if "max_output_tokens" in profile.generation_parameters and int(profile.generation_parameters["max_output_tokens"]) != 2048:
+            raise ValueError("runtime generation cap must be max_output_tokens=2048")
+        if r10 and int(profile.generation_parameters.get("max_output_tokens", 0)) != 2048:
+            raise ValueError("r10 runtime profile must pin max_output_tokens=2048")
+        thinking_config = profile.generation_parameters.get("thinking_config")
+        if isinstance(thinking_config, Mapping) and thinking_config.get("thinking_level") != "MEDIUM":
+            raise ValueError("Gemini runtime thinking_level must be MEDIUM")
+        if r10 and (
+            not isinstance(thinking_config, Mapping)
+            or thinking_config.get("thinking_level") != "MEDIUM"
+        ):
+            raise ValueError("r10 Gemini profile must pin thinking_level=MEDIUM")
 
 
 def verify_impersonated_adc(service_account: str, *, project: str) -> dict[str, str]:

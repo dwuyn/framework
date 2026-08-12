@@ -29,7 +29,7 @@
         "runtime": "docker/adapter/runtime_entrypoint.py",
         "wrapper": "src/baselines/wrapper.py"
       },
-      "os_package_requirements": []
+      "os_package_requirements": ["git"]
     },
     {
       "name": "PentestGPT",

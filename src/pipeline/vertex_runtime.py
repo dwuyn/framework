@@ -45,6 +45,8 @@ LOCKED_MODEL_INVOCATIONS: dict[str, dict[str, str]] = {
 }
 
 _NON_PINNED_REVISIONS = {"", "latest", "unknown", "benchmark-pinned"}
+MAX_INPUT_TOKENS = 4096
+MAX_OUTPUT_TOKENS = 2048
 
 
 class VertexContractError(ValueError):
@@ -155,6 +157,46 @@ def semantic_response_hash(payload: Mapping[str, Any]) -> str:
         normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False,
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _redact_thought_text(value: Any, *, in_thought: bool = False) -> Any:
+    """Remove provider thought text before it enters response evidence."""
+    if isinstance(value, ABCMapping):
+        thought = in_thought or value.get("thought") is True
+        return {
+            str(key): _redact_thought_text(item, in_thought=thought)
+            for key, item in value.items()
+            if not (thought and str(key) == "text")
+        }
+    if isinstance(value, ABCSequence) and not isinstance(value, (str, bytes)):
+        return [_redact_thought_text(item, in_thought=in_thought) for item in value]
+    return value
+
+
+def _generation_parameters(profile: ModelProfile, *, gemini: bool) -> dict[str, Any]:
+    """Return the provider parameters for a pinned production profile."""
+    parameters = dict(profile.generation_parameters)
+    # Legacy immutable fixtures deliberately retain their historical empty
+    # config. Production profiles are the signed alias/endpoint revisions.
+    if profile.resource_revision not in {"default", "001"}:
+        return parameters
+    parameters.setdefault("max_output_tokens", MAX_OUTPUT_TOKENS)
+    if gemini:
+        thinking_config = parameters.get("thinking_config")
+        parameters["thinking_config"] = {
+            **(dict(thinking_config) if isinstance(thinking_config, Mapping) else {}),
+            "thinking_level": "MEDIUM",
+        }
+    else:
+        parameters.setdefault("thinking_enabled", False)
+    return parameters
+
+
+def _validate_usage_caps(usage: NormalizedUsage) -> None:
+    if usage.input_tokens > MAX_INPUT_TOKENS:
+        raise VertexContractError("provider usage exceeded max_input_tokens=4096")
+    if usage.output_tokens > MAX_OUTPUT_TOKENS:
+        raise VertexContractError("provider usage exceeded max_output_tokens=2048")
 
 
 def validate_resolution_fields(
@@ -506,6 +548,13 @@ class OpenAICompatibleClientTransport:
     ) -> Any:
         kwargs: dict[str, Any] = {"model": model_id, "messages": list(messages)}
         kwargs.update(dict(generation_parameters))
+        if "max_output_tokens" in kwargs and "max_tokens" not in kwargs:
+            kwargs["max_tokens"] = kwargs.pop("max_output_tokens")
+        # This is an internal profile flag, not an OpenAI-compatible SDK
+        # argument. Gemma's endpoint has thinking disabled by contract.
+        kwargs.pop("thinking_enabled", None)
+        kwargs.pop("thinking_level", None)
+        kwargs.pop("thinking_config", None)
         return self.client.chat.completions.create(**kwargs)
 
 
@@ -567,9 +616,7 @@ def _gemini_visible_text(payload: Mapping[str, Any]) -> str | None:
 def _response_text(response: Any, payload: Mapping[str, Any]) -> str:
     gemini_text = _gemini_visible_text(payload)
     if gemini_text is not None:
-        if gemini_text:
-            return gemini_text
-        raise VertexContractError("Gemini provider response has no visible text content")
+        return gemini_text
     direct = payload.get("text")
     if isinstance(direct, str):
         return direct
@@ -591,6 +638,20 @@ def _response_text(response: Any, payload: Mapping[str, Any]) -> str:
     raise VertexContractError("provider response has no text content")
 
 
+def _finish_reason(payload: Mapping[str, Any]) -> str:
+    candidates = payload.get("candidates")
+    if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)) and candidates:
+        first = candidates[0]
+        if isinstance(first, Mapping):
+            return str(first.get("finish_reason") or first.get("finishReason") or "")
+    choices = payload.get("choices")
+    if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)) and choices:
+        first = choices[0]
+        if isinstance(first, Mapping):
+            return str(first.get("finish_reason") or "")
+    return str(payload.get("finish_reason") or "")
+
+
 @dataclass(frozen=True)
 class InvocationResult:
     text: str
@@ -598,6 +659,8 @@ class InvocationResult:
     response_hash: str
     model_id: str
     resource_revision: str
+    response_status: str = "ok"
+    finish_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -606,7 +669,33 @@ class InvocationResult:
             "response_hash": self.response_hash,
             "model_id": self.model_id,
             "resource_revision": self.resource_revision,
+            "response_status": self.response_status,
+            "finish_reason": self.finish_reason,
         }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "InvocationResult":
+        usage = value.get("usage")
+        if not isinstance(usage, Mapping):
+            raise VertexContractError("ledger replay response has no usage")
+        return cls(
+            text=str(value.get("text", "")),
+            usage=NormalizedUsage(
+                input_tokens=int(usage.get("input_tokens", 0)),
+                cached_input_tokens=int(usage.get("cached_input_tokens", 0)),
+                output_tokens=int(usage.get("output_tokens", 0)),
+                thinking_tokens=int(usage.get("thinking_tokens", 0)),
+                total_tokens=int(usage.get("total_tokens", 0)),
+                usd=float(usage.get("usd", 0.0)),
+                latency_ms=float(usage.get("latency_ms", 0.0)),
+                model_revision=str(usage.get("model_revision", "")),
+            ),
+            response_hash=str(value.get("response_hash", "")),
+            model_id=str(value.get("model_id", "")),
+            resource_revision=str(value.get("resource_revision", "")),
+            response_status=str(value.get("response_status", "ok")),
+            finish_reason=str(value.get("finish_reason", "")),
+        )
 
 
 class GeminiExecutor:
@@ -623,7 +712,7 @@ class GeminiExecutor:
         response = self.transport.generate(
             model_id=expected["model_id"],
             contents=contents,
-            generation_parameters=profile.generation_parameters,
+            generation_parameters=_generation_parameters(profile, gemini=True),
         )
         latency_ms = (time.monotonic() - started) * 1000.0
         usage: NormalizedUsage | None = None
@@ -631,7 +720,8 @@ class GeminiExecutor:
         try:
             payload = _response_mapping(response)
             usage = normalize_usage(payload, profile, latency_ms=latency_ms)
-            response_hash = semantic_response_hash(payload)
+            _validate_usage_caps(usage)
+            response_hash = semantic_response_hash(_redact_thought_text(payload))
             text = _response_text(response, payload)
         except Exception as exc:
             raise PostResponseFailure(
@@ -646,6 +736,8 @@ class GeminiExecutor:
             response_hash=response_hash,
             model_id=expected["model_id"],
             resource_revision=profile.resource_revision,
+            response_status="no_visible_text" if text == "" else "ok",
+            finish_reason=_finish_reason(payload),
         )
 
 
@@ -663,7 +755,7 @@ class GemmaMaaSExecutor:
         response = self.transport.generate(
             model_id=expected["model_id"],
             messages=messages,
-            generation_parameters=profile.generation_parameters,
+            generation_parameters=_generation_parameters(profile, gemini=False),
         )
         latency_ms = (time.monotonic() - started) * 1000.0
         usage: NormalizedUsage | None = None
@@ -671,7 +763,8 @@ class GemmaMaaSExecutor:
         try:
             payload = _response_mapping(response)
             usage = normalize_usage(payload, profile, latency_ms=latency_ms)
-            response_hash = semantic_response_hash(payload)
+            _validate_usage_caps(usage)
+            response_hash = semantic_response_hash(_redact_thought_text(payload))
             text = _response_text(response, payload)
         except Exception as exc:
             raise PostResponseFailure(
@@ -686,4 +779,6 @@ class GemmaMaaSExecutor:
             response_hash=response_hash,
             model_id=expected["model_id"],
             resource_revision=profile.resource_revision,
+            response_status="no_visible_text" if text == "" else "ok",
+            finish_reason=_finish_reason(payload),
         )

@@ -69,6 +69,8 @@ class CellResult:
     billable_model_response: bool = False
     billing_unknown: bool = False
     model_response_received: bool = False
+    artifact: Mapping[str, Any] | None = None
+    strict_artifact: bool = False
 
 
 Executor = Callable[[Mapping[str, Any], Path, Mapping[str, str]], CellResult]
@@ -445,6 +447,21 @@ class ExperimentRunner:
             result = executor(cell, attempt_dir, labels)
             if not isinstance(result, CellResult):
                 raise TypeError("executor must return CellResult")
+            if result.artifact is not None:
+                termination = str(result.artifact.get("termination_status", ""))
+                if termination == "infrastructure_failure" or (
+                    result.strict_artifact and termination not in {
+                        "completed", "missing_proof", "budget_exhausted", "timeout",
+                        "task_timeout", "model_no_visible_text",
+                    }
+                ):
+                    result = CellResult(
+                        "infrastructure_failure", cost_usd=result.cost_usd,
+                        artifact=result.artifact, strict_artifact=result.strict_artifact,
+                    )
+                    raise ValueError(
+                        "coordinator rejected non-model runtime termination: " + termination
+                    )
             marker = {"run_id": run_id, "result": result.__dict__}
             marker_path = attempt_dir / "coordinator-result.json"
             marker_path.write_text(

@@ -486,6 +486,19 @@ class RunArtifact:
         """
         if self.schema_version != RUN_ARTIFACT_VERSION:
             raise ValueError("official gates accept only RunArtifact v2.1.0")
+        if strict_runtime:
+            allowed_outcomes = {
+                "completed", "missing_proof", "budget_exhausted", "timeout",
+                "task_timeout", "model_no_visible_text",
+            }
+            if self.termination_status not in allowed_outcomes:
+                raise ValueError(
+                    "strict runtime rejects non-model termination status: "
+                    + (self.termination_status or "missing")
+                )
+            if self.termination_status == "model_no_visible_text" or self.internal_outcome == "model_no_visible_text":
+                if self.internal_outcome != "model_no_visible_text":
+                    raise ValueError("no-visible-text artifact must declare model_no_visible_text")
         required_identity = {"name", "repository_url", "commit", "image_digest", "adapter_version"}
         if not required_identity.issubset(self.framework_identity):
             raise ValueError("RunArtifact.framework_identity is incomplete")

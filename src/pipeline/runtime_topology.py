@@ -59,6 +59,7 @@ class TopologyHandle:
     phase_token: str = ""
     token_expires_at: str = ""
     allowed_run_ids: set[str] = field(default_factory=set)
+    epoch: str = ""
 
 
 def _safe(value: str, name: str) -> str:
@@ -129,7 +130,7 @@ class TopologyLifecycle:
 
     def start(
         self, *, phase: str, run_ids: set[str], gateway_server: Any = None,
-        gateway_factory: Any = None, gateway_token: str = "", token_expires_at: str = "",
+        gateway_factory: Any = None, gateway_token: str = "", token_expires_at: str = "", epoch: str = "",
     ) -> TopologyHandle:
         if phase not in {"canary", "smoke"}:
             raise TopologyError("runtime topology phase must be canary or smoke")
@@ -154,6 +155,7 @@ class TopologyLifecycle:
             relay_container=relay_name, gateway_server=gateway_server,
             phase_token=gateway_token, allowed_run_ids=set(run_ids),
             token_expires_at=token_expires_at,
+            epoch=str(epoch),
         )
         try:
             network = self.docker.run(["network", "create", "--internal", *(_label_args(labels)), network_name])
@@ -199,6 +201,7 @@ class TopologyLifecycle:
             "VERIPLANPT_RUN_ID": run_id,
             "VERIPLANPT_PROVIDER_TOKEN": handle.phase_token,
             "VERIPLANPT_PROVIDER_URL": "http://gateway-relay:8080/v1/generate",
+            "VERIPLANPT_PROVIDER_BASE_URL": "http://gateway-relay:8080/v1",
         }
         if any(environment.get(key) != value for key, value in required_runtime.items()):
             raise TopologyError("baseline token, run-ID, or relay endpoint is not pinned")
@@ -245,6 +248,12 @@ class TopologyLifecycle:
             "VERIPLANPT_PROVIDER_TOKEN": handle.phase_token,
             "VERIPLANPT_PROVIDER_TOKEN_EXPIRES_AT": handle.token_expires_at,
             "VERIPLANPT_PROVIDER_URL": "http://gateway-relay:8080/v1/generate",
+            "VERIPLANPT_PROVIDER_BASE_URL": "http://gateway-relay:8080/v1",
+            "OPENAI_BASE_URL": "http://gateway-relay:8080/v1",
+            "OPENAI_API_BASE": "http://gateway-relay:8080/v1",
+            "OPENAI_BASEURL": "http://gateway-relay:8080/v1",
+            "OPENAI_API_KEY": f"{handle.phase_token}.{run_id}.{profile_hash}",
+            "VERIPLANPT_EPOCH": handle.epoch,
             "VERIPLANPT_PROFILE_HASH": profile_hash,
             "VERIPLANPT_MODEL_LABEL": model_label,
             "VERIPLANPT_GATEWAY_LIVE": "true",

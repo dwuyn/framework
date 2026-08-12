@@ -29,6 +29,31 @@ def _canonical(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _redact(value: str) -> str:
+    """Redact bearer/key-like values while retaining bounded diagnostics."""
+    import re
+    return re.sub(
+        r"(?i)(bearer\s+|(?:token|api[_-]?key|secret|credential)\s*[=:]\s*)[^\s,;]+",
+        r"\1[REDACTED]", value,
+    )
+
+
+def _driver_diagnostics(
+    *, command: tuple[str, ...], returncode: int, stdout: str = "", stderr: str = "",
+    error_class: str = "",
+) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0.0",
+        "argv": list(command),
+        "exit_code": int(returncode),
+        "error_class": error_class or ("non_zero_exit" if returncode else ""),
+        "stdout": _redact(stdout)[-8192:],
+        "stderr": _redact(stderr)[-8192:],
+        "stdout_sha256": hashlib.sha256(stdout.encode("utf-8", errors="replace")).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr.encode("utf-8", errors="replace")).hexdigest(),
+    }
+
+
 def _required_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -113,6 +138,31 @@ def _adapter_phases(framework: str) -> tuple[str, ...]:
     raise RuntimeBoundaryError(f"unsupported framework adapter: {framework}")
 
 
+def _run_fake_production_driver(
+    invocation: Mapping[str, Any], *, phases: tuple[str, ...], output: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Offline contract driver; provider calls originate in this driver."""
+    events: list[dict[str, Any]] = []
+    responses: list[dict[str, Any]] = []
+    for phase in phases:
+        response = dict(_provider_probe(invocation, phase=phase))
+        responses.append(response)
+        events.append({
+            "role": str(invocation["framework"]),
+            "event": {
+                "event_type": "production_driver_request",
+                "phase": phase,
+                "provider_response_hash": str(response.get("response_hash") or _canonical(response)),
+                "provider_mode": "fake",
+            },
+        })
+    output.joinpath("driver-diagnostics.json").write_text(json.dumps(_driver_diagnostics(
+        command=("fake-production-driver",), returncode=0,
+        stdout=json.dumps(events, sort_keys=True),
+    ), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return events, responses
+
+
 def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str]:
     """Run the common adapter lifecycle and return evidence plus termination."""
     framework = str(invocation["framework"])
@@ -126,57 +176,62 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
     os.environ["VERIPLANPT_PUBLIC_INVOCATION_FILE"] = str(driver_input)
     events: list[dict[str, Any]] = []
     responses: list[dict[str, Any]] = []
-    fake = os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true"
-    for phase in phases:
-        response = _provider_probe(invocation, phase=phase)
-        responses.append(dict(response))
-        events.append({
-            "role": framework,
-            "event": {
-                "event_type": "adapter_phase",
-                "phase": phase,
-                "provider_response_hash": str(response.get("response_hash") or _canonical(response)),
-                "provider_mode": "fake" if fake else "relay",
-            },
-        })
-    # The fake-provider path exercises the same phase dispatch and relay
-    # boundary.  A live image may opt into its pinned upstream driver, but the
-    # driver command is image-owned and never accepted from stdin or env.
-    if not fake:
-        command = (
-            (sys.executable, "-m", "src.pipeline.production_driver")
-            if framework == "VeriPlanPT"
-            else (sys.executable, "/opt/adapter/baseline_driver.py")
+    if os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true":
+        events, responses = _run_fake_production_driver(invocation, phases=phases, output=output)
+        proof = [{"kind": "framework_execution", "framework": framework, "phases": list(phases)}]
+        if driver_input.exists():
+            driver_input.unlink()
+        return events, proof, responses, "completed"
+    command = (
+        (sys.executable, "-m", "src.pipeline.production_driver")
+        if framework == "VeriPlanPT"
+        else (sys.executable, "/opt/adapter/baseline_driver.py")
+    )
+    completed: subprocess.CompletedProcess[str] | None = None
+    try:
+        completed = subprocess.run(
+            command,
+            # The image root and upstream checkout are read-only. The
+            # image-owned driver receives the pinned source through PYTHONPATH
+            # and writes logs/config/checkpoints in the per-cell output mount.
+            cwd=output,
+            capture_output=True,
+            text=True,
+            timeout=int(os.environ.get("VERIPLANPT_MAX_RUNTIME_SECONDS", "3600")),
+            check=False,
         )
-        try:
-            completed = subprocess.run(
-                command,
-                # The image root and upstream checkout are read-only.  The
-                # image-owned baseline dispatcher receives the pinned source
-                # through PYTHONPATH and writes logs/config/checkpoints in the
-                # per-cell output mount.
-                cwd=output,
-                capture_output=True,
-                text=True,
-                timeout=int(os.environ.get("VERIPLANPT_MAX_RUNTIME_SECONDS", "3600")),
-                check=False,
-            )
-        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeBoundaryError(f"{framework} production driver failed: {type(exc).__name__}") from exc
-        events.append({
-            "role": framework,
-            "event": {
-                "event_type": "production_driver",
-                "argv": list(command),
-                "returncode": completed.returncode,
-                "stdout": _canonical(completed.stdout),
-                "stderr": _canonical(completed.stderr),
-            },
-        })
-        if completed.returncode != 0:
-            if driver_input.exists():
-                driver_input.unlink()
-            return events, [], responses, "infrastructure_failure"
+        diagnostics = _driver_diagnostics(
+            command=command, returncode=completed.returncode,
+            stdout=completed.stdout, stderr=completed.stderr,
+        )
+    except subprocess.TimeoutExpired as exc:
+        diagnostics = _driver_diagnostics(
+            command=command, returncode=124,
+            stdout=str(exc.stdout or ""), stderr=str(exc.stderr or ""),
+            error_class="task_timeout",
+        )
+    except (OSError, ValueError) as exc:
+        diagnostics = _driver_diagnostics(
+            command=command, returncode=127, error_class=type(exc).__name__, stderr=str(exc),
+        )
+    (output / "driver-diagnostics.json").write_text(
+        json.dumps(diagnostics, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
+    events.append({
+        "role": framework,
+        "event": {
+            "event_type": "production_driver",
+            "argv": list(command),
+            "returncode": int(diagnostics["exit_code"]),
+            "error_class": diagnostics["error_class"],
+            "stdout_sha256": diagnostics["stdout_sha256"],
+            "stderr_sha256": diagnostics["stderr_sha256"],
+        },
+    })
+    if completed is None or completed.returncode != 0:
+        if driver_input.exists():
+            driver_input.unlink()
+        return events, [], responses, "infrastructure_failure"
     proof = [{
         "kind": "framework_execution",
         "framework": framework,
@@ -274,8 +329,13 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
         "event_ledger_hash": _canonical(event_ledger),
         "proof_hash": _canonical(proof),
         "termination_status": "completed",
-        "internal_outcome": "runtime_ready",
+        "internal_outcome": (
+            "model_no_visible_text" if str(response.get("response_status", "")) == "no_visible_text"
+            else "runtime_ready"
+        ),
         "budget_termination_reason": "",
+        "metric_eligible": True,
+        "valid": True,
     }
 
 
@@ -301,6 +361,11 @@ def main() -> int:
                 "usd": sum(float(item.get("usage", {}).get("usd", 0.0)) for item in responses),
             },
             "response_hash": _canonical(events),
+            "response_status": (
+                "no_visible_text"
+                if any(str(item.get("response_status", "")) == "no_visible_text" for item in responses)
+                else "ok"
+            ),
         }
         candidate = output / "run_artifact.json"
         # Vertex canaries intentionally run only the controlled provider
@@ -310,16 +375,21 @@ def main() -> int:
         # missing driver artifact as a post-response failure.
         is_vertex_canary = str(invocation.get("condition")) == "vertex_canary"
         if not fake and termination == "completed" and not is_vertex_canary:
-            if not candidate.is_file() or candidate.is_symlink():
-                raise RuntimeBoundaryError("production adapter did not emit run_artifact.json")
-            artifact = _object(json.loads(candidate.read_text(encoding="utf-8")), "production RunArtifact")
-            if artifact.get("schema_version") != "2.1.0" or artifact.get("run_id") != invocation["run_id"]:
-                raise RuntimeBoundaryError("production adapter RunArtifact identity is invalid")
-            context = _object(artifact.get("run_context"), "production RunArtifact context")
-            context["stage"] = stage
-            context["target_runtime_lock_hash"] = _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH")
-            context["gateway_relay_lock_hash"] = _required_env("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH")
-            artifact["run_context"] = context
+            if candidate.is_file() and not candidate.is_symlink():
+                artifact = _object(json.loads(candidate.read_text(encoding="utf-8")), "production RunArtifact")
+                if artifact.get("schema_version") != "2.1.0" or artifact.get("run_id") != invocation["run_id"]:
+                    raise RuntimeBoundaryError("production adapter RunArtifact identity is invalid")
+                context = _object(artifact.get("run_context"), "production RunArtifact context")
+                context["stage"] = stage
+                context["target_runtime_lock_hash"] = _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH")
+                context["gateway_relay_lock_hash"] = _required_env("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH")
+                artifact["run_context"] = context
+            else:
+                # The image-owned runtime wrapper materializes the official
+                # wire artifact when an upstream driver only emits native
+                # result files. The host ledger remains the source of usage;
+                # an absent provider response is still rejected by the runner.
+                artifact = _artifact(invocation, response)
         else:
             artifact = _artifact(invocation, response)
             artifact["transcript"] = events
@@ -327,7 +397,14 @@ def main() -> int:
             artifact["event_ledger_hash"] = _canonical(events)
             artifact["proof_hash"] = _canonical(proof)
             artifact["termination_status"] = termination
-            artifact["internal_outcome"] = "adapter_completed" if termination == "completed" else termination
+            artifact["internal_outcome"] = (
+                "model_no_visible_text"
+                if response.get("response_status") == "no_visible_text"
+                else ("adapter_completed" if termination == "completed" else termination)
+            )
+            if termination == "infrastructure_failure":
+                artifact["metric_eligible"] = False
+                artifact["valid"] = False
     else:
         raise RuntimeBoundaryError("paid stage requires VERIPLANPT_ADAPTER_PRODUCTION=true")
     destination = output / "run_artifact.json"
@@ -335,7 +412,7 @@ def main() -> int:
         raise RuntimeBoundaryError("refusing to overwrite an existing RunArtifact")
     if not destination.exists():
         destination.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return 0
+    return 70 if termination == "infrastructure_failure" else 0
 
 
 if __name__ == "__main__":

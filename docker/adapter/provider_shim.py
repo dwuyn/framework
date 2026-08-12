@@ -19,6 +19,9 @@ class ProviderShimError(RuntimeError):
     """Raised when a request cannot be routed through the controlled gateway."""
 
 
+_CALL_INDEX = 0
+
+
 def _gateway_url() -> str:
     value = os.environ.get("VERIPLANPT_PROVIDER_URL", "http://gateway-relay:8080/v1/generate")
     if value.startswith("https://aiplatform.googleapis.com") or "googleapis.com" in value:
@@ -57,6 +60,12 @@ def request(payload: dict[str, object]) -> dict[str, object]:
             "profile_hash": os.environ["VERIPLANPT_PROFILE_HASH"],
             "contents": payload.get("contents", payload.get("prompt")),
         }
+        epoch = os.environ.get("VERIPLANPT_EPOCH", "")
+        if epoch:
+            global _CALL_INDEX
+            payload["epoch"] = epoch
+            payload["call_index"] = int(os.environ.get("VERIPLANPT_CALL_INDEX", _CALL_INDEX))
+            _CALL_INDEX += 1
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
     headers = {"Content-Type": "application/json", "X-VeriPlanPT-Provider-Shim": "1"}
     token = os.environ.get("VERIPLANPT_PROVIDER_TOKEN", "")
@@ -70,6 +79,39 @@ def request(payload: dict[str, object]) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ProviderShimError("provider gateway response must be a JSON object")
     return value
+
+
+def models() -> dict[str, object]:
+    """Return the pinned model list through the internal relay."""
+    if any(os.environ.get(name) for name in (
+        "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_ADC", "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION", "GOOGLE_GENAI_USE_VERTEXAI",
+    )):
+        raise ProviderShimError("Vertex credentials must not be present in a baseline container")
+    try:
+        with urlopen(Request(_gateway_url().rsplit("/v1/", 1)[0] + "/v1/models", headers={
+            "Authorization": f"Bearer {os.environ.get('VERIPLANPT_PROVIDER_TOKEN', '')}",
+        }, method="GET"), timeout=30) as response:
+            value = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise ProviderShimError(f"provider model list failed: {type(exc).__name__}") from exc
+    if not isinstance(value, dict):
+        raise ProviderShimError("provider model list must be a JSON object")
+    return value
+
+
+def chat_completion(messages: list[dict[str, object]], *, model: str = "", stream: bool = False) -> dict[str, object]:
+    """OpenAI-compatible convenience adapter for baseline wrappers."""
+    base = os.environ.get("VERIPLANPT_PROVIDER_BASE_URL", "http://gateway-relay:8080/v1").rstrip("/")
+    previous = os.environ.get("VERIPLANPT_PROVIDER_URL")
+    os.environ["VERIPLANPT_PROVIDER_URL"] = base + "/chat/completions"
+    try:
+        return request({"model": model or os.environ.get("VERIPLANPT_MODEL_LABEL", ""), "messages": messages, "stream": stream})
+    finally:
+        if previous is None:
+            os.environ.pop("VERIPLANPT_PROVIDER_URL", None)
+        else:
+            os.environ["VERIPLANPT_PROVIDER_URL"] = previous
 
 
 def main() -> int:

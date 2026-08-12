@@ -154,17 +154,20 @@ def test_gemini_candidates_extract_visible_text_and_normalize_thought_signature(
     assert result.text == "visible answer"
 
 
-def test_gemini_thought_only_response_is_known_billed_post_response_failure() -> None:
+def test_gemini_thought_only_response_is_known_billed_model_outcome() -> None:
     response = _GeminiCandidateResponse({
         "candidates": [{
             "content": {"parts": [{"text": "private reasoning", "thought": True}]},
         }],
         "usage": {"input_tokens": 4, "output_tokens": 2},
     })
-    with pytest.raises(PostResponseFailure) as failure:
-        GeminiExecutor(_ResponseTransport(response)).invoke(_profile("gemini-3.5-flash"), "ping")
-    assert failure.value.usage is not None
-    assert failure.value.response_hash is not None
+    result = GeminiExecutor(_ResponseTransport(response)).invoke(
+        _profile("gemini-3.5-flash"), "ping"
+    )
+    assert result.text == ""
+    assert result.response_status == "no_visible_text"
+    assert result.usage is not None
+    assert result.response_hash
 
 
 def test_gemini_response_text_property_failure_is_fail_closed() -> None:
@@ -212,7 +215,7 @@ def test_post_response_failure_with_usage_is_known_and_not_retryable(tmp_path) -
     state = ledger.lookup("run-1")
     assert state["billing_status"] == "known"
     assert state["records"][0]["outcome"] == "post_response_failure"
-    assert json.loads((tmp_path / "ledger.json").read_text())["schema_version"] == "1.1.0"
+    assert json.loads((tmp_path / "ledger.json").read_text())["schema_version"] == "1.2.0"
 
 
 def test_post_response_failure_without_usage_is_billing_unknown(tmp_path) -> None:

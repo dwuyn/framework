@@ -73,11 +73,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evaluator-image-digest", required=True)
     parser.add_argument("--feature-schema-hash", required=True)
     parser.add_argument("--max-input-tokens", type=int, default=4096)
-    parser.add_argument("--max-output-tokens", type=int, default=1024)
+    parser.add_argument("--max-output-tokens", type=int, default=2048)
     parser.add_argument("--max-llm-calls", type=int, default=40)
     parser.add_argument("--source-snapshot-hash", required=True)
     parser.add_argument("--reservation-ceiling-usd", type=float, required=True)
     args = parser.parse_args(argv)
+
+    if (args.max_input_tokens, args.max_output_tokens, args.max_llm_calls) != (4096, 2048, 40):
+        raise SystemExit("r10 runtime contract pins max_input_tokens=4096, max_output_tokens=2048, max_llm_calls=40")
 
     import re
     if not re.fullmatch(r"[0-9a-f]{40}", args.evaluator_commit):
@@ -164,6 +167,21 @@ def main(argv: list[str] | None = None) -> int:
     resolution_entries: list[dict[str, Any]] = []
     for item in resolved:
         profile = item.to_model_profile(pricing.pricing_for(item.logical_label), pricing_effective_at=pricing.effective_at)
+        generation_parameters = dict(profile.generation_parameters)
+        generation_parameters["max_output_tokens"] = args.max_output_tokens
+        if item.logical_label.startswith("gemini-"):
+            thinking_config = generation_parameters.get("thinking_config", {})
+            if not isinstance(thinking_config, dict):
+                thinking_config = {}
+            generation_parameters["thinking_config"] = {
+                **thinking_config,
+                "thinking_level": "MEDIUM",
+            }
+        else:
+            generation_parameters["thinking_enabled"] = False
+        profile = ModelProfile.from_dict({
+            **profile.to_dict(), "generation_parameters": generation_parameters,
+        })
         profiles.append(profile)
         metadata_path = model_dir / f"{item.logical_label}.json"
         resolution_entries.append({
@@ -209,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         source_snapshot_hash=args.source_snapshot_hash,
         max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens,
         max_llm_calls=args.max_llm_calls,
+        epoch=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         retry_policy={"max_attempts": 2, "retryable": ["408", "429", "500", "502", "503", "504"]}, strict=True,
     )
     reserved_cost = sum(float(cell["cell_worst_case_cost_usd"]) for cell in plan["cells"])
@@ -228,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     dataset_commit = _git_commit(dataset_root)
     protocol = {
         "schema_version": "3.1.0", "dataset_repository_commit": dataset_commit,
+        "runtime_contract": "veriplanpt-runtime-v0.4.0-r10",
         "dataset_lock_hash": dataset_hash, "framework_commit": framework_state["commit"],
         "evaluator_commit": args.evaluator_commit, "evaluator_bundle_hash": args.evaluator_bundle_hash,
         "oracle_bundle_hash": args.oracle_bundle_hash, "evaluator_image_digest": args.evaluator_image_digest,

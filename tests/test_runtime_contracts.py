@@ -150,3 +150,44 @@ def test_gateway_blocks_call_41_before_provider() -> None:
     with pytest.raises(GatewayError, match="max_llm_calls exceeded before provider call"):
         gateway.invoke(request, token="token")
     assert gemini.calls == 40
+
+
+def test_gateway_replays_durable_response_without_a_second_provider_call() -> None:
+    profile = _profile("gemini-3.5-flash")
+
+    class FakeGemini:
+        calls = 0
+
+        def invoke(self, selected: ModelProfile, _contents: object) -> InvocationResult:
+            self.calls += 1
+            return InvocationResult(
+                text="ok", usage=NormalizedUsage(
+                    input_tokens=1, output_tokens=1, total_tokens=2, usd=0.01,
+                ), response_hash="c" * 64, model_id=selected.logical_label,
+                resource_revision=selected.resource_revision,
+            )
+
+    gemini = FakeGemini()
+    ledger = InvocationLedger(
+        phase="smoke", gateway_relay_lock_hash="b" * 64, epoch="epoch-1",
+    )
+    gateway = VertexGateway(
+        profiles=[profile], allowed_run_ids={"run-1"}, token="token",
+        gemini=gemini, gemma=object(), invocation_ledger=ledger, epoch="epoch-1",
+    )
+    request = {
+        "run_id": "run-1", "model_label": profile.logical_label,
+        "profile_hash": profile.profile_hash, "contents": "probe",
+        "epoch": "epoch-1", "call_index": 0,
+    }
+
+    first = gateway.invoke(request, token="token")
+    replay = gateway.invoke(request, token="token")
+    assert replay == first
+    assert gemini.calls == 1
+    assert ledger.provider_call_count("run-1") == 1
+    assert ledger.snapshot()[0]["replay_count"] == 1
+
+    with pytest.raises(GatewayError, match="different request hash"):
+        gateway.invoke({**request, "contents": "tampered"}, token="token")
+    assert gemini.calls == 1

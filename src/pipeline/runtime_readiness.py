@@ -50,7 +50,7 @@ def build_canary_smoke_plan(
     source_snapshot_hash: str = "",
     gateway_relay_lock_hash: str = "",
     max_input_tokens: int = 0, max_output_tokens: int = 0, max_llm_calls: int = 0,
-    retry_policy: Mapping[str, Any] | None = None, strict: bool = False,
+    retry_policy: Mapping[str, Any] | None = None, epoch: str = "", strict: bool = False,
 ) -> dict[str, Any]:
     """Make exactly 3 canaries plus the 15 required framework/model smokes."""
     labels = sorted(profile.logical_label for profile in profiles)
@@ -148,6 +148,14 @@ def build_canary_smoke_plan(
         plan["target_runtime_lock_hash"] = target_runtime_lock_hash
     if source_snapshot_hash:
         plan["source_snapshot_hash"] = source_snapshot_hash
+    if epoch:
+        try:
+            datetime.fromisoformat(epoch.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("runtime readiness epoch must be ISO-8601") from exc
+        plan["epoch"] = epoch
+    if (max_input_tokens, max_output_tokens, max_llm_calls) == (4096, 2048, 40):
+        plan["runtime_contract"] = "veriplanpt-runtime-v0.4.0-r10"
     plan["plan_hash"] = _canonical_hash(plan)
     if strict:
         validate_canary_smoke_plan(plan, profiles=profiles, strict=True)
@@ -183,6 +191,16 @@ def validate_canary_smoke_plan(
     if len({str(cell.get("run_id", "")) for cell in cells}) != 18:
         raise ValueError("canary smoke run IDs must be unique")
     if strict:
+        if plan.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10":
+            from src.pipeline.runtime_contract import validate_runtime_profile
+            for profile in profiles:
+                validate_runtime_profile(profile, strict=True, r10=True)
+        if plan.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10" and any(
+            int(cell.get(key, 0)) != expected
+            for cell in cells
+            for key, expected in (("max_input_tokens", 4096), ("max_output_tokens", 2048))
+        ):
+            raise ValueError("r10 readiness plan must pin input=4096 and output=2048 token caps")
         required = {
             "model_profile_hash", "model_resource_id", "model_revision", "dataset_lock_hash",
             "baseline_identity_hash", "native_identity_hash", "model_resolution_lock_hash",

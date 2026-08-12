@@ -65,7 +65,9 @@
         "pyproject.toml": "ffb0e0638ff7e3c2300677b64f7d40a3f8161c10c019d0e0f31d318a00c687cf"
       },
       "name": "PentestAgent",
-      "os_package_requirements": [],
+      "os_package_requirements": [
+        "git"
+      ],
       "recipe_path": "/home/dwyn/Research/test/pentest-agent_new/docker/baselines/PentestAgent.Dockerfile",
       "resolver_overrides": [],
       "source": {
@@ -148,8 +150,8 @@
       "dependency_lock": {
         "format": "requirements",
         "hashed": true,
-        "path": "build/dependency-envelopes/VulnBot/requirements.lock",
-        "sha256": "a04d25ba0e0ab3faed842a5ed8612f1c9136f0b12b060007f26315b1a7ef9999"
+      "path": "build/dependency-envelopes/VulnBot/requirements.lock",
+        "sha256": "beb8f977a8371eb98203d06a3573c28345e1459a551fc279bb1f47aafca8e378"
       },
       "input_hashes": {
         "requirements.txt": "ff71717369918bed853c20f2c16314a1ce8bc530aee71d57f61925ad4ba538c7"

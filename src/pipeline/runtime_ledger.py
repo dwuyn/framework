@@ -31,6 +31,10 @@ class BillableInvocationError(RuntimeError):
         self.cost_usd = float(cost_usd)
 
 
+class InvocationConflictError(RuntimeError):
+    """A restarted call reused an invocation slot with a different request."""
+
+
 def _hash(value: Any) -> str:
     if isinstance(value, bytes):
         payload = value
@@ -44,7 +48,7 @@ def _hash(value: Any) -> str:
 class InvocationLedger:
     """Capture response state and atomically persist it before gateway return."""
 
-    CURRENT_SCHEMA = "1.1.0"
+    CURRENT_SCHEMA = "1.2.0"
     _PHASES = {"canary", "smoke", "sweep", "confirmation", "benchmark"}
 
     def __init__(
@@ -53,11 +57,13 @@ class InvocationLedger:
         phase: str,
         gateway_relay_lock_hash: str,
         path: str | Path | None = None,
+        epoch: str = "",
     ) -> None:
         if phase not in self._PHASES:
             raise ValueError("invocation ledger phase is not a locked runtime stage")
         self.phase = phase
         self.gateway_relay_lock_hash = gateway_relay_lock_hash
+        self.epoch = str(epoch)
         self.path = Path(path).resolve() if path is not None else None
         self._lock = threading.RLock()
         self._records: list[dict[str, Any]] = []
@@ -69,11 +75,14 @@ class InvocationLedger:
         if not isinstance(value, Mapping):
             raise ValueError("invocation ledger must be a JSON object")
         schema = str(value.get("schema_version", ""))
-        if schema not in {"1.0.0", cls.CURRENT_SCHEMA}:
+        if schema not in {"1.0.0", "1.1.0", cls.CURRENT_SCHEMA}:
             raise ValueError("unsupported invocation ledger schema")
         phase = str(value.get("phase", ""))
         lock_hash = str(value.get("gateway_relay_lock_hash", ""))
-        ledger = cls(phase=phase, gateway_relay_lock_hash=lock_hash, path=source)
+        ledger = cls(
+            phase=phase, gateway_relay_lock_hash=lock_hash, path=source,
+            epoch=str(value.get("epoch", "")),
+        )
         rows = value.get("invocations", [])
         if not isinstance(rows, list):
             raise ValueError("invocation ledger invocations must be an array")
@@ -127,6 +136,7 @@ class InvocationLedger:
         return {
             "schema_version": self.CURRENT_SCHEMA,
             "phase": self.phase,
+            "epoch": self.epoch,
             "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
             "invocations": [dict(record) for record in self._records],
         }
@@ -163,6 +173,10 @@ class InvocationLedger:
         billing_status: str,
         outcome: str = "completed",
         model_response_received: bool = True,
+        epoch: str = "",
+        call_index: int | None = None,
+        model_profile_hash: str = "",
+        replay_count: int = 0,
     ) -> dict[str, Any]:
         if not run_id or not model_label:
             raise ValueError("invocation ledger requires run_id and model label")
@@ -197,6 +211,18 @@ class InvocationLedger:
             "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
         }
+        identity_epoch = str(epoch or self.epoch)
+        if identity_epoch:
+            record["epoch"] = identity_epoch
+        if call_index is not None:
+            if int(call_index) < 0:
+                raise ValueError("invocation call_index cannot be negative")
+            record["call_index"] = int(call_index)
+        if model_profile_hash:
+            record["model_profile_hash"] = str(model_profile_hash)
+        if response is not None:
+            record["response"] = response
+        record["replay_count"] = int(replay_count)
         self._validate_record(record)
         with self._lock:
             self._records.append(record)
@@ -215,6 +241,43 @@ class InvocationLedger:
                 record["cost_usd"] = None
                 raise
         return dict(record)
+
+    def replay_or_conflict(
+        self, *, epoch: str, run_id: str, call_index: int, request: Any,
+        model_profile_hash: str,
+    ) -> dict[str, Any] | None:
+        """Replay one durable response, or fail closed on slot reuse.
+
+        The identity is intentionally scoped to this ledger's epoch and never
+        searches another run or another ledger file.
+        """
+        request_hash = _hash(request)
+        with self._lock:
+            matches = [
+                row for row in self._records
+                if row.get("epoch") == str(epoch)
+                and row.get("run_id") == run_id
+                and int(row.get("call_index", -1)) == int(call_index)
+                and row.get("model_profile_hash") == model_profile_hash
+            ]
+            if not matches:
+                return None
+            row = matches[0]
+            if row.get("request_sha256") != request_hash:
+                raise InvocationConflictError(
+                    "durable invocation slot reused with a different request hash"
+                )
+            row["replay_count"] = int(row.get("replay_count", 0)) + 1
+            if self.path is not None:
+                self._write_locked(self.path)
+            return dict(row)
+
+    def provider_call_count(self, run_id: str, *, epoch: str = "") -> int:
+        """Count provider responses in one run/epoch, excluding replays."""
+        return sum(
+            1 for row in self.snapshot()
+            if row.get("run_id") == run_id and (not epoch or row.get("epoch") == str(epoch))
+        )
 
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:

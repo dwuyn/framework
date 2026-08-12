@@ -11,14 +11,20 @@ import json
 import os
 import re
 import socketserver
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Mapping, Sequence
 
 from src.pipeline.framework_adapter import ModelProfile
-from src.pipeline.runtime_ledger import BillingUnknownError, InvocationLedger
+from src.pipeline.runtime_ledger import (
+    BillingUnknownError,
+    InvocationConflictError,
+    InvocationLedger,
+)
 from src.pipeline.vertex_runtime import (
+    LOCKED_MODEL_INVOCATIONS,
     GeminiExecutor,
     GemmaMaaSExecutor,
     GoogleGenAITransport,
@@ -44,6 +50,8 @@ class GatewayRequest:
     model_label: str
     profile_hash: str
     contents: Any
+    epoch: str = ""
+    call_index: int | None = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "GatewayRequest":
@@ -52,11 +60,15 @@ class GatewayRequest:
             model_label=str(value.get("model_label", "")),
             profile_hash=str(value.get("profile_hash", "")),
             contents=value.get("contents", value.get("prompt")),
+            epoch=str(value.get("epoch", "")),
+            call_index=(int(value["call_index"]) if value.get("call_index") is not None else None),
         )
         if not _RUN_ID.fullmatch(request.run_id):
             raise GatewayError("gateway request run_id is invalid")
         if request.contents is None:
             raise GatewayError("gateway request contents is required")
+        if request.call_index is not None and request.call_index < 0:
+            raise GatewayError("gateway request call_index is invalid")
         return request
 
 
@@ -74,6 +86,9 @@ class VertexGateway:
         token_expires_at: str = "",
         invocation_ledger: InvocationLedger | None = None,
         max_llm_calls_by_run: Mapping[str, int] | None = None,
+        epoch: str = "",
+        max_input_tokens_by_run: Mapping[str, int] | None = None,
+        max_output_tokens_by_run: Mapping[str, int] | None = None,
     ) -> None:
         if not token:
             raise GatewayError("gateway token is required")
@@ -100,23 +115,65 @@ class VertexGateway:
         }
         if any(limit <= 0 for limit in self.max_llm_calls_by_run.values()):
             raise GatewayError("gateway call limits must be positive")
+        self.epoch = str(epoch)
+        self.max_input_tokens_by_run = {
+            str(run_id): int(limit) for run_id, limit in (max_input_tokens_by_run or {}).items()
+        }
+        self.max_output_tokens_by_run = {
+            str(run_id): int(limit) for run_id, limit in (max_output_tokens_by_run or {}).items()
+        }
+        if any(limit <= 0 for limit in (*self.max_input_tokens_by_run.values(), *self.max_output_tokens_by_run.values())):
+            raise GatewayError("gateway token caps must be positive")
 
     def invoke(self, request: Mapping[str, Any], *, token: str) -> InvocationResult:
-        if token != self.token:
-            raise GatewayError("gateway token is invalid")
-        if self.token_expires_at:
-            expiry = datetime.fromisoformat(self.token_expires_at.replace("Z", "+00:00"))
-            if datetime.now(UTC) >= expiry.astimezone(UTC):
-                raise GatewayError("gateway token has expired")
+        self.authorize(token)
         parsed = GatewayRequest.from_dict(request)
         if parsed.run_id not in self.allowed_run_ids:
             raise GatewayError("gateway request run_id is not approved")
         profile = self.profiles.get(parsed.model_label)
         if profile is None or profile.profile_hash != parsed.profile_hash:
             raise GatewayError("gateway request profile is not pinned")
+        if self.epoch and parsed.epoch and parsed.epoch != self.epoch:
+            raise GatewayError("gateway request epoch differs from the approved epoch")
+        requested_output = request.get("max_output_tokens", request.get("max_tokens"))
+        planned_output = self.max_output_tokens_by_run.get(parsed.run_id)
+        if requested_output is not None and planned_output is not None and int(requested_output) > planned_output:
+            raise GatewayError("gateway request output cap exceeds the signed plan")
+        if planned_output is not None and planned_output != 2048:
+            raise GatewayError("gateway signed plan must pin max_output_tokens=2048")
+        planned_input = self.max_input_tokens_by_run.get(parsed.run_id)
+        if planned_input is not None and planned_input != 4096:
+            raise GatewayError("gateway signed plan must pin max_input_tokens=4096")
+        durable_identity = (
+            self.invocation_ledger is not None
+            and bool(parsed.epoch or self.epoch)
+            and parsed.call_index is not None
+        )
+        identity_epoch = parsed.epoch or self.epoch
+        if durable_identity and self.invocation_ledger is not None:
+            try:
+                replay = self.invocation_ledger.replay_or_conflict(
+                    epoch=identity_epoch, run_id=parsed.run_id,
+                    call_index=parsed.call_index or 0, request=dict(request),
+                    model_profile_hash=parsed.profile_hash,
+                )
+            except InvocationConflictError as exc:
+                raise GatewayError(str(exc)) from exc
+            if replay is not None:
+                if replay.get("response") is not None and replay.get("billing_status") == "known":
+                    return InvocationResult.from_dict(replay["response"])
+                if replay.get("billing_status") == "unknown":
+                    raise BillingUnknownError(
+                        "durable invocation replay is billing-unknown"
+                    )
+                raise ProviderGatewayError(
+                    "known-billed invocation has no replayable normalized response"
+                )
         limit = self.max_llm_calls_by_run.get(parsed.run_id)
         if limit is not None and self.invocation_ledger is not None:
-            used = sum(1 for row in self.invocation_ledger.snapshot() if row.get("run_id") == parsed.run_id)
+            used = self.invocation_ledger.provider_call_count(
+                parsed.run_id, epoch=identity_epoch if durable_identity else "",
+            )
             if used >= limit:
                 raise GatewayError("gateway max_llm_calls exceeded before provider call")
         try:
@@ -140,6 +197,9 @@ class VertexGateway:
                     response_hash=result.response_hash,
                     usage=result.usage.to_dict(), cost_usd=result.usage.usd,
                     billing_status="known", outcome="completed",
+                    epoch=identity_epoch if durable_identity else "",
+                    call_index=parsed.call_index if durable_identity else None,
+                    model_profile_hash=parsed.profile_hash if durable_identity else "",
                 )
             except Exception as exc:
                 # A provider response exists, but without an atomic ledger
@@ -148,6 +208,29 @@ class VertexGateway:
                     "gateway could not durably persist known provider usage"
                 ) from exc
         return result
+
+    def authorize(self, token: str) -> None:
+        if token != self.token and not token.startswith(self.token + "."):
+            raise GatewayError("gateway token is invalid")
+        if self.token_expires_at:
+            expiry = datetime.fromisoformat(self.token_expires_at.replace("Z", "+00:00"))
+            if datetime.now(UTC) >= expiry.astimezone(UTC):
+                raise GatewayError("gateway token has expired")
+
+    def token_context(self, token: str) -> dict[str, str]:
+        """Decode the local OpenAI client bearer binding, never a provider key."""
+        self.authorize(token)
+        if token == self.token:
+            return {}
+        parts = token.split(".")
+        if len(parts) != 3 or parts[0] != self.token:
+            raise GatewayError("gateway bearer binding is invalid")
+        run_id, profile_hash = parts[1], parts[2]
+        if run_id not in self.allowed_run_ids:
+            raise GatewayError("gateway bearer run ID is not approved")
+        if profile_hash not in {profile.profile_hash for profile in self.profiles.values()}:
+            raise GatewayError("gateway bearer profile is not pinned")
+        return {"run_id": run_id, "profile_hash": profile_hash}
 
     def _record_post_response_failure(
         self, parsed: GatewayRequest, request: Mapping[str, Any], exc: PostResponseFailure,
@@ -162,6 +245,9 @@ class VertexGateway:
                     cost_usd=usage.usd if usage is not None else None,
                     billing_status="known" if usage is not None else "unknown",
                     outcome="post_response_failure", model_response_received=True,
+                    epoch=(parsed.epoch or self.epoch) if parsed.call_index is not None else "",
+                    call_index=parsed.call_index,
+                    model_profile_hash=parsed.profile_hash if parsed.call_index is not None else "",
                 )
             except Exception as persist_exc:
                 raise BillingUnknownError(
@@ -183,6 +269,9 @@ def build_host_gateway(
     gemma_client_factory: Callable[[str], Any],
     invocation_ledger: InvocationLedger | None = None,
     max_llm_calls_by_run: Mapping[str, int] | None = None,
+    epoch: str = "",
+    max_input_tokens_by_run: Mapping[str, int] | None = None,
+    max_output_tokens_by_run: Mapping[str, int] | None = None,
     source_snapshot_root: str = "",
     source_snapshot_hash: str = "",
 ) -> VertexGateway:
@@ -217,6 +306,9 @@ def build_host_gateway(
         gemma=GemmaMaaSExecutor(OpenAICompatibleClientTransport(gemma_client)),
         invocation_ledger=invocation_ledger,
         max_llm_calls_by_run=max_llm_calls_by_run,
+        epoch=epoch,
+        max_input_tokens_by_run=max_input_tokens_by_run,
+        max_output_tokens_by_run=max_output_tokens_by_run,
     )
 
 
@@ -224,35 +316,128 @@ def gateway_handler(gateway: VertexGateway) -> type[BaseHTTPRequestHandler]:
     """Create the internal-only HTTP handler used by the container proxy."""
 
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            if self.path != "/v1/generate":
+        protocol_version = "HTTP/1.1"
+
+        def _token(self) -> str:
+            auth = self.headers.get("Authorization", "")
+            return auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
+
+        def _read_json(self) -> Mapping[str, Any]:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError as exc:
+                raise GatewayError("gateway content length is invalid") from exc
+            if length <= 0 or length > 1_048_576:
+                raise GatewayError("gateway request size is invalid")
+            value = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(value, Mapping):
+                raise GatewayError("gateway request must be an object")
+            return value
+
+        def _write_json(self, value: Mapping[str, Any], *, status: int = 200) -> None:
+            body = json.dumps(dict(value), sort_keys=True).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        @staticmethod
+        def _model_label(model: str, value: Mapping[str, Any]) -> str:
+            supplied = str(value.get("model_label", ""))
+            if supplied:
+                return supplied
+            for label, identity in LOCKED_MODEL_INVOCATIONS.items():
+                if model in {label, identity["model_id"]}:
+                    return label
+            profile_hash = str(value.get("profile_hash", ""))
+            for label, profile in gateway.profiles.items():
+                if profile.profile_hash == profile_hash:
+                    return label
+            raise GatewayError("chat completion model is not a pinned cell model")
+
+        @staticmethod
+        def _openai_result(result: InvocationResult) -> dict[str, Any]:
+            usage = result.usage.to_dict()
+            return {
+                "id": f"chatcmpl-{result.response_hash[:24]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": result.model_id,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": result.text},
+                    "finish_reason": result.finish_reason or "stop",
+                }],
+                "usage": {
+                    "prompt_tokens": int(usage["input_tokens"]),
+                    "completion_tokens": int(usage["output_tokens"]),
+                    "total_tokens": int(usage["total_tokens"]),
+                },
+                "response_status": result.response_status,
+                "response_hash": result.response_hash,
+            }
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path != "/v1/models":
                 self.send_error(404)
                 return
             try:
-                try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                except ValueError as exc:
-                    raise GatewayError("gateway content length is invalid") from exc
-                if length <= 0 or length > 1_048_576:
-                    raise GatewayError("gateway request size is invalid")
-                value = json.loads(self.rfile.read(length).decode("utf-8"))
-                if not isinstance(value, Mapping):
-                    raise GatewayError("gateway request must be an object")
-                auth = self.headers.get("Authorization", "")
-                token = auth.removeprefix("Bearer ") if auth.startswith("Bearer ") else ""
+                gateway.authorize(self._token())
+                self._write_json({
+                    "object": "list",
+                    "data": [
+                        {"id": identity["model_id"], "object": "model", "owned_by": "google"}
+                        for label, identity in LOCKED_MODEL_INVOCATIONS.items()
+                        if label in gateway.profiles
+                    ],
+                })
+            except GatewayError:
+                self.send_error(403)
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path not in {"/v1/generate", "/v1/chat/completions"}:
+                self.send_error(404)
+                return
+            try:
+                value = dict(self._read_json())
+                token = self._token()
+                stream = False
+                if self.path == "/v1/chat/completions":
+                    binding = gateway.token_context(token)
+                    for key, bound in binding.items():
+                        value.setdefault(key, bound)
+                    messages = value.get("messages")
+                    if not isinstance(messages, list):
+                        raise GatewayError("chat completions requires messages")
+                    value["model_label"] = self._model_label(str(value.get("model", "")), value)
+                    value["contents"] = messages
+                    stream = value.get("stream") is True
                 result = gateway.invoke(value, token=token)
-                body = json.dumps(result.to_dict(), sort_keys=True).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            except (GatewayError, UnicodeDecodeError, json.JSONDecodeError):
+                if self.path == "/v1/chat/completions":
+                    response = self._openai_result(result)
+                    if stream:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        delta = {"role": "assistant", "content": result.text}
+                        chunk = {"id": response["id"], "object": "chat.completion.chunk", "created": response["created"], "model": result.model_id, "choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
+                        self.wfile.write(("data: " + json.dumps(chunk, sort_keys=True) + "\n\n").encode("utf-8"))
+                        final = {"id": response["id"], "object": "chat.completion.chunk", "created": response["created"], "model": result.model_id, "choices": [{"index": 0, "delta": {}, "finish_reason": result.finish_reason or "stop"}]}
+                        self.wfile.write(("data: " + json.dumps(final, sort_keys=True) + "\n\ndata: [DONE]\n\n").encode("utf-8"))
+                        self.wfile.flush()
+                    else:
+                        self._write_json(response)
+                else:
+                    self._write_json(result.to_dict())
+            except (GatewayError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
                 self.send_error(403)
             except Exception:
                 # Provider and post-response failures are deliberately
-                # sanitized at the HTTP boundary.  Detailed classification is
-                # retained in the coordinator/ledger evidence, not the client.
+                # sanitized at the HTTP boundary. Detailed state remains in
+                # the host ledger.
                 self.send_error(502)
 
         def log_message(self, _format: str, *_args: object) -> None:
