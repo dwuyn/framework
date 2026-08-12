@@ -65,6 +65,26 @@ def test_external_r4_and_r5_metadata_control_source_and_build_labels(tmp_path: P
         )[2]["UPSTREAM_COMMIT"] == baseline["source"]["commit"]
 
 
+def test_schema_21_receipt_preserves_source_snapshot_binding(tmp_path: Path) -> None:
+    receipt = _receipt(framework_commit=R5_COMMIT, framework_tree=R5_TREE)
+    receipt.update({
+        "schema_version": "2.1.0",
+        "source_snapshot_hash": "1" * 64,
+        "source_snapshot_manifest_hash": "2" * 64,
+        "source_snapshot_signature_hash": "3" * 64,
+    })
+    materialized = materialize_receipt_scoped_metadata(
+        _metadata(), receipt, framework_root=tmp_path / "framework",
+    )
+    assert materialized["receipt"] == {
+        "schema_version": "2.1.0",
+        "receipt_hash": materialized["receipt"]["receipt_hash"],
+        "source_snapshot_hash": "1" * 64,
+        "source_snapshot_manifest_hash": "2" * 64,
+        "source_snapshot_signature_hash": "3" * 64,
+    }
+
+
 def test_metadata_context_sha_mismatch_fails_closed(tmp_path: Path) -> None:
     metadata_path = tmp_path / "metadata.json"
     metadata_path.write_text(json.dumps({"envelopes": []}), encoding="utf-8")

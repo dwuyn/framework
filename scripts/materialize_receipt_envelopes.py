@@ -49,8 +49,9 @@ def canonical_hash(value: Any) -> str:
 
 
 def _canonical_receipt_payload(value: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "schema_version": "2.0.0",
+    schema_version = str(value["schema_version"])
+    payload: dict[str, Any] = {
+        "schema_version": schema_version,
         "sources": {
             str(name): {
                 "remote": str(source["remote"]), "tag_or_ref": str(source["tag_or_ref"]),
@@ -71,6 +72,13 @@ def _canonical_receipt_payload(value: Mapping[str, Any]) -> dict[str, Any]:
             str(name): bool(result) for name, result in dict(value["verification_results"]).items()
         },
     }
+    if schema_version == "2.1.0":
+        payload.update({
+            "source_snapshot_hash": str(value["source_snapshot_hash"]),
+            "source_snapshot_manifest_hash": str(value["source_snapshot_manifest_hash"]),
+            "source_snapshot_signature_hash": str(value["source_snapshot_signature_hash"]),
+        })
+    return payload
 
 
 def _require_hash(value: Any, pattern: re.Pattern[str], name: str) -> str:
@@ -82,8 +90,9 @@ def _require_hash(value: Any, pattern: re.Pattern[str], name: str) -> str:
 
 def validate_receipt(value: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the runner's canonical receipt shape without importing runner code."""
-    if value.get("schema_version") != "2.0.0":
-        raise ValueError("source receipt schema_version must be 2.0.0")
+    schema_version = str(value.get("schema_version", ""))
+    if schema_version not in {"2.0.0", "2.1.0"}:
+        raise ValueError("source receipt schema_version must be 2.0.0 or 2.1.0")
     raw_sources = value.get("sources")
     if not isinstance(raw_sources, Mapping) or set(raw_sources) != REQUIRED_RECEIPT_SOURCES:
         raise ValueError("source receipt source set is incomplete or contains extra sources")
@@ -110,6 +119,11 @@ def validate_receipt(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("source receipt requires successful verification results")
     if str(value.get("signing_key_id", "")) != RECEIPT_SIGNING_KEY_ID:
         raise ValueError(f"source receipt must use signing key {RECEIPT_SIGNING_KEY_ID}")
+    if schema_version == "2.1.0":
+        for field in (
+            "source_snapshot_hash", "source_snapshot_manifest_hash", "source_snapshot_signature_hash",
+        ):
+            _require_hash(value.get(field), SHA256, f"source receipt {field}")
     expected = value.get("receipt_hash")
     actual = canonical_hash(_canonical_receipt_payload(value))
     if expected is not None and _require_hash(expected, SHA256, "source receipt hash") != actual:
@@ -188,12 +202,20 @@ def materialize_receipt_scoped_metadata(
         }
         if envelope["dependency_lock"] != original_lock:
             raise ValueError(f"dependency lock changed while materializing {name}")
-    output["receipt"] = {
-        "schema_version": "2.0.0",
+    receipt_metadata: dict[str, str] = {
+        "schema_version": str(validated_receipt["schema_version"]),
         "receipt_hash": validated_receipt.get("receipt_hash") or canonical_hash(
             _canonical_receipt_payload(validated_receipt),
         ),
     }
+    if str(validated_receipt["schema_version"]) == "2.1.0":
+        receipt_metadata.update({
+            field: str(validated_receipt[field])
+            for field in (
+                "source_snapshot_hash", "source_snapshot_manifest_hash", "source_snapshot_signature_hash",
+            )
+        })
+    output["receipt"] = receipt_metadata
     return output
 
 
