@@ -267,6 +267,10 @@ class InvocationLedger:
                 raise InvocationConflictError(
                     "durable invocation slot reused with a different request hash"
                 )
+            if int(row.get("replay_count", 0)) >= 1:
+                raise InvocationConflictError(
+                    "durable invocation restart limit exceeded for this run"
+                )
             row["replay_count"] = int(row.get("replay_count", 0)) + 1
             if self.path is not None:
                 self._write_locked(self.path)
