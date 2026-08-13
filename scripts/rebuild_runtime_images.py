@@ -214,26 +214,32 @@ def main(argv: list[str] | None = None) -> int:
         for key, value in sorted(args_for_build.items()):
             command.extend(["--build-arg", f"{key}={value}"])
         command.append(str(context))
+        expected_labels = {
+            "com.veriplanpt.upstream-commit": commit,
+            "com.veriplanpt.git-tree-hash": tree_hash,
+            "com.veriplanpt.adapter-bundle-hash": adapter_hash,
+            "com.veriplanpt.dependency-lock-hash": dependency_hash,
+            "com.veriplanpt.recipe-hash": recipe_hash,
+        }
+        if name == "PentestAgent":
+            expected_labels["com.veriplanpt.os-package-lock-hash"] = os_package_hash
         existing = subprocess.run(
             ["docker", "image", "inspect", image],
             capture_output=True,
             text=True,
             check=False,
         )
-        if not (args.skip_existing and existing.returncode == 0):
+        reuse_existing = False
+        if args.skip_existing and existing.returncode == 0:
+            _, existing_labels = _inspect(image)
+            reuse_existing = all(existing_labels.get(key) == value for key, value in expected_labels.items())
+        if not reuse_existing:
             _build(command, image)
         digest, labels = _inspect(image)
         commit_label = labels.get("com.veriplanpt.upstream-commit")
         tree_label = labels.get("com.veriplanpt.git-tree-hash")
         if commit_label != commit or tree_label != tree_hash:
             raise RuntimeError(f"Docker labels do not match receipt-scoped metadata for {name}")
-        if name == "PentestAgent" and labels.get("com.veriplanpt.os-package-lock-hash") != os_package_hash:
-            raise RuntimeError("Docker label does not match the PentestAgent OS package lock")
-        expected_labels = {
-            "com.veriplanpt.adapter-bundle-hash": adapter_hash,
-            "com.veriplanpt.dependency-lock-hash": dependency_hash,
-            "com.veriplanpt.recipe-hash": recipe_hash,
-        }
         for label_name, expected_value in expected_labels.items():
             if labels.get(label_name) != expected_value:
                 raise RuntimeError(f"Docker label {label_name} does not match staged inputs for {name}")
