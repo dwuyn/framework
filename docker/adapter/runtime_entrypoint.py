@@ -72,12 +72,6 @@ def _load_public_invocation() -> dict[str, Any]:
         raise RuntimeBoundaryError("provenance target runtime lock hash is invalid")
     if target_hash != _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH"):
         raise RuntimeBoundaryError("public invocation target runtime lock hash differs from the approved environment")
-    expected_source_hash = os.environ.get("PENTEST_SOURCE_SNAPSHOT_HASH", "").strip()
-    if expected_source_hash:
-        if len(expected_source_hash) != 64 or set(expected_source_hash.lower()) - _HEX64:
-            raise RuntimeBoundaryError("runtime source snapshot hash is invalid")
-        if str(provenance.get("source_snapshot_hash", "")) != expected_source_hash:
-            raise RuntimeBoundaryError("public invocation source snapshot hash differs from the approved environment")
     return invocation
 
 
@@ -186,20 +180,6 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
     return events, proof, responses, "completed"
 
 
-def _run_canary(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str]:
-    """Perform exactly one provider response without importing the framework graph."""
-    response = _provider_probe(invocation, phase="vertex-canary")
-    event = {
-        "role": str(invocation["framework"]),
-        "event": {
-            "event_type": "vertex_canary_probe",
-            "provider_response_hash": str(response.get("response_hash") or _canonical(response)),
-            "provider_mode": "fake" if os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true" else "relay",
-        },
-    }
-    return [event], [{"kind": "controlled_provider_probe", "response_count": 1}], [dict(response)], "completed"
-
-
 def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dict[str, Any]:
     usage_value = response.get("usage")
     usage = _object(usage_value, "gateway usage")
@@ -227,9 +207,6 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
         "stage": _required_env("VERIPLANPT_STAGE"),
         "control_condition": "runtime",
     }
-    source_snapshot_hash = str(provenance.get("source_snapshot_hash", ""))
-    if source_snapshot_hash:
-        run_context["source_snapshot_hash"] = source_snapshot_hash
     # Readiness has no policy or matrix lock yet.  Omitting these optional
     # bindings is distinct from emitting an invalid empty string; later paid
     # stages include them in the public invocation provenance.
@@ -287,10 +264,7 @@ def main() -> int:
     invocation = _load_public_invocation()
     fake = os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true"
     if stage == "canary_smoke" or os.environ.get("VERIPLANPT_ADAPTER_PRODUCTION", "") == "true":
-        if str(invocation.get("condition")) == "vertex_canary":
-            events, proof, responses, termination = _run_canary(invocation)
-        else:
-            events, proof, responses, termination = _run_adapter(invocation)
+        events, proof, responses, termination = _run_adapter(invocation)
         response = {
             "usage": {
                 "input_tokens": sum(int(item.get("usage", {}).get("input_tokens", 0)) for item in responses),
@@ -308,8 +282,13 @@ def main() -> int:
             if artifact.get("schema_version") != "2.1.0" or artifact.get("run_id") != invocation["run_id"]:
                 raise RuntimeBoundaryError("production adapter RunArtifact identity is invalid")
             context = _object(artifact.get("run_context"), "production RunArtifact context")
+            approved_target_hash = _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH")
+            if str(context.get("target_runtime_lock_hash", "")) != approved_target_hash:
+                raise RuntimeBoundaryError(
+                    "production RunArtifact target runtime lock hash differs from the approved environment"
+                )
             context["stage"] = stage
-            context["target_runtime_lock_hash"] = _required_env("VERIPLANPT_TARGET_RUNTIME_LOCK_HASH")
+            context["target_runtime_lock_hash"] = approved_target_hash
             context["gateway_relay_lock_hash"] = _required_env("VERIPLANPT_GATEWAY_RELAY_LOCK_HASH")
             artifact["run_context"] = context
         else:

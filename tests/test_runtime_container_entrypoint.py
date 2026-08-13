@@ -101,3 +101,33 @@ def test_target_runtime_lock_hash_fails_before_provider_call(monkeypatch, mutati
         monkeypatch.setenv(key, str(value))
     with pytest.raises(module.RuntimeBoundaryError, match="target runtime lock hash"):
         module._load_public_invocation()
+
+
+def test_production_run_artifact_target_lock_drift_fails_closed(tmp_path, monkeypatch) -> None:
+    module = _module()
+    invocation = _invocation()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(invocation)))
+    for key, value in {
+        "VERIPLANPT_STAGE": "canary_smoke",
+        "VERIPLANPT_RUN_ID": invocation["run_id"],
+        "VERIPLANPT_MODEL_LABEL": invocation["model_label"],
+        "VERIPLANPT_PROFILE_HASH": "f" * 64,
+        "VERIPLANPT_FRAMEWORK_NAME": "VeriPlanPT",
+        "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": "9" * 64,
+        "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": "2" * 64,
+        "VERIPLANPT_OUTPUT_DIR": str(tmp_path),
+        "VERIPLANPT_ADAPTER_PRODUCTION": "true",
+    }.items():
+        monkeypatch.setenv(key, str(value))
+    monkeypatch.delenv("VERIPLANPT_FAKE_PROVIDER", raising=False)
+    (tmp_path / "run_artifact.json").write_text(json.dumps({
+        "schema_version": "2.1.0",
+        "run_id": invocation["run_id"],
+        "run_context": {"target_runtime_lock_hash": "8" * 64},
+    }), encoding="utf-8")
+    monkeypatch.setattr(module, "_run_adapter", lambda _invocation: (
+        [], [], [{"usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "usd": 0.01}}], "completed",
+    ))
+
+    with pytest.raises(module.RuntimeBoundaryError, match="RunArtifact target runtime lock hash"):
+        module.main()

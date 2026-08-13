@@ -109,7 +109,6 @@ class PentestState(TypedDict, total=False):
     pipeline_result: dict
     retrieval_mode: str          # "live" | "snapshot" | "replay"
     source_snapshot_dir: str
-    source_snapshot_hash: str
     exploit_candidates: list     # list[dict] — serialized ExploitCandidate
     oracle_truth: dict           # evaluator input; cleared at pipeline entry
     evaluator_truth_path: str    # private run artifact; agent roles never read it
@@ -310,7 +309,6 @@ def initial_state(
         pipeline_result={},
         retrieval_mode="snapshot",
         source_snapshot_dir="",
-        source_snapshot_hash="",
         exploit_candidates=[],
         oracle_truth={},
         evaluator_truth_path="",

@@ -325,19 +325,16 @@ class ExperimentRunner:
             raise ValueError("executor result cost cannot be negative")
         connection = connection or self.db
         row = connection.execute(
-            "SELECT attempts, cell_json FROM runs WHERE run_id=?", (run_id,)
+            "SELECT attempts FROM runs WHERE run_id=?", (run_id,)
         ).fetchone()
         if row is None:
             raise ValueError("unknown run id")
         unknown = result.billing_unknown or result.status == "billing_unknown"
-        cell = json.loads(str(row["cell_json"]))
-        retry_policy = cell.get("retry_policy", {}) if isinstance(cell, Mapping) else {}
-        max_attempts = int(retry_policy.get("max_attempts", 2)) if isinstance(retry_policy, Mapping) else 2
         retry = (
             result.status == "infrastructure_failure"
             and not result.billable_model_response
             and not unknown
-            and row["attempts"] < max_attempts
+            and row["attempts"] < 3
         )
         status = "pending" if retry else result.status
         with connection:
@@ -348,9 +345,9 @@ class ExperimentRunner:
                 (status, artifact_hash, float(result.cost_usd), error, run_id),
             )
 
-    def _run_dir(self, stage: str, run_id: str, attempt: int, *, max_attempts: int = 2) -> Path:
-        if attempt < 1 or attempt > max_attempts:
-            raise ValueError(f"attempt must be between 1 and {max_attempts}")
+    def _run_dir(self, stage: str, run_id: str, attempt: int) -> Path:
+        if attempt < 1 or attempt > 3:
+            raise ValueError("attempt must be between 1 and 3")
         parent = self.runs_root / stage / run_id
         parent.mkdir(parents=True, exist_ok=True)
         final = parent / f"attempt-{attempt:02d}"
@@ -433,10 +430,7 @@ class ExperimentRunner:
         connection: sqlite3.Connection,
     ) -> None:
         run_id = str(claimed["run_id"])
-        cell_for_attempt = json.loads(str(claimed["cell_json"]))
-        retry_for_attempt = cell_for_attempt.get("retry_policy", {}) if isinstance(cell_for_attempt, Mapping) else {}
-        max_attempts = int(retry_for_attempt.get("max_attempts", 2)) if isinstance(retry_for_attempt, Mapping) else 2
-        attempt_dir = self._run_dir(stage, run_id, int(claimed["attempts"]), max_attempts=max_attempts)
+        attempt_dir = self._run_dir(stage, run_id, int(claimed["attempts"]))
         result: CellResult | None = None
         artifact_hash = ""
         error = ""

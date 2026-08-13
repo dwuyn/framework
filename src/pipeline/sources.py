@@ -114,7 +114,6 @@ class BackendStatus:
     QUERY_INVALID = "query_invalid"
     BACKEND_FAILED = "backend_failed"
     DATASET_MISSING = "dataset_missing"
-    SOURCE_NOT_IN_SNAPSHOT = "source_not_in_snapshot"
 
 
 # ── Adapters ──────────────────────────────────────────────────────────────────
@@ -192,13 +191,6 @@ class BaseAdapter:
             self.snapshot_dir, source=self.name, product=product, vendor=vendor,
         )
         if indexed is not None:
-            if self.name != "cve_list_v5":
-                self._record_event(
-                    status=BackendStatus.SOURCE_NOT_IN_SNAPSHOT,
-                    detail=f"{self.name} is not included in the CVE List V5 snapshot",
-                    payload={"product": product, "version": version},
-                )
-                return []
             indexed_records = [RawCveRecord.from_dict(entry) for entry in indexed]
             self._record_event(
                 status=BackendStatus.OK if indexed_records else BackendStatus.NO_MATCH,

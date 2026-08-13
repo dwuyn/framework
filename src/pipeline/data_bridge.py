@@ -55,7 +55,7 @@ def run_public_task(public_task_path: str, run_dir: str, *, model_profile: str =
     profile = _load_model_profile(model_profile)
     artifact = FrameworkAdapter(
         results_root=os.path.dirname(os.path.abspath(run_dir)),
-        snapshot_dir=os.environ.get("PENTEST_SOURCE_SNAPSHOT", ""),
+        snapshot_dir=os.environ.get("VERIPLANPT_DATASET_ROOT") or os.environ.get("PENTEST_SOURCE_SNAPSHOT", ""),
     ).run(
         public,
         model_profile=profile,

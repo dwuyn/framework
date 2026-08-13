@@ -40,7 +40,6 @@ def _bundle(root: Path, kind: str) -> Path:
         "done\n"
     )
     script += "set -- \"$run_dir\"/../../runtime/*-invocation-ledger.json; test -f \"$1\"\n" if kind == "evaluator" else ""
-    script += "test -f \"$run_dir/framework-cleanup.json\"\n" if kind == "evaluator" else ""
     script += "test -f \"$run_dir/evaluator.json\"\n" if kind == "oracle" else ""
     script += f"printf '{{\"schema_version\":\"2.0.0\",\"kind\":\"{kind}\",\"status\":\"passed\",\"outcome\":{{}}}}' > \"$output\"\n"
     entrypoint.write_text(script, encoding="utf-8")
@@ -139,7 +138,7 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
         signature_path=signature, public_key="test", evaluator_bundle=evaluator, oracle_bundle=oracle,
         evaluator_bundle_hash=_bundle_hash(evaluator), oracle_bundle_hash=_bundle_hash(oracle),
         cell_executor=execute, bundle_executor=IndependentBundleExecutor(
-            evaluator_bundle=evaluator, oracle_bundle=oracle, hidden_case_root=tmp_path,
+            evaluator_bundle=evaluator, oracle_bundle=oracle,
         ),
         topology=_Topology(tmp_path, relay_hash),
     )

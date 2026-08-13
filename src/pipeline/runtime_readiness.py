@@ -95,12 +95,10 @@ def build_canary_smoke_plan(
 
     def identity(*, kind: str, label: str, framework: str = "") -> dict[str, Any]:
         profile = next(profile for profile in profiles if profile.logical_label == label)
-        production_semantics = bool(source_snapshot_hash and gateway_relay_lock_hash)
-        cell_calls = 1 if kind == "vertex_canary" and production_semantics else max_llm_calls
         cost = (
             worst_case_cost_usd(profile, max_input_tokens=max_input_tokens,
                                 max_output_tokens=max_output_tokens,
-                                max_llm_calls=cell_calls, max_attempts=attempts)
+                                max_llm_calls=max_llm_calls, max_attempts=attempts)
             if strict else (legacy_canary_cost if not framework else float(legacy_framework_costs[framework]))
         )
         record: dict[str, Any] = {
@@ -119,7 +117,7 @@ def build_canary_smoke_plan(
             "image_digest": images.get(framework, "") if framework else images.get("VeriPlanPT", ""),
             "max_input_tokens": max_input_tokens,
             "max_output_tokens": max_output_tokens,
-            "max_llm_calls": cell_calls,
+            "max_llm_calls": max_llm_calls,
             "retry_policy": retry,
             "cell_worst_case_cost_usd": float(cost),
         }
@@ -220,12 +218,6 @@ def validate_canary_smoke_plan(
                 or int(cell["max_llm_calls"]) <= 0
             ):
                 raise ValueError("strict canary smoke cell token/call caps must be positive")
-            production_semantics = str(plan.get("schema_version")) == "1.2.0"
-            expected_calls = int(cell["max_llm_calls"])
-            if production_semantics:
-                expected_calls = 1 if cell.get("kind") == "vertex_canary" else 40
-            if int(cell["max_llm_calls"]) != expected_calls:
-                raise ValueError("strict readiness canary/smoke call cap is invalid")
             policy = cell["retry_policy"]
             if not isinstance(policy, Mapping) or not 1 <= int(policy.get("max_attempts", 0)) <= 3:
                 raise ValueError("strict canary smoke cell retry policy is invalid")

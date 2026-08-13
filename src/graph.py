@@ -468,7 +468,7 @@ def _source_registry(state: PentestState, manifest: RunManifest, ledger: EventLe
     mode = str(state.get("retrieval_mode") or state.get("dataset_mode") or "snapshot")
     if mode not in {"live", "snapshot", "replay"}:
         mode = "snapshot"
-    snap = str(state.get("source_snapshot_dir") or "")
+    snap = str(state.get("source_snapshot_dir") or state.get("benchmark_cve_cache_path") or "")
     raw_dir = os.path.join(manifest.run_dir, "source_raw")
     return SourceRegistry([
         NvdAdapter(mode=mode, snapshot_dir=snap, ledger=ledger, raw_dir=raw_dir),
@@ -721,28 +721,14 @@ def pipeline_prepare_node(state: PentestState) -> dict:
         truth_path = _private_truth_path(manifest)
         _write_json(truth_path, truth.to_dict() if isinstance(truth, TargetTruth) else truth)
     manifest = _public_manifest(manifest)
-    snapshot = str(state.get("source_snapshot_dir") or "")
-    snapshot_hash = str(state.get("source_snapshot_hash") or "")
-    if snapshot:
-        from src.pipeline.source_snapshot import validate_source_snapshot
-        manifest_path = os.path.join(snapshot, "manifest.json")
-        legacy_manifest = False
-        if os.path.isfile(manifest_path):
-            try:
-                legacy_manifest = json.loads(open(manifest_path).read()).get("schema") == "veriplanpt-cve-source-snapshot-1.0"
-            except (OSError, ValueError, TypeError):
-                legacy_manifest = False
-        if snapshot_hash or legacy_manifest:
-            source_manifest = validate_source_snapshot(snapshot, full=True, expected_hash=snapshot_hash, official=bool(snapshot_hash))
-            snapshot_hash = str(source_manifest["snapshot_hash"])
-        else:
-            digest = hashlib.sha256()
-            for root, _, names in os.walk(snapshot):
-                for name in sorted(names):
-                    with open(os.path.join(root, name), "rb") as handle:
-                        digest.update(handle.read())
-            snapshot_hash = digest.hexdigest()
-        manifest.source_snapshot_hashes = {snapshot: snapshot_hash}
+    snapshot = str(state.get("source_snapshot_dir") or state.get("benchmark_cve_cache_path") or "")
+    if snapshot and os.path.exists(snapshot):
+        digest = hashlib.sha256()
+        for root, _, names in os.walk(snapshot):
+            for name in sorted(names):
+                with open(os.path.join(root, name), "rb") as handle:
+                    digest.update(handle.read())
+        manifest.source_snapshot_hashes = {snapshot: digest.hexdigest()}
     _save_manifest(manifest)
     ledger = _open_ledger(state, manifest)
     observations = _observations_from_state(state)
@@ -757,7 +743,6 @@ def pipeline_prepare_node(state: PentestState) -> dict:
         "pipeline_result": result,
         "retrieval_mode": str(state.get("retrieval_mode") or "snapshot"),
         "source_snapshot_dir": str(state.get("source_snapshot_dir") or ""),
-        "source_snapshot_hash": snapshot_hash,
         "oracle_truth": {},
         "evaluator_truth_path": truth_path,
     }
@@ -769,27 +754,18 @@ def pipeline_retrieve_node(state: PentestState) -> dict:
     # B4: fail-fast when snapshot dir is missing or empty
     mode = str(state.get("retrieval_mode") or "snapshot")
     if mode == "snapshot":
-        snap = str(state.get("source_snapshot_dir") or "")
-        from src.pipeline.source_snapshot import validate_source_snapshot
-        try:
-            source_manifest = validate_source_snapshot(
-                snap, full=True, expected_hash=str(state.get("source_snapshot_hash") or ""),
-                official=bool(state.get("source_snapshot_hash")),
-            )
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        snap = str(state.get("source_snapshot_dir") or state.get("benchmark_cve_cache_path") or "")
+        if not snap or not os.path.isdir(snap) or not any(os.scandir(snap)):
             ledger.record(phase="retrieve", stage="applicability", outcome="execution_failed",
                           failure_class="dataset_missing",
-                          detail=f"source snapshot validation failed: {exc}")
+                          detail=f"snapshot dir missing or empty: {snap!r}")
             result = dict(state.get("pipeline_result", {}) or {})
             result.update({"source_record_count": 0, "retrieval_fail_reason": "dataset_missing"})
             return {
                 "current_phase": "pipeline_retrieve",
                 "pipeline_result": result,
                 "retrieval_status": "dataset_missing",
-                "source_snapshot_hash": str(state.get("source_snapshot_hash") or ""),
             }
-        state = dict(state)
-        state["source_snapshot_hash"] = str(source_manifest["snapshot_hash"])
     runner = _runner(state, manifest, ledger)
     observations = _observations_from_state(state)
     fingerprints = runner.evidence(observations)
@@ -1415,12 +1391,12 @@ def _build_v5_graph(thread_id: str):
     return compiled, config
 
 
-def build_graph_v5(thread_id: str = "default", *, source_snapshot_dir: str = "", source_snapshot_hash: str = ""):
+def build_graph_v5(thread_id: str = "default"):
     """Public alias for the v5 deterministic pipeline graph."""
     return _build_v5_graph(thread_id)
 
 
-def _build_v6_graph(thread_id: str, *, source_snapshot_dir: str = "", source_snapshot_hash: str = ""):
+def _build_v6_graph(thread_id: str):
     """Build the v6 evidence-gated multi-agent graph.
 
     Topology:
@@ -1511,11 +1487,10 @@ def _build_v6_graph(thread_id: str, *, source_snapshot_dir: str = "", source_sna
     return compiled, config
 
 
-def build_graph(thread_id: str = "default", *, source_snapshot_dir: str = "", source_snapshot_hash: str = ""):
+def build_graph(thread_id: str = "default"):
     """Build the v6 evidence-gated multi-agent graph.
 
     This is the default graph.  For the legacy v5 deterministic pipeline,
     use ``build_graph_v5()``.
     """
-    return _build_v6_graph(thread_id, source_snapshot_dir=source_snapshot_dir,
-                           source_snapshot_hash=source_snapshot_hash)
+    return _build_v6_graph(thread_id)

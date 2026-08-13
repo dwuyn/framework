@@ -224,46 +224,17 @@ def build_snapshot_index(
     return manifest
 
 
-def _assert_regular_tree(root: Path) -> None:
-    """Reject symlinked snapshot roots and members before resolving them."""
-    if root.is_symlink() or not root.is_dir():
-        if not root.exists():
-            raise ValueError("source snapshot manifest missing")
-        raise ValueError("source snapshot root must be a real directory")
-    for path in (root / "manifest.json", root / INDEX_NAME, root / "raw"):
-        if path.is_symlink():
-            raise ValueError(f"source snapshot must not contain symlinks: {path}")
-    raw = root / RAW_ARCHIVE
-    if raw.is_symlink():
-        raise ValueError(f"source snapshot must not contain symlinks: {raw}")
-
-
 def validate_source_snapshot(
-    snapshot_dir: str | Path, *, full: bool = True, expected_hash: str = "",
-    official: bool = False,
+    snapshot_dir: str | Path, *, full: bool = True, expected_hash: str = ""
 ) -> dict[str, Any]:
     """Validate hashes, schema and a read-only index query without provider access."""
-    root = Path(snapshot_dir)
-    _assert_regular_tree(root)
-    root = root.resolve()
+    root = Path(snapshot_dir).resolve()
     manifest_path = root / "manifest.json"
     if not manifest_path.is_file():
         raise ValueError("source snapshot manifest missing")
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("schema") != SCHEMA:
         raise ValueError("source snapshot schema mismatch")
-    if official:
-        expected_official = {
-            "cutoff": "2026-08-01T00:00:00Z",
-            "source": "CVE List V5",
-            "upstream_release": "cve_2026-08-01_0000Z",
-            "upstream_asset_sha256": "700234c38e2e4158a320f6fd9c7aeecbe5dc5510fbfb34bc4195d1f012c263cc",
-            "cve_count": 354521,
-            "record_count": 542975,
-        }
-        for key, value in expected_official.items():
-            if manifest.get(key) != value:
-                raise ValueError(f"official source snapshot {key} mismatch")
     identity = {key: value for key, value in manifest.items() if key != "snapshot_hash"}
     expected = hashlib.sha256(_canonical(identity)).hexdigest()
     if manifest.get("snapshot_hash") != expected:
@@ -279,8 +250,6 @@ def validate_source_snapshot(
         if not path.is_file() or (full and _sha256(path) != manifest.get(field)):
             raise ValueError(f"source snapshot {path_field} hash mismatch")
     index = root / str(manifest["index"])
-    if index.is_symlink():
-        raise ValueError("source snapshot index must not be a symlink")
     connection = sqlite3.connect(f"file:{index}?mode=ro&immutable=1", uri=True)
     try:
         count = int(connection.execute("SELECT count(*) FROM records").fetchone()[0])

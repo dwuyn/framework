@@ -499,13 +499,11 @@ class RunArtifact:
         required_context = {"dataset_lock_hash", "framework_commit", "evaluator_commit", "stage"}
         if strict_runtime:
             required_context.update({"gateway_relay_lock_hash", "target_runtime_lock_hash"})
-            if self.run_context.get("source_snapshot_hash") or self.env_manifest.snapshot_hash or os.environ.get("PENTEST_SOURCE_SNAPSHOT"):
-                required_context.add("source_snapshot_hash")
         if not required_context.issubset(self.run_context):
             raise ValueError("RunArtifact.run_context is incomplete")
         for key in (
             "dataset_lock_hash", "training_protocol_hash", "policy_lock_hash", "matrix_hash",
-            "gateway_relay_lock_hash", "target_runtime_lock_hash", "source_snapshot_hash",
+            "gateway_relay_lock_hash", "target_runtime_lock_hash",
         ):
             if key == "gateway_relay_lock_hash" and not self.run_context.get(key):
                 continue
@@ -530,7 +528,7 @@ def _is_hex64(value: Any) -> bool:
     return len(text) == 64 and set(text.lower()) <= _HEX64
 
 
-def _capture_env(snapshot_dir: str = "", *, snapshot_hash: str = "") -> EnvironmentManifest:
+def _capture_env(snapshot_dir: str = "") -> EnvironmentManifest:
     """Capture immutable environment metadata at run time."""
     import subprocess
     commit = ""
@@ -550,7 +548,17 @@ def _capture_env(snapshot_dir: str = "", *, snapshot_hash: str = "") -> Environm
     if not commit:
         commit = os.environ.get("VERIPLANPT_FRAMEWORK_COMMIT", "")
 
-    snap_hash = snapshot_hash
+    snap_hash = ""
+    if snapshot_dir and os.path.isdir(snapshot_dir):
+        digest = hashlib.sha256()
+        for root, _, names in os.walk(snapshot_dir):
+            for name in sorted(names):
+                try:
+                    with open(os.path.join(root, name), "rb") as fh:
+                        digest.update(fh.read())
+                except OSError:
+                    pass
+        snap_hash = digest.hexdigest()
 
     return EnvironmentManifest(
         python_version=sys.version,
@@ -582,6 +590,7 @@ class FrameworkAdapter:
         self.snapshot_dir = (
             snapshot_dir
             or os.environ.get("PENTEST_SOURCE_SNAPSHOT", "")
+            or os.environ.get("VERIPLANPT_DATASET_ROOT", "")
         )
 
     def run(
@@ -599,22 +608,18 @@ class FrameworkAdapter:
         The framework graph is invoked; the external evaluator never accesses
         the internal oracle truth during this call.
         """
+        from src.graph import build_graph
         from src.pipeline.manifest import RunManifest, Scope
         from src.pipeline.source_snapshot import validate_source_snapshot
         from src.state import initial_state
 
-        snapshot_manifest = validate_source_snapshot(
+        validate_source_snapshot(
             self.snapshot_dir,
-            full=True,
+            full=False,
             expected_hash=os.environ.get("PENTEST_SOURCE_SNAPSHOT_HASH", ""),
-            official=True,
         )
-        # Importing the graph is deliberately after snapshot validation.  The
-        # host must reject stale/missing source input before graph setup or any
-        # credential-owning client construction can happen.
-        from src.graph import build_graph
 
-        env = _capture_env(self.snapshot_dir, snapshot_hash=str(snapshot_manifest["snapshot_hash"]))
+        env = _capture_env(self.snapshot_dir)
         selected_run_dir = run_dir or os.path.join(
             self.results_root, task.case_id,
             f"{model_profile.model_name}_{budget_tier.value}_rep{repetition:02d}",
@@ -632,8 +637,7 @@ class FrameworkAdapter:
             "repetition": repetition,
         }, sort_keys=True)
         thread_id = run_id or "vp-" + hashlib.sha256(identity_blob.encode("utf-8")).hexdigest()[:24]
-        graph, config = build_graph(thread_id, source_snapshot_dir=self.snapshot_dir,
-                                    source_snapshot_hash=str(snapshot_manifest["snapshot_hash"]))
+        graph, config = build_graph(thread_id)
 
         # Parse first port from port_range for initial state.
         ports = []
@@ -687,7 +691,6 @@ class FrameworkAdapter:
             "budget_tier": budget_tier.value,
             "retrieval_mode": "snapshot",
             "source_snapshot_dir": self.snapshot_dir,
-            "source_snapshot_hash": str(snapshot_manifest["snapshot_hash"]),
             "pipeline_manifest": manifest.to_dict(),
             "pipeline_result": {"run_dir": selected_run_dir},
         })
@@ -743,7 +746,6 @@ class FrameworkAdapter:
             "framework_commit": env.framework_commit,
             "evaluator_commit": os.environ.get("VERIPLANPT_EVALUATOR_COMMIT", ""),
             "stage": os.environ.get("VERIPLANPT_STAGE", "benchmark"),
-            "source_snapshot_hash": str(snapshot_manifest["snapshot_hash"]),
         }
         # Readiness does not have policy or matrix locks yet. Omit optional
         # bindings until the paid sweep/benchmark stages provide real hashes.

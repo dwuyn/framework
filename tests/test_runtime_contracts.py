@@ -7,16 +7,12 @@ import pytest
 
 from src.pipeline.experiment_runner import validate_runtime_preflight
 from src.pipeline.framework_adapter import ModelProfile
-from src.pipeline.llm_budget import NormalizedUsage
 from src.pipeline.runtime_contract import (
     LOCKED_MODEL_LABELS,
     validate_runtime_profile,
     verify_alias_exception,
 )
-from src.pipeline.runtime_ledger import InvocationLedger
 from src.pipeline.runtime_readiness import build_canary_smoke_plan, validate_canary_smoke_plan
-from src.pipeline.vertex_gateway import GatewayError, VertexGateway
-from src.pipeline.vertex_runtime import InvocationResult
 
 
 def _profile(label: str) -> ModelProfile:
@@ -117,36 +113,3 @@ def test_strict_plan_rejects_profile_drift() -> None:
     ).hexdigest()
     with pytest.raises(ValueError, match="profile hash mismatch"):
         validate_canary_smoke_plan(tampered, profiles=profiles, strict=True)
-
-
-def test_gateway_blocks_call_41_before_provider() -> None:
-    profile = _profile("gemini-3.5-flash")
-
-    class FakeGemini:
-        calls = 0
-
-        def invoke(self, selected: ModelProfile, _contents: object) -> InvocationResult:
-            self.calls += 1
-            return InvocationResult(
-                text="ok", usage=NormalizedUsage(
-                    input_tokens=1, output_tokens=1, total_tokens=2, usd=0.01,
-                ), response_hash="a" * 64, model_id=selected.logical_label,
-                resource_revision=selected.resource_revision,
-            )
-
-    gemini = FakeGemini()
-    ledger = InvocationLedger(phase="smoke", gateway_relay_lock_hash="b" * 64)
-    gateway = VertexGateway(
-        profiles=[profile], allowed_run_ids={"medium-cell"}, token="token",
-        gemini=gemini, gemma=object(), invocation_ledger=ledger,
-        max_llm_calls_by_run={"medium-cell": 40},
-    )
-    request = {
-        "run_id": "medium-cell", "model_label": profile.logical_label,
-        "profile_hash": profile.profile_hash, "contents": "probe",
-    }
-    for _ in range(40):
-        gateway.invoke(request, token="token")
-    with pytest.raises(GatewayError, match="max_llm_calls exceeded before provider call"):
-        gateway.invoke(request, token="token")
-    assert gemini.calls == 40

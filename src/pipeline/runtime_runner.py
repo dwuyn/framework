@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import secrets
 from dataclasses import replace
@@ -68,7 +67,6 @@ class RuntimeRunner:
         evaluator_bundle: str | Path, oracle_bundle: str | Path,
         evaluator_bundle_hash: str, oracle_bundle_hash: str,
         cell_executor: RuntimeCellExecutor, bundle_executor: BundleExecutor | None = None,
-        hidden_case_root: str | Path | None = None,
         dataset_evidence_hash: str = "", training_protocol_hash: str = "",
         pricing_snapshot_hash: str = "", approval_hash: str = "",
         topology: TopologyLifecycle | None = None,
@@ -88,10 +86,8 @@ class RuntimeRunner:
         self.evaluator_bundle_hash = evaluator_bundle_hash
         self.oracle_bundle_hash = oracle_bundle_hash
         self.cell_executor = cell_executor
-        hidden_root = hidden_case_root or os.environ.get("VERIPLANPT_HIDDEN_CASE_ROOT") or None
         self.bundle_executor = bundle_executor or IndependentBundleExecutor(
             evaluator_bundle=self.evaluator_bundle, oracle_bundle=self.oracle_bundle,
-            hidden_case_root=hidden_root,
         )
         self.dataset_evidence_hash = dataset_evidence_hash
         self.training_protocol_hash = training_protocol_hash
@@ -203,13 +199,6 @@ class RuntimeRunner:
                             ("cost", normalized_cost), ("cleanup", result.cleanup)):
             source_paths[name].parent.mkdir(parents=True, exist_ok=True)
             source_paths[name].write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        # The independent evaluator consumes the framework-phase cleanup
-        # seal. Readiness uses the same cleanup result as the per-cell
-        # evidence, so persist it under the evaluator's protocol name before
-        # invoking either independent bundle.
-        (run_dir / "framework-cleanup.json").write_text(
-            json.dumps(result.cleanup, indent=2, sort_keys=True) + "\n", encoding="utf-8",
-        )
         evaluator_verdict = self.bundle_executor(self.evaluator_bundle, run_dir, result.run_artifact)
         if evaluator_verdict.get("status") != "passed" and evaluator_verdict.get("evaluator", {}).get("status") != "passed":
             raise RuntimeHalt("evaluator bundle failed")
