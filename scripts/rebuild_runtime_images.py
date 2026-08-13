@@ -198,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
             "wrapper": context / "adapter/wrapper-wrapper.py",
             "runtime": context / "adapter/runtime_entrypoint.py",
             "client_driver": context / "adapter/baseline_client_driver.py",
+            "readiness_transport": context / "adapter/readiness_transport_driver.py",
         }
         adapter_hash = _adapter_bundle_hash({key: str(path) for key, path in adapter_paths.items()}, "adapter-3.0")
         _lock_path, dependency_hash = _dependency_lock(context_record, envelope)
