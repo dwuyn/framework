@@ -273,7 +273,10 @@ def main() -> int:
                 copy_from_git_object(framework_repo, source, destination, commit=framework_commit)
             else:
                 copy_from_materialized_source(context / "source", source, destination, repo=source_repo)
-        for adapter_name in ("provider_shim.py", "entrypoint.sh", "runtime_entrypoint.py", "baseline_driver.py"):
+        for adapter_name in (
+            "provider_shim.py", "entrypoint.sh", "runtime_entrypoint.py", "baseline_driver.py",
+            "baseline_client_driver.py",
+        ):
             copy_from_git_object(
                 framework_repo, ROOT / "docker/adapter" / adapter_name,
                 context / "adapter" / adapter_name, commit=framework_commit,

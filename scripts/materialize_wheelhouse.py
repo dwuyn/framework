@@ -9,7 +9,7 @@ import re
 import shutil
 from pathlib import Path
 
-PACKAGE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*)==([^\\s\\\\]+)")
+PACKAGE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*)==([^\s\\]+)")
 HASH = re.compile(r"--hash=sha256:([0-9a-f]{64})")
 
 
@@ -63,19 +63,22 @@ def main() -> int:
     copied: list[str] = []
     for name, version, hashes in _requirements(lock):
         normalized_name = re.sub(r"[-_.]+", "-", name).lower()
-        normalized_version = version.lower().replace("_", ".")
-        matches = [
-            path for path in files
-            if path.name.lower().replace("_", "-").startswith(f"{normalized_name}-{normalized_version}")
+        normalized_version = re.sub(r"[-_.]+", "-", version.lower())
+        matches = {
+            (path.name, _sha256(path)): path for path in files
+            if re.sub(r"[-_.]+", "-", path.name.lower()).startswith(
+                f"{normalized_name}-{normalized_version}"
+            )
             and _sha256(path) in hashes
-        ]
+        }
         if len(matches) != 1:
             raise SystemExit(
                 f"cache does not contain exactly one hash-verified artifact for {name}=={version}: "
-                f"{[path.name for path in matches]}"
+                f"{[name for name, _hash in matches]}"
             )
-        shutil.copyfile(matches[0], destination / matches[0].name)
-        copied.append(matches[0].name)
+        selected = next(iter(matches.values()))
+        shutil.copyfile(selected, destination / selected.name)
+        copied.append(selected.name)
     print(f"materialized {len(copied)} hash-verified artifacts into {destination}")
     return 0
 
