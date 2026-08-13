@@ -14,6 +14,15 @@ from src.pipeline.framework_adapter import ModelProfile
 from src.pipeline.protocol import write_json_atomically
 from src.pipeline.readiness_evidence import FRAMEWORKS, validate_smoke_evidence
 
+R10_4_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.4"
+READINESS_CONDITION = "not_applicable"
+READINESS_SCOPE = "readiness_transport"
+
+
+def execution_kind(cell: Mapping[str, Any]) -> str:
+    """Return the transport kind, retaining read compatibility with r10.3."""
+    return str(cell.get("execution_kind") or cell.get("kind") or "")
+
 
 def _canonical_hash(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -51,6 +60,7 @@ def build_canary_smoke_plan(
     gateway_relay_lock_hash: str = "",
     max_input_tokens: int = 0, max_output_tokens: int = 0, max_llm_calls: int = 0,
     retry_policy: Mapping[str, Any] | None = None, epoch: str = "", strict: bool = False,
+    runtime_contract: str = "",
 ) -> dict[str, Any]:
     """Make exactly 3 canaries plus the 15 required framework/model smokes."""
     labels = sorted(profile.logical_label for profile in profiles)
@@ -107,7 +117,12 @@ def build_canary_smoke_plan(
             if strict else (legacy_canary_cost if not framework else float(legacy_framework_costs[framework]))
         )
         record: dict[str, Any] = {
-            "kind": kind, "model_label": label,
+            "kind": kind, "execution_kind": kind,
+            "readiness_kind": "canary" if kind == "vertex_canary" else "smoke",
+            "condition": READINESS_CONDITION if runtime_contract == R10_4_RUNTIME_CONTRACT else kind,
+            "evaluation_scope": READINESS_SCOPE if runtime_contract == R10_4_RUNTIME_CONTRACT else "",
+            "metric_eligible": False if runtime_contract == R10_4_RUNTIME_CONTRACT else True,
+            "model_label": label,
             "model_profile_hash": profile.profile_hash,
             "model_resource_id": profile.resource_id,
             "model_revision": profile.resource_revision,
@@ -157,7 +172,14 @@ def build_canary_smoke_plan(
         except ValueError as exc:
             raise ValueError("runtime readiness epoch must be ISO-8601") from exc
         plan["epoch"] = epoch
-    if (max_input_tokens, max_output_tokens) == (4096, 2048):
+    if runtime_contract:
+        if runtime_contract != R10_4_RUNTIME_CONTRACT:
+            raise ValueError("unsupported runtime contract")
+        plan["runtime_contract"] = runtime_contract
+        plan["execution_kind_field"] = "execution_kind"
+        plan["readiness_condition"] = READINESS_CONDITION
+        plan["evaluation_scope"] = READINESS_SCOPE
+    elif (max_input_tokens, max_output_tokens) == (4096, 2048):
         plan["runtime_contract"] = "veriplanpt-runtime-v0.4.0-r10.3"
     plan["plan_hash"] = _canonical_hash(plan)
     if strict:
@@ -183,8 +205,8 @@ def validate_canary_smoke_plan(
     labels = {profile.logical_label for profile in profiles}
     if len(labels) != 3:
         raise ValueError("canary smoke plan requires exactly three model profiles")
-    canaries = [cell for cell in cells if isinstance(cell, Mapping) and cell.get("kind") == "vertex_canary"]
-    smokes = [cell for cell in cells if isinstance(cell, Mapping) and cell.get("kind") == "framework_model_smoke"]
+    canaries = [cell for cell in cells if isinstance(cell, Mapping) and execution_kind(cell) == "vertex_canary"]
+    smokes = [cell for cell in cells if isinstance(cell, Mapping) and execution_kind(cell) == "framework_model_smoke"]
     if {str(cell.get("model_label")) for cell in canaries} != labels or len(canaries) != 3:
         raise ValueError("canary plan must cover each model exactly once")
     pairs = {(str(cell.get("framework")), str(cell.get("model_label"))) for cell in smokes}
@@ -194,7 +216,7 @@ def validate_canary_smoke_plan(
     if len({str(cell.get("run_id", "")) for cell in cells}) != 18:
         raise ValueError("canary smoke run IDs must be unique")
     if strict:
-        if plan.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10.3":
+        if plan.get("runtime_contract") in {"veriplanpt-runtime-v0.4.0-r10.3", R10_4_RUNTIME_CONTRACT}:
             from src.pipeline.runtime_contract import validate_runtime_profile
             for profile in profiles:
                 validate_runtime_profile(profile, strict=True, r10=True)
@@ -204,6 +226,7 @@ def validate_canary_smoke_plan(
             for key, expected in (("max_input_tokens", 4096), ("max_output_tokens", 2048))
         ):
             raise ValueError("r10 readiness plan must pin input=4096 and output=2048 token caps")
+        r10_4 = plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT
         required = {
             "model_profile_hash", "model_resource_id", "model_revision", "dataset_lock_hash",
             "baseline_identity_hash", "native_identity_hash", "model_resolution_lock_hash",
@@ -212,6 +235,8 @@ def validate_canary_smoke_plan(
             "cell_worst_case_cost_usd", "target_runtime_lock_hash",
             "source_snapshot_hash",
         }
+        if r10_4:
+            required.update({"execution_kind", "readiness_kind", "condition", "evaluation_scope", "metric_eligible"})
         for cell in cells:
             if not required.issubset(cell):
                 raise ValueError("strict canary smoke cell is missing an immutable pin")
@@ -241,9 +266,19 @@ def validate_canary_smoke_plan(
                 or int(cell["max_llm_calls"]) <= 0
             ):
                 raise ValueError("strict canary smoke cell token/call caps must be positive")
-            production_semantics = (
-                str(plan.get("runtime_contract")) == "veriplanpt-runtime-v0.4.0-r10.3"
-            )
+            if r10_4:
+                if str(cell.get("condition")) != READINESS_CONDITION:
+                    raise ValueError("r10.4 readiness condition must be not_applicable")
+                if str(cell.get("evaluation_scope")) != READINESS_SCOPE:
+                    raise ValueError("r10.4 readiness evaluation scope is invalid")
+                if bool(cell.get("metric_eligible")):
+                    raise ValueError("r10.4 readiness cells cannot be metric eligible")
+                expected_readiness_kind = "canary" if execution_kind(cell) == "vertex_canary" else "smoke"
+                if str(cell.get("readiness_kind")) != expected_readiness_kind:
+                    raise ValueError("r10.4 readiness kind does not match execution kind")
+            production_semantics = str(plan.get("runtime_contract")) in {
+                "veriplanpt-runtime-v0.4.0-r10.3", R10_4_RUNTIME_CONTRACT,
+            }
             expected_calls = int(cell["max_llm_calls"])
             if production_semantics:
                 # r10.3 readiness is deliberately one-response-per-cell;
@@ -296,6 +331,10 @@ def write_runtime_smoke_evidence(
         "dataset_evidence_hash": dataset_evidence_hash,
         "vertex_canaries": [dict(record) for record in canaries],
         "framework_model_smokes": [dict(record) for record in smokes],
+        "preflight_provider_calls": 0,
+        "preflight_vertex_calls": 0,
+        "paid_provider_responses": len(canaries) + len(smokes),
+        "paid_vertex_responses": len(canaries) + len(smokes),
     }
     if strict:
         evidence.update({

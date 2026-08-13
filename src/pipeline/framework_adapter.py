@@ -383,6 +383,10 @@ class RunArtifact:
     run_id: str = ""
     run_dir: str = ""
     condition: str = ""
+    execution_kind: str = ""
+    evaluation_scope: str = ""
+    readiness_kind: str = ""
+    metric_eligible: bool = True
     termination_status: str = ""
     # Outcome as reported by the internal oracle (without hidden truth).
     internal_outcome: str = ""
@@ -413,12 +417,19 @@ class RunArtifact:
                 "case_id": self.case_id,
                 "track": self.track,
                 "condition": self.condition,
+                "execution_kind": self.execution_kind,
+                "evaluation_scope": self.evaluation_scope,
+                "readiness_kind": self.readiness_kind,
                 "repetition": self.repetition,
             },
             "case_id": self.case_id,
             "repetition": self.repetition,
             "track": self.track,
             "condition": self.condition,
+            "execution_kind": self.execution_kind,
+            "evaluation_scope": self.evaluation_scope,
+            "readiness_kind": self.readiness_kind,
+            "metric_eligible": self.metric_eligible,
             "model_profile": self.model_profile.to_dict(),
             "model_revision": self.model_profile.resource_revision,
             "budget_tier": self.budget_tier.value,
@@ -460,6 +471,10 @@ class RunArtifact:
             repetition=int(data.get("repetition") or data.get("run_identity", {}).get("repetition", 0)),
             track=str(data.get("track") or data.get("run_identity", {}).get("track", "")),
             condition=str(data.get("condition") or data.get("run_identity", {}).get("condition", "")),
+            execution_kind=str(data.get("execution_kind", "")),
+            evaluation_scope=str(data.get("evaluation_scope", "")),
+            readiness_kind=str(data.get("readiness_kind", "")),
+            metric_eligible=bool(data.get("metric_eligible", True)),
             model_profile=ModelProfile.from_dict(profile_data),
             budget_tier=BudgetTier.from_str(budget_value),
             schema_version=str(data.get("schema_version", "2.0.0")),
@@ -499,6 +514,15 @@ class RunArtifact:
             if self.termination_status == "model_no_visible_text" or self.internal_outcome == "model_no_visible_text":
                 if self.internal_outcome != "model_no_visible_text":
                     raise ValueError("no-visible-text artifact must declare model_no_visible_text")
+            if self.evaluation_scope == "readiness_transport":
+                if self.condition != "not_applicable":
+                    raise ValueError("readiness transport artifact condition must be not_applicable")
+                if self.execution_kind not in {"vertex_canary", "framework_model_smoke"}:
+                    raise ValueError("readiness transport artifact execution_kind is invalid")
+                if self.readiness_kind not in {"canary", "smoke"}:
+                    raise ValueError("readiness transport artifact readiness_kind is invalid")
+                if self.metric_eligible:
+                    raise ValueError("readiness transport artifact cannot be metric eligible")
         required_identity = {"name", "repository_url", "commit", "image_digest", "adapter_version"}
         if not required_identity.issubset(self.framework_identity):
             raise ValueError("RunArtifact.framework_identity is incomplete")
@@ -775,6 +799,10 @@ class FrameworkAdapter:
             run_id=thread_id,
             run_dir=actual_run_dir,
             condition=condition,
+            execution_kind=os.environ.get("VERIPLANPT_EXECUTION_KIND", ""),
+            evaluation_scope=os.environ.get("VERIPLANPT_EVALUATION_SCOPE", ""),
+            readiness_kind=os.environ.get("VERIPLANPT_READINESS_KIND", ""),
+            metric_eligible=os.environ.get("VERIPLANPT_METRIC_ELIGIBLE", "true").lower() == "true",
             termination_status=str(result.get("termination_status") or result.get("outcome") or ""),
             internal_outcome=str(result.get("outcome") or ""),
             budget_termination_reason=str(result.get("budget_termination_reason") or ""),

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-EPOCH = ROOT.parent / "veriplanpt-epoch-r10.3-r27-20260813T073000Z"
+EPOCH = ROOT.parent / "veriplanpt-epoch-r10.4-r29-20260813T130000Z"
 OUTPUT = EPOCH / "mock-live-certification"
 SNAPSHOT = ROOT.parent / "veriplanpt-cve-source-snapshot-20260812T182421Z-recovered"
 PUBLIC_TASK = ROOT.parent / "veriplanpt-runtime-staging-20260807T123503Z/contract-smoke/public-task.json"
@@ -126,9 +126,11 @@ def main() -> int:
                 invocation = {
                     "schema_version": "2.0.0", "run_id": run_id, "framework": framework,
                     "model_label": model, "case_id": str(public_task["case_id"]), "track": "blind",
-                    "condition": "mock_live", "task": public_task,
+                    "execution_kind": "framework_model_smoke", "condition": "not_applicable",
+                    "evaluation_scope": "readiness_transport", "readiness_kind": "smoke",
+                    "metric_eligible": False, "task": public_task,
                     "provenance": {
-                        "dataset_lock_hash": DATASET_LOCK_HASH, "protocol_hash": _sha(EPOCH / "envelopes-r10.3-r27.json"),
+                        "dataset_lock_hash": DATASET_LOCK_HASH, "protocol_hash": _sha(EPOCH / "envelopes-r10.4-r29.json"),
                         "framework_commit": str(_json(NATIVE_IDENTITY)["source"]["commit"]) if framework == "VeriPlanPT" else "unknown",
                         "framework_image_digest": image_map[framework], "framework_repository_url": "https://example.invalid/veriplanpt",
                         "evaluator_commit": EVALUATOR_COMMIT, "target_runtime_lock_hash": target_lock_hash,
@@ -152,7 +154,7 @@ def main() -> int:
                     "LOG_DIR": "/run/veriplanpt/output", "PENTEST_SOURCE_SNAPSHOT": "/run/veriplanpt/source-snapshot",
                     "PENTEST_SOURCE_SNAPSHOT_HASH": SOURCE_SNAPSHOT_HASH, "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": target_lock_hash,
                     "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": relay_lock_hash, "VERIPLANPT_DATASET_LOCK_HASH": DATASET_LOCK_HASH,
-                    "VERIPLANPT_TRAINING_PROTOCOL_HASH": _sha(EPOCH / "envelopes-r10.3-r27.json"),
+                    "VERIPLANPT_TRAINING_PROTOCOL_HASH": _sha(EPOCH / "envelopes-r10.4-r29.json"),
                     "VERIPLANPT_EVALUATOR_COMMIT": EVALUATOR_COMMIT, "VERIPLANPT_IMAGE_DIGEST": image_map[framework],
                 }
                 docker_args = [

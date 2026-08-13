@@ -14,6 +14,7 @@ from src.pipeline.vertex_runtime import VertexContractError, validate_resolution
 SCHEMA_VERSION = "2.0.0"
 LEGACY_RUNTIME_SCHEMA_VERSION = "2.1.0"
 RUNTIME_SCHEMA_VERSION = "2.2.0"
+R10_4_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.4"
 BASE_CASE_COUNT = 94
 ROBUSTNESS_COUNT = 9
 VERTEX_CANARY_COUNT = 3
@@ -116,6 +117,7 @@ def _runtime_record(
     production: bool = False,
 ) -> None:
     """Verify the complete source-backed v2 runtime cell evidence."""
+    r10_4 = str(record.get("runtime_contract", "")) == R10_4_RUNTIME_CONTRACT or str(record.get("evaluation_scope", "")) == "readiness_transport"
     required = {
         "status", "run_id", "model_label", "plan_hash", "dataset_lock_hash",
         "baseline_identity_hash", "native_identity_hash", "model_profile_hash",
@@ -127,6 +129,11 @@ def _runtime_record(
         "evaluator_sha256", "cleanup_path", "cleanup_sha256", "billing_status",
         "oracle_status",
     }
+    if r10_4:
+        required.update({
+            "execution_kind", "condition", "evaluation_scope", "readiness_kind",
+            "metric_eligible", "oracle_applicability_path", "oracle_applicability_sha256",
+        })
     if production:
         required.add("gateway_relay_lock_hash")
         required.update({"invocation_ledger_path", "invocation_ledger_sha256"})
@@ -147,8 +154,16 @@ def _runtime_record(
         _digest(record["gateway_relay_lock_hash"], f"{name}.gateway_relay_lock_hash")
     if int(record["max_input_tokens"]) <= 0 or int(record["max_output_tokens"]) <= 0:
         raise ValueError(f"{name} token caps must be positive")
-    if record.get("billing_status") != "known" or record.get("oracle_status") != "passed":
-        raise ValueError(f"{name} billing and oracle status must be known/passed")
+    expected_oracle_status = "not_applicable" if r10_4 else "passed"
+    if record.get("billing_status") != "known" or record.get("oracle_status") != expected_oracle_status:
+        raise ValueError(f"{name} billing and oracle status do not match its runtime contract")
+    if r10_4:
+        if str(record.get("condition")) != "not_applicable":
+            raise ValueError(f"{name} readiness condition must be not_applicable")
+        if str(record.get("evaluation_scope")) != "readiness_transport":
+            raise ValueError(f"{name} readiness evaluation scope is invalid")
+        if bool(record.get("metric_eligible")):
+            raise ValueError(f"{name} readiness artifact cannot be metric eligible")
     policy = record["retry_policy"]
     if not isinstance(policy, Mapping) or int(policy.get("max_attempts", 0)) < 1:
         raise ValueError(f"{name}.retry_policy is invalid")
@@ -163,6 +178,8 @@ def _runtime_record(
     }
     if production:
         paths["invocation_ledger"] = (record["invocation_ledger_path"], record["invocation_ledger_sha256"])
+    if r10_4:
+        paths["oracle_applicability"] = (record["oracle_applicability_path"], record["oracle_applicability_sha256"])
     for label, (path, digest) in paths.items():
         rehash_artifact({"artifact_path": path, "artifact_sha256": digest}, artifact_root=root, name=f"{name}.{label}")
     if production:
@@ -197,6 +214,22 @@ def _runtime_record(
         raise ValueError(f"{name} usage/cost records do not match")
     if not isinstance(evaluator, Mapping) or evaluator.get("status") != "passed":
         raise ValueError(f"{name} evaluator did not pass")
+    if r10_4:
+        try:
+            applicability = json.loads((root / _relative_artifact_path(record["oracle_applicability_path"], name)).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{name} oracle applicability is not valid JSON") from exc
+        expected_applicability = {
+            "schema_version": "1.0.0",
+            "status": "not_applicable",
+            "reason": "no_target_condition_in_readiness",
+            "osr": None,
+            "plan_hash": str(record["plan_hash"]),
+            "run_id": str(record["run_id"]),
+            "readiness_kind": str(record["readiness_kind"]),
+        }
+        if applicability != expected_applicability:
+            raise ValueError(f"{name} oracle applicability is not the signed-plan deterministic N/A record")
     if not isinstance(cleanup, Mapping) or cleanup.get("success") is not True:
         raise ValueError(f"{name} cleanup did not pass")
     resources = cleanup.get("resources", {})
@@ -267,7 +300,11 @@ def validate_smoke_evidence(
             "gateway_relay_lock_hash", "runtime_topology_evidence_path",
             "runtime_topology_evidence_sha256",
         }
-        unexpected_runtime = sorted(set(evidence).difference(required_runtime | strict_runtime_fields))
+        counter_fields = {
+            "preflight_provider_calls", "preflight_vertex_calls",
+            "paid_provider_responses", "paid_vertex_responses",
+        }
+        unexpected_runtime = sorted(set(evidence).difference(required_runtime | strict_runtime_fields | counter_fields))
         if unexpected_runtime:
             raise ValueError(f"runtime smoke evidence has unexpected field(s): {', '.join(unexpected_runtime)}")
         runtime_strict = evidence["schema_version"] in {LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION}

@@ -86,6 +86,37 @@ def test_strict_profiles_and_plan_pin_runtime_identities() -> None:
     assert all(cell["model_profile_hash"] for cell in plan["cells"])
 
 
+def test_r10_4_separates_transport_kind_from_readiness_condition() -> None:
+    profiles = [_profile(label) for label in LOCKED_MODEL_LABELS]
+    for profile in profiles:
+        profile.generation_parameters["max_output_tokens"] = 2048
+        if profile.logical_label == "gemma-4-26b-a4b-it":
+            profile.generation_parameters["thinking_enabled"] = False
+        else:
+            profile.generation_parameters["thinking_config"] = {"thinking_level": "MEDIUM"}
+    plan = build_canary_smoke_plan(
+        profiles=profiles,
+        dataset_lock_hash="b" * 64, baseline_identity_hash="c" * 64,
+        model_resolution_lock_hash="d" * 64, evaluator_hash="e" * 64,
+        oracle_hash="f" * 64, native_identity_hash="1" * 64,
+        target_runtime_lock_hash="2" * 64, source_snapshot_hash="3" * 64,
+        image_digests={name: "sha256:" + "2" * 64 for name in (
+            "VeriPlanPT", "PentestGPT", "VulnBot", "HackSynth", "PentestAgent",
+        )},
+        max_input_tokens=4096, max_output_tokens=2048, max_llm_calls=1,
+        retry_policy={"max_attempts": 2, "retryable": ["429"]}, strict=True,
+        runtime_contract="veriplanpt-runtime-v0.4.0-r10.4",
+    )
+    validate_canary_smoke_plan(plan, profiles=profiles, strict=True)
+    assert {cell["execution_kind"] for cell in plan["cells"]} == {
+        "vertex_canary", "framework_model_smoke",
+    }
+    assert {cell["condition"] for cell in plan["cells"]} == {"not_applicable"}
+    assert {cell["evaluation_scope"] for cell in plan["cells"]} == {"readiness_transport"}
+    assert all(cell["metric_eligible"] is False for cell in plan["cells"])
+    assert all(cell["execution_kind"] != cell["condition"] for cell in plan["cells"])
+
+
 def test_runtime_preflight_blocks_profile_drift_and_overreservation() -> None:
     plan = {"cells": [{"run_id": "r", "model_label": "gemini-3.5-flash", "cell_worst_case_cost_usd": 2.0,
                        "model_profile_hash": "expected"}]}

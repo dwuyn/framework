@@ -247,12 +247,12 @@ def validate_training_protocol(
         for name in ("max_input_tokens", "max_output_tokens", "reservation_ceiling_usd"):
             if name not in budgets or float(budgets[name]) <= 0:
                 raise ValueError(f"runtime budget {name} must be positive")
-        if protocol.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10.3" and (
+        if protocol.get("runtime_contract") in {"veriplanpt-runtime-v0.4.0-r10.3", "veriplanpt-runtime-v0.4.0-r10.4"} and (
             int(budgets.get("max_input_tokens", 0)) != 4096
             or int(budgets.get("max_output_tokens", 0)) != 2048
         ):
             raise ValueError("r10 runtime budget must pin input=4096 and output=2048")
-        r10 = protocol.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10.3"
+        r10 = protocol.get("runtime_contract") in {"veriplanpt-runtime-v0.4.0-r10.3", "veriplanpt-runtime-v0.4.0-r10.4"}
         for item in profiles:
             validate_runtime_profile(ModelProfile.from_dict(item), strict=True, r10=r10)
         freeze_ref = protocol["dataset_freeze_manifest"]
@@ -300,6 +300,13 @@ def validate_training_protocol(
             canary_plan = load_json(
                 Path(artifact_root).resolve() / Path(str(protocol["canary_smoke_plan"]["artifact_path"]))
             )
+            from src.pipeline.runtime_readiness import (
+                R10_4_RUNTIME_CONTRACT,
+                validate_canary_smoke_plan,
+            )
+            validate_canary_smoke_plan(canary_plan, profiles=[ModelProfile.from_dict(item) for item in profiles], strict=True)
+            if protocol.get("runtime_contract") == R10_4_RUNTIME_CONTRACT and canary_plan.get("runtime_contract") != R10_4_RUNTIME_CONTRACT:
+                raise ValueError("r10.4 training protocol must bind the r10.4 readiness plan")
             if str(canary_plan.get("source_snapshot_hash", "")) != str(source_snapshot["snapshot_hash"]):
                 raise ValueError("runtime source_snapshot does not match canary smoke plan")
 

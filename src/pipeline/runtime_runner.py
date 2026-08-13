@@ -25,7 +25,12 @@ from src.pipeline.runtime_ledger import (
     BillingUnknownError,
     InvocationLedger,
 )
-from src.pipeline.runtime_readiness import validate_canary_smoke_plan, write_runtime_smoke_evidence
+from src.pipeline.runtime_readiness import (
+    R10_4_RUNTIME_CONTRACT,
+    execution_kind,
+    validate_canary_smoke_plan,
+    write_runtime_smoke_evidence,
+)
 from src.pipeline.runtime_topology import (
     TopologyHandle,
     TopologyLifecycle,
@@ -131,7 +136,7 @@ class RuntimeRunner:
     @staticmethod
     def _phase_cells(plan: Mapping[str, Any], phase: str) -> list[Mapping[str, Any]]:
         kind = "vertex_canary" if phase == "canary" else "framework_model_smoke"
-        return [cell for cell in plan["cells"] if cell.get("kind") == kind]
+        return [cell for cell in plan["cells"] if execution_kind(cell) == kind]
 
     def _call_executor(
         self, cell: Mapping[str, Any], run_dir: Path, labels: Mapping[str, str],
@@ -219,14 +224,31 @@ class RuntimeRunner:
             raise RuntimeHalt("evaluator bundle failed")
         evaluator_path = run_dir / "evaluator.json"
         evaluator_path.write_text(json.dumps(dict(evaluator_verdict), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        oracle_verdict = self.bundle_executor(self.oracle_bundle, run_dir, result.run_artifact)
-        if oracle_verdict.get("status") != "passed" and oracle_verdict.get("oracle", {}).get("status") != "passed":
-            raise RuntimeHalt("oracle bundle failed")
-        (run_dir / "oracle.json").write_text(json.dumps(dict(oracle_verdict), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        oracle_verdict: Mapping[str, Any]
+        if self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+            oracle_verdict = {
+                "schema_version": "1.0.0",
+                "status": "not_applicable",
+                "reason": "no_target_condition_in_readiness",
+                "osr": None,
+                "plan_hash": str(self.plan["plan_hash"]),
+                "run_id": str(cell["run_id"]),
+                "readiness_kind": str(cell.get("readiness_kind", "")),
+            }
+            (run_dir / "oracle-applicability.json").write_text(
+                json.dumps(oracle_verdict, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+            )
+            oracle_status = "not_applicable"
+        else:
+            oracle_verdict = self.bundle_executor(self.oracle_bundle, run_dir, result.run_artifact)
+            if oracle_verdict.get("status") != "passed" and oracle_verdict.get("oracle", {}).get("status") != "passed":
+                raise RuntimeHalt("oracle bundle failed")
+            (run_dir / "oracle.json").write_text(json.dumps(dict(oracle_verdict), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            oracle_status = "passed"
         return replace(
             result, usage=observed, cost=normalized_cost,
             evaluator=dict(evaluator_verdict.get("evaluator", evaluator_verdict)),
-            oracle=dict(oracle_verdict.get("oracle", oracle_verdict)), oracle_status="passed",
+            oracle=dict(oracle_verdict.get("oracle", oracle_verdict)), oracle_status=oracle_status,
         )
 
     def _run_phase(
@@ -316,10 +338,21 @@ class RuntimeRunner:
                     "cost": run_dir / "cost.json", "evaluator": run_dir / "evaluator.json",
                     "oracle": run_dir / "oracle.json", "cleanup": run_dir / "cleanup.json",
                 }
-                for name, value in (("event_ledger", result.event_ledger), ("proof", result.proof), ("usage", result.usage), ("cost", result.cost), ("evaluator", result.evaluator), ("oracle", result.oracle), ("cleanup", result.cleanup), ("run_artifact", result.run_artifact)):
+                if self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+                    paths["oracle_applicability"] = run_dir / "oracle-applicability.json"
+                values = {
+                    "event_ledger": result.event_ledger, "proof": result.proof, "usage": result.usage,
+                    "cost": result.cost, "evaluator": result.evaluator, "oracle": result.oracle,
+                    "cleanup": result.cleanup, "run_artifact": result.run_artifact,
+                }
+                if self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+                    values["oracle_applicability"] = result.oracle
+                for name, value in values.items():
+                    if name == "oracle" and self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+                        continue
                     paths[name].parent.mkdir(parents=True, exist_ok=True)
                     paths[name].write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-                hashes = {name: sha256_file(path) for name, path in paths.items()}
+                hashes = {name: sha256_file(path) for name, path in paths.items() if path.is_file()}
                 record = {
                     **dict(cell), "status": "passed", "plan_hash": self.plan["plan_hash"],
                     "resource_id": next(p for p in self.profiles if p.logical_label == cell["model_label"]).resource_id,
@@ -329,11 +362,17 @@ class RuntimeRunner:
                     "resolution_resolved_at": next(p for p in self.profiles if p.logical_label == cell["model_label"]).resolution_resolved_at,
                     "artifact_path": str(paths["run_artifact"].relative_to(self.root)), "artifact_sha256": hashes["run_artifact"],
                     "evidence_sha256": hashes["run_artifact"], "artifact_type": "run_artifact",
-                    "billing_status": "known", "oracle_status": "passed", "gateway_relay_lock_hash": self.relay_lock_hash,
+                    "billing_status": "known", "oracle_status": result.oracle_status, "gateway_relay_lock_hash": self.relay_lock_hash,
+                    "runtime_contract": str(self.plan.get("runtime_contract", "")),
                     "invocation_ledger_path": str(ledger_path.relative_to(self.root)), "invocation_ledger_sha256": ledger_hash,
                     "smoke_id": str(cell["run_id"]) if phase == "smoke" else "",
                 }
-                for name in ("event_ledger", "proof", "usage", "cost", "evaluator", "oracle", "cleanup"):
+                evidence_names: tuple[str, ...] = ("event_ledger", "proof", "usage", "cost", "evaluator", "cleanup")
+                if self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+                    evidence_names = (*evidence_names, "oracle_applicability")
+                else:
+                    evidence_names = (*evidence_names, "oracle")
+                for name in evidence_names:
                     record[f"{name}_path"] = str(paths[name].relative_to(self.root))
                     record[f"{name}_sha256"] = hashes[name]
                 records.append(record)

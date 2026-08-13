@@ -84,6 +84,10 @@ class ReadinessContainerExecutor:
             "target_runtime_lock_hash": target_runtime_lock_hash,
             "source_snapshot_hash": str(cell.get("source_snapshot_hash") or self.source_snapshot_hash),
         }
+        transport_kind = str(cell.get("execution_kind") or cell.get("kind") or "")
+        readiness_kind = str(cell.get("readiness_kind") or ("canary" if transport_kind == "vertex_canary" else "smoke"))
+        condition = str(cell.get("condition") or transport_kind)
+        evaluation_scope = str(cell.get("evaluation_scope") or "")
         invocation = {
             "schema_version": "2.0.0",
             "run_id": run_id,
@@ -91,7 +95,10 @@ class ReadinessContainerExecutor:
             "model_label": profile.logical_label,
             "case_id": str(self.public_task["case_id"]),
             "track": "blind",
-            "condition": str(cell["kind"]),
+            "execution_kind": transport_kind,
+            "condition": condition,
+            "evaluation_scope": evaluation_scope,
+            "readiness_kind": readiness_kind,
             "task": self.public_task,
             "provenance": provenance,
             "labels": dict(labels),
@@ -130,8 +137,12 @@ class ReadinessContainerExecutor:
             # container must use the stable container-side contract.
             "PENTEST_SOURCE_SNAPSHOT": "/run/veriplanpt/source-snapshot",
             "PENTEST_SOURCE_SNAPSHOT_HASH": str(cell.get("source_snapshot_hash") or self.source_snapshot_hash),
+            "VERIPLANPT_EXECUTION_KIND": transport_kind,
+            "VERIPLANPT_EVALUATION_SCOPE": evaluation_scope,
+            "VERIPLANPT_READINESS_KIND": readiness_kind,
+            "VERIPLANPT_METRIC_ELIGIBLE": "false" if cell.get("metric_eligible") is False else "true",
         })
-        if str(cell["kind"]) == "vertex_canary":
+        if transport_kind == "vertex_canary":
             environment["VERIPLANPT_CANARY_PROBE"] = "true"
         run_dir.mkdir(parents=True, exist_ok=True)
         result = self.topology.run_baseline(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rebuild the r10.3/r27 runtime images and emit observed identities.
+"""Rebuild the r10.4/r29 runtime images and emit observed identities.
 
 Builds are network-disabled and use staged wheelhouses.  The command refuses
 to substitute a digest when Docker cannot produce one.
@@ -23,13 +23,13 @@ from src.pipeline.baseline_lock import _adapter_bundle_hash, generate_baseline_l
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGES = {
-    "PentestAgent": "veriplanpt/pentestagent:r10.3-r27",
-    "PentestGPT": "veriplanpt/pentestgpt:r10.3-r27",
-    "VulnBot": "veriplanpt/vulnbot:r10.3-r27",
-    "HackSynth": "veriplanpt/hacksynth:r10.3-r27",
-    "VeriPlanPT": "veriplanpt/veriplanpt:r10.3",
+    "PentestAgent": "veriplanpt/pentestagent:r10.4-r29",
+    "PentestGPT": "veriplanpt/pentestgpt:r10.4-r29",
+    "VulnBot": "veriplanpt/vulnbot:r10.4-r29",
+    "HackSynth": "veriplanpt/hacksynth:r10.4-r29",
+    "VeriPlanPT": "veriplanpt/veriplanpt:r10.4",
 }
-RELAY_IMAGE = "veriplanpt/gateway-relay:r10.3-r27"
+RELAY_IMAGE = "veriplanpt/gateway-relay:r10.4-r29"
 
 
 def _sha(path: Path) -> str:
