@@ -211,7 +211,6 @@ def generate_baseline_lock(
             except json.JSONDecodeError:
                 # Older test doubles and Docker versions may only expose the ID.
                 image_labels = {}
-
         input_hashes = spec.get("input_hashes")
         if not isinstance(input_hashes, Mapping):
             input_hashes = {}
@@ -220,11 +219,22 @@ def generate_baseline_lock(
         }
         dependency_lock_path = str(spec.get("dependency_lock_path", "")).strip()
         dependency_lock_hash = ""
+        staged_dependency_lock_hash = ""
         if dependency_lock_path:
             dependency_lock = Path(dependency_lock_path).resolve()
             if not dependency_lock.is_file():
                 raise ValueError(f"baseline {name} dependency lock is not a file: {dependency_lock}")
-            dependency_lock_hash = _sha256_file(dependency_lock)
+            staged_dependency_lock_hash = _sha256_file(dependency_lock)
+            declared_dependency_lock_hash = str(spec.get("dependency_lock_hash", "")).strip()
+            if declared_dependency_lock_hash:
+                if len(declared_dependency_lock_hash) != 64 or any(c not in "0123456789abcdef" for c in declared_dependency_lock_hash):
+                    raise ValueError(f"baseline {name} dependency_lock_hash is not a SHA-256")
+                dependency_lock_hash = declared_dependency_lock_hash
+            else:
+                dependency_lock_hash = staged_dependency_lock_hash
+        label_dependency_lock_hash = str(image_labels.get("com.veriplanpt.dependency-lock-hash", ""))
+        if dependency_lock_hash and label_dependency_lock_hash and label_dependency_lock_hash != dependency_lock_hash:
+            raise ValueError(f"baseline {name} dependency lock hash does not match image label")
         os_packages = spec.get("os_package_requirements", [])
         if not isinstance(os_packages, list) or any(not str(item).strip() for item in os_packages):
             raise ValueError(f"baseline {name} os_package_requirements must be a list of non-empty strings")
@@ -252,6 +262,8 @@ def generate_baseline_lock(
             entry["input_hashes"] = normalized_input_hashes
         if dependency_lock_hash:
             entry["dependency_lock_hash"] = dependency_lock_hash
+        if staged_dependency_lock_hash:
+            entry["staged_dependency_lock_hash"] = staged_dependency_lock_hash
         entry["os_package_requirements"] = [str(item) for item in os_packages]
         if image_labels:
             entry["image_labels"] = image_labels

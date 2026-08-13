@@ -270,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
                 "recipe_path": str(recipe), "build_context_path": str(context), "image": image,
                 "input_hashes": envelope.get("input_hashes", {}),
                 "dependency_lock_path": str(context / "envelope" / next((context / "envelope").iterdir()).name),
+                "dependency_lock_hash": dependency_hash,
                 "os_package_requirements": envelope.get("os_package_requirements", []),
                 "adapter_bundle": {"common": str(adapter_paths["common"]), "framework": str(adapter_paths["framework"]),
                                    "wrapper": str(adapter_paths["wrapper"]), "runtime": str(adapter_paths["runtime"]),

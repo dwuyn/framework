@@ -42,6 +42,7 @@ def main() -> int:
             "image": IMAGES[name],
             "input_hashes": envelope["input_hashes"],
             "dependency_lock_path": str((ROOT / envelope["dependency_lock"]["path"]).resolve()),
+            "dependency_lock_hash": envelope["dependency_lock"]["sha256"],
             "os_package_requirements": envelope["os_package_requirements"],
             "adapter_bundle": {
                 "common": str((Path(context["path"]) / "adapter/provider_shim.py").resolve()),
