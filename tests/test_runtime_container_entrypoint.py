@@ -130,3 +130,39 @@ def test_nonzero_production_driver_writes_infrastructure_diagnostics(tmp_path, m
     assert diagnostics["exit_code"] == 17
     assert "secret" not in diagnostics["stdout"]
     assert len(diagnostics["stdout_sha256"]) == 64
+
+
+def test_r10_5_smoke_uses_single_response_transport_driver(tmp_path, monkeypatch) -> None:
+    module = _module()
+    invocation = _invocation()
+    invocation["execution_kind"] = "framework_model_smoke"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(invocation)))
+    for key, value in {
+        "VERIPLANPT_STAGE": "canary_smoke",
+        "VERIPLANPT_ADAPTER_PRODUCTION": "true",
+        "VERIPLANPT_RUN_ID": invocation["run_id"],
+        "VERIPLANPT_MODEL_LABEL": invocation["model_label"],
+        "VERIPLANPT_PROFILE_HASH": "f" * 64,
+        "VERIPLANPT_FRAMEWORK_NAME": "VeriPlanPT",
+        "VERIPLANPT_GATEWAY_RELAY_LOCK_HASH": "2" * 64,
+        "VERIPLANPT_TARGET_RUNTIME_LOCK_HASH": "9" * 64,
+        "VERIPLANPT_OUTPUT_DIR": str(tmp_path),
+    }.items():
+        monkeypatch.setenv(key, str(value))
+    calls: list[tuple[str, ...]] = []
+
+    def run(command: tuple[str, ...], **_kwargs: object) -> SimpleNamespace:
+        calls.append(command)
+        (tmp_path / "driver-evidence.json").write_text(json.dumps({
+            "provider_response_count": 1,
+            "public_task_hash": "a" * 64,
+            "generated_config_hash": "b" * 64,
+            "mode": "single-response-readiness-transport",
+            "outcome": "completed",
+        }))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+
+    assert module.main() == 0
+    assert calls == [(sys.executable, "/opt/adapter/readiness_transport_driver.py")]

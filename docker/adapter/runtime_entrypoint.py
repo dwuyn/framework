@@ -167,7 +167,7 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
     """Run the common adapter lifecycle and return evidence plus termination."""
     framework = str(invocation["framework"])
     phases = _adapter_phases(framework)
-    started = time.monotonic()
+    started: float = time.monotonic()
     output = Path(_required_env("VERIPLANPT_OUTPUT_DIR"))
     driver_input = output / "public-invocation.json"
     if driver_input.exists() or driver_input.is_symlink():
@@ -182,11 +182,13 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
         if driver_input.exists():
             driver_input.unlink()
         return events, proof, responses, "completed"
-    command = (
-        (sys.executable, "-m", "src.pipeline.production_driver")
-        if framework == "VeriPlanPT"
-        else (sys.executable, "/opt/adapter/baseline_driver.py")
-    )
+    command: tuple[str, ...]
+    if framework == "VeriPlanPT" and str(invocation.get("execution_kind", "")) == "framework_model_smoke":
+        command = (sys.executable, "/opt/adapter/readiness_transport_driver.py")
+    elif framework == "VeriPlanPT":
+        command = (sys.executable, "-m", "src.pipeline.production_driver")
+    else:
+        command = (sys.executable, "/opt/adapter/baseline_driver.py")
     completed: subprocess.CompletedProcess[str] | None = None
     try:
         completed = subprocess.run(
