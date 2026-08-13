@@ -11,8 +11,8 @@ from typing import Any, Callable, Mapping, Sequence
 from src.pipeline.framework_adapter import ModelProfile, RunArtifact
 from src.pipeline.protocol import validate_run_artifact
 from src.pipeline.runtime_readiness import (
-    R10_4_RUNTIME_CONTRACT,
     execution_kind,
+    is_readiness_contract,
     write_runtime_smoke_evidence,
 )
 
@@ -77,7 +77,7 @@ def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
             result = cell_executor(cell, run_dir)
         finally:
             cleanup_evidence = cleanup(run_id)
-        expected_oracle_status = "not_applicable" if plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT else "passed"
+        expected_oracle_status = "not_applicable" if is_readiness_contract(plan.get("runtime_contract")) else "passed"
         if result is None or result.billing_status != "known" or result.oracle_status != expected_oracle_status:
             raise RuntimeError("runtime stage halted by billing or oracle status")
         if production and not result.invocation_ledger:
@@ -91,7 +91,7 @@ def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
                  "proof": run_dir / "proof.json", "usage": run_dir / "usage.json", "cost": run_dir / "cost.json", "evaluator": run_dir / "evaluator.json", "cleanup": run_dir / "cleanup.json"}
         if production:
             paths["invocation_ledger"] = run_dir / "invocation-ledger.json"
-        if plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+        if is_readiness_contract(plan.get("runtime_contract")):
             paths["oracle_applicability"] = run_dir / "oracle-applicability.json"
         ledger_hash, proof_hash = _write(paths["event_ledger"], result.event_ledger), _write(paths["proof"], result.proof)
         artifact = RunArtifact.from_dict(result.run_artifact)
@@ -120,7 +120,7 @@ def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
             raise RuntimeError("runtime stage halted by evaluator failure")
         hashes = {"run_artifact": _write(paths["run_artifact"], result.run_artifact), "event_ledger": ledger_hash, "proof": proof_hash,
                   "usage": _write(paths["usage"], usage), "cost": _write(paths["cost"], result.cost), "evaluator": _write(paths["evaluator"], result.evaluator), "cleanup": _write(paths["cleanup"], cleanup_evidence)}
-        if plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+        if is_readiness_contract(plan.get("runtime_contract")):
             hashes["oracle_applicability"] = _write(paths["oracle_applicability"], result.oracle)
         if production:
             hashes["invocation_ledger"] = _write(paths["invocation_ledger"], result.invocation_ledger)
@@ -136,7 +136,7 @@ def execute_runtime_plan(*, artifact_root: str | Path, plan: Mapping[str, Any],
         for name in ("event_ledger", "usage", "cost", "evaluator", "cleanup"):
             record[f"{name}_path"] = str(paths[name].relative_to(root))
             record[f"{name}_sha256"] = hashes[name]
-        if plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+        if is_readiness_contract(plan.get("runtime_contract")):
             record["oracle_applicability_path"] = str(paths["oracle_applicability"].relative_to(root))
             record["oracle_applicability_sha256"] = hashes["oracle_applicability"]
         if production:

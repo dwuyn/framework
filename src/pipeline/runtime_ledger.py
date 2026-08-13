@@ -258,14 +258,13 @@ class InvocationLedger:
                 if row.get("epoch") == str(epoch)
                 and row.get("run_id") == run_id
                 and int(row.get("call_index", -1)) == int(call_index)
-                and row.get("model_profile_hash") == model_profile_hash
             ]
             if not matches:
                 return None
             row = matches[0]
-            if row.get("request_sha256") != request_hash:
+            if row.get("request_sha256") != request_hash or row.get("model_profile_hash") != model_profile_hash:
                 raise InvocationConflictError(
-                    "durable invocation slot reused with a different request hash"
+                    "durable invocation slot reused with a different request hash or model profile"
                 )
             if int(row.get("replay_count", 0)) >= 1:
                 raise InvocationConflictError(

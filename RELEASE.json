@@ -1,7 +1,7 @@
 {
   "name": "veriplanpt-runtime",
-  "version": "v0.4.0-r10.3",
-  "successor_of": "v0.4.0-r10.2",
-  "runtime_contract": "veriplanpt-runtime-v0.4.0-r10.3",
+  "version": "v0.4.0-r10.5",
+  "successor_of": "v0.4.0-r10.4",
+  "runtime_contract": "veriplanpt-runtime-v0.4.0-r10.5",
   "fake_provider_production": false
 }

@@ -11,6 +11,7 @@ import json
 import os
 import re
 import socketserver
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -89,6 +90,7 @@ class VertexGateway:
         epoch: str = "",
         max_input_tokens_by_run: Mapping[str, int] | None = None,
         max_output_tokens_by_run: Mapping[str, int] | None = None,
+        require_signed_plan: bool = False,
     ) -> None:
         if not token:
             raise GatewayError("gateway token is required")
@@ -124,6 +126,18 @@ class VertexGateway:
         }
         if any(limit <= 0 for limit in (*self.max_input_tokens_by_run.values(), *self.max_output_tokens_by_run.values())):
             raise GatewayError("gateway token caps must be positive")
+        self.require_signed_plan = require_signed_plan
+        if self.require_signed_plan:
+            if not self.epoch:
+                raise GatewayError("signed gateway plan requires an epoch")
+            expected = self.allowed_run_ids
+            if set(self.max_llm_calls_by_run) != expected:
+                raise GatewayError("signed gateway plan must cap every allowed run ID")
+            if set(self.max_input_tokens_by_run) != expected or set(self.max_output_tokens_by_run) != expected:
+                raise GatewayError("signed gateway plan must provide token caps for every allowed run ID")
+            if self.invocation_ledger is None:
+                raise GatewayError("signed gateway plan requires a durable invocation ledger")
+        self._run_locks = {run_id: threading.RLock() for run_id in self.allowed_run_ids}
 
     def invoke(self, request: Mapping[str, Any], *, token: str) -> InvocationResult:
         self.authorize(token)
@@ -135,15 +149,30 @@ class VertexGateway:
             raise GatewayError("gateway request profile is not pinned")
         if self.epoch and parsed.epoch and parsed.epoch != self.epoch:
             raise GatewayError("gateway request epoch differs from the approved epoch")
+        if self.require_signed_plan and (parsed.epoch != self.epoch or parsed.call_index is None):
+            raise GatewayError("signed gateway request requires the approved epoch and call_index")
         requested_output = request.get("max_output_tokens", request.get("max_tokens"))
         planned_output = self.max_output_tokens_by_run.get(parsed.run_id)
+        if self.require_signed_plan and planned_output is None:
+            raise GatewayError("signed gateway plan is missing the output cap")
         if requested_output is not None and planned_output is not None and int(requested_output) > planned_output:
             raise GatewayError("gateway request output cap exceeds the signed plan")
         if planned_output is not None and planned_output != 2048:
             raise GatewayError("gateway signed plan must pin max_output_tokens=2048")
         planned_input = self.max_input_tokens_by_run.get(parsed.run_id)
+        if self.require_signed_plan and planned_input is None:
+            raise GatewayError("signed gateway plan is missing the input cap")
+        requested_input = request.get("max_input_tokens")
+        if requested_input is not None and planned_input is not None and int(requested_input) > planned_input:
+            raise GatewayError("gateway request input cap exceeds the signed plan")
         if planned_input is not None and planned_input != 4096:
             raise GatewayError("gateway signed plan must pin max_input_tokens=4096")
+        with self._run_locks[parsed.run_id]:
+            return self._invoke_locked(parsed, request, profile)
+
+    def _invoke_locked(
+        self, parsed: GatewayRequest, request: Mapping[str, Any], profile: ModelProfile,
+    ) -> InvocationResult:
         durable_identity = (
             self.invocation_ledger is not None
             and bool(parsed.epoch or self.epoch)
@@ -277,6 +306,7 @@ def build_host_gateway(
     epoch: str = "",
     max_input_tokens_by_run: Mapping[str, int] | None = None,
     max_output_tokens_by_run: Mapping[str, int] | None = None,
+    require_signed_plan: bool = False,
     source_snapshot_root: str = "",
     source_snapshot_hash: str = "",
 ) -> VertexGateway:
@@ -314,6 +344,7 @@ def build_host_gateway(
         epoch=epoch,
         max_input_tokens_by_run=max_input_tokens_by_run,
         max_output_tokens_by_run=max_output_tokens_by_run,
+        require_signed_plan=require_signed_plan,
     )
 
 

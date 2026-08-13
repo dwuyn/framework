@@ -14,7 +14,9 @@ from src.pipeline.vertex_runtime import VertexContractError, validate_resolution
 SCHEMA_VERSION = "2.0.0"
 LEGACY_RUNTIME_SCHEMA_VERSION = "2.1.0"
 RUNTIME_SCHEMA_VERSION = "2.2.0"
+R10_5_RUNTIME_SCHEMA_VERSION = "2.3.0"
 R10_4_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.4"
+R10_5_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.5"
 BASE_CASE_COUNT = 94
 ROBUSTNESS_COUNT = 9
 VERTEX_CANARY_COUNT = 3
@@ -117,7 +119,8 @@ def _runtime_record(
     production: bool = False,
 ) -> None:
     """Verify the complete source-backed v2 runtime cell evidence."""
-    r10_4 = str(record.get("runtime_contract", "")) == R10_4_RUNTIME_CONTRACT or str(record.get("evaluation_scope", "")) == "readiness_transport"
+    r10_4 = str(record.get("runtime_contract", "")) in {R10_4_RUNTIME_CONTRACT, R10_5_RUNTIME_CONTRACT} or str(record.get("evaluation_scope", "")) == "readiness_transport"
+    r10_5 = str(record.get("runtime_contract", "")) == R10_5_RUNTIME_CONTRACT
     required = {
         "status", "run_id", "model_label", "plan_hash", "dataset_lock_hash",
         "baseline_identity_hash", "native_identity_hash", "model_profile_hash",
@@ -137,6 +140,11 @@ def _runtime_record(
     if production:
         required.add("gateway_relay_lock_hash")
         required.update({"invocation_ledger_path", "invocation_ledger_sha256"})
+        if r10_5:
+            required.update({
+                "invocation_ledger_hash", "invocation_call_indices",
+                "invocation_replay_count", "invocation_response_count",
+            })
     missing = sorted(required.difference(record))
     if missing:
         raise ValueError(f"{name} is missing runtime evidence field(s): {', '.join(missing)}")
@@ -189,8 +197,21 @@ def _runtime_record(
             raise ValueError(f"{name} invocation ledger is not valid JSON") from exc
         if not isinstance(ledger, Mapping) or ledger.get("gateway_relay_lock_hash") != record["gateway_relay_lock_hash"]:
             raise ValueError(f"{name} invocation ledger relay binding mismatch")
-        if not any(isinstance(item, Mapping) and item.get("run_id") == record["run_id"] for item in ledger.get("invocations", [])):
+        rows = [item for item in ledger.get("invocations", []) if isinstance(item, Mapping) and item.get("run_id") == record["run_id"]]
+        if not rows:
             raise ValueError(f"{name} invocation ledger has no observed request")
+        if r10_5:
+            indices = [int(item.get("call_index", -1)) for item in rows]
+            if record.get("invocation_ledger_hash") != record.get("invocation_ledger_sha256"):
+                raise ValueError(f"{name} invocation ledger hash alias mismatch")
+            if record.get("invocation_call_indices") != indices:
+                raise ValueError(f"{name} invocation call indices differ from the ledger")
+            if int(record.get("invocation_replay_count", -1)) != sum(int(item.get("replay_count", 0)) for item in rows):
+                raise ValueError(f"{name} invocation replay count differs from the ledger")
+            if int(record.get("invocation_response_count", -1)) != len(rows):
+                raise ValueError(f"{name} invocation response count differs from the ledger")
+            if len(rows) != 1 or indices != [0]:
+                raise ValueError(f"{name} readiness must contain exactly call index 0")
     try:
         usage = json.loads((root / _relative_artifact_path(record["usage_path"], name)).read_text(encoding="utf-8"))
         cost = json.loads((root / _relative_artifact_path(record["cost_path"], name)).read_text(encoding="utf-8"))
@@ -307,9 +328,9 @@ def validate_smoke_evidence(
         unexpected_runtime = sorted(set(evidence).difference(required_runtime | strict_runtime_fields | counter_fields))
         if unexpected_runtime:
             raise ValueError(f"runtime smoke evidence has unexpected field(s): {', '.join(unexpected_runtime)}")
-        runtime_strict = evidence["schema_version"] in {LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION}
-        production_runtime = evidence["schema_version"] == RUNTIME_SCHEMA_VERSION
-        if evidence["schema_version"] not in {SCHEMA_VERSION, LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION} or not str(evidence["generated_at"]).endswith("Z"):
+        runtime_strict = evidence["schema_version"] in {LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION}
+        production_runtime = evidence["schema_version"] in {RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION}
+        if evidence["schema_version"] not in {SCHEMA_VERSION, LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION} or not str(evidence["generated_at"]).endswith("Z"):
             raise ValueError("runtime smoke evidence schema or timestamp is invalid")
         if runtime_strict:
             strict_required = {
@@ -400,6 +421,12 @@ def validate_smoke_evidence(
                 _passed(record, name, artifact_root=artifact_root)
         if runtime_pairs != expected_pairs:
             raise ValueError("framework-model smokes must cover exactly every framework/model pair")
+        if evidence["schema_version"] == R10_5_RUNTIME_SCHEMA_VERSION:
+            response_count = sum(int(record.get("invocation_response_count", -1)) for record in (*canary_records, *smoke_records))
+            if response_count != 18 or int(evidence.get("paid_provider_responses", -1)) != response_count:
+                raise ValueError("r10.5 readiness response count must be 18 observed ledger responses")
+            if int(evidence.get("paid_vertex_responses", -1)) != response_count:
+                raise ValueError("r10.5 readiness Vertex response count is not ledger-backed")
         return {
             "base_case_fixed_controls": 0, "robustness": 0,
             "vertex_canaries": len(canary_records), "framework_model_smokes": len(smoke_records),

@@ -327,6 +327,9 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
         "case_id": invocation["case_id"],
         "track": invocation["track"],
         "condition": invocation["condition"],
+        "execution_kind": str(invocation.get("execution_kind", "")),
+        "evaluation_scope": str(invocation.get("evaluation_scope", "")),
+        "readiness_kind": str(invocation.get("readiness_kind", "")),
         "repetition": int(invocation.get("repetition", 1)),
         "budget_tier": str(invocation.get("budget_tier", "medium")),
         "model_profile": dict(invocation["model_profile"]),
@@ -354,7 +357,7 @@ def _artifact(invocation: Mapping[str, Any], response: Mapping[str, Any]) -> dic
             else "runtime_ready"
         ),
         "budget_termination_reason": "",
-        "metric_eligible": True,
+        "metric_eligible": str(invocation.get("evaluation_scope", "")) != "readiness_transport",
         "valid": True,
     }
 
@@ -367,12 +370,19 @@ def main() -> int:
     if not output.is_dir() or output.is_symlink():
         raise RuntimeBoundaryError("runtime output directory is not a real mounted directory")
     invocation = _load_public_invocation()
+    execution_kind = str(invocation.get("execution_kind", ""))
+    if not execution_kind and str(invocation.get("condition", "")) in {"vertex_canary", "framework_model_smoke"}:
+        # Legacy evidence remains readable; every r10.5 invocation carries
+        # execution_kind explicitly and takes the branch above.
+        execution_kind = str(invocation["condition"])
+    if stage == "canary_smoke" and execution_kind not in {"vertex_canary", "framework_model_smoke"}:
+        raise RuntimeBoundaryError("readiness invocation execution_kind is invalid")
     if os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true":
         raise RuntimeBoundaryError(
             "VERIPLANPT_FAKE_PROVIDER is test-only and is not accepted by r10.3 production certification"
         )
     if stage == "canary_smoke" or os.environ.get("VERIPLANPT_ADAPTER_PRODUCTION", "") == "true":
-        if str(invocation.get("condition")) == "vertex_canary":
+        if execution_kind == "vertex_canary":
             events, proof, responses, termination = _run_canary(invocation)
         else:
             events, proof, responses, termination = _run_adapter(invocation)
@@ -396,7 +406,7 @@ def main() -> int:
         # driver that can emit its own RunArtifact.  Materialize the strict
         # controlled-probe artifact for that path instead of treating the
         # missing driver artifact as a post-response failure.
-        is_vertex_canary = str(invocation.get("condition")) == "vertex_canary"
+        is_vertex_canary = execution_kind == "vertex_canary"
         if termination == "completed" and not is_vertex_canary:
             if candidate.is_file() and not candidate.is_symlink():
                 artifact = _object(json.loads(candidate.read_text(encoding="utf-8")), "production RunArtifact")

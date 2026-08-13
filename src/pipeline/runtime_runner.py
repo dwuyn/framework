@@ -26,8 +26,8 @@ from src.pipeline.runtime_ledger import (
     InvocationLedger,
 )
 from src.pipeline.runtime_readiness import (
-    R10_4_RUNTIME_CONTRACT,
     execution_kind,
+    is_readiness_contract,
     validate_canary_smoke_plan,
     write_runtime_smoke_evidence,
 )
@@ -165,6 +165,12 @@ class RuntimeRunner:
         observed = ledger.aggregate(str(cell["run_id"]))
         if result.billing_status != "known":
             raise RuntimeHalt("billing unknown halted runtime")
+        if str(self.plan.get("runtime_contract")) == "veriplanpt-runtime-v0.4.0-r10.5":
+            observed_rows = [
+                row for row in ledger.snapshot() if row.get("run_id") == str(cell["run_id"])
+            ]
+            if len(observed_rows) != 1 or int(observed_rows[0].get("call_index", -1)) != 0:
+                raise RuntimeHalt("r10.5 readiness requires exactly one ledger response at call_index=0")
         if result.cleanup.get("success") is not True:
             raise RuntimeHalt("cell cleanup failed")
         resources = result.cleanup.get("resources", {})
@@ -225,7 +231,7 @@ class RuntimeRunner:
         evaluator_path = run_dir / "evaluator.json"
         evaluator_path.write_text(json.dumps(dict(evaluator_verdict), indent=2, sort_keys=True) + "\n", encoding="utf-8")
         oracle_verdict: Mapping[str, Any]
-        if self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+        if is_readiness_contract(self.plan.get("runtime_contract")):
             oracle_verdict = {
                 "schema_version": "1.0.0",
                 "status": "not_applicable",
@@ -338,21 +344,24 @@ class RuntimeRunner:
                     "cost": run_dir / "cost.json", "evaluator": run_dir / "evaluator.json",
                     "oracle": run_dir / "oracle.json", "cleanup": run_dir / "cleanup.json",
                 }
-                if self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+                if is_readiness_contract(self.plan.get("runtime_contract")):
                     paths["oracle_applicability"] = run_dir / "oracle-applicability.json"
                 values = {
                     "event_ledger": result.event_ledger, "proof": result.proof, "usage": result.usage,
                     "cost": result.cost, "evaluator": result.evaluator, "oracle": result.oracle,
                     "cleanup": result.cleanup, "run_artifact": result.run_artifact,
                 }
-                if self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+                if is_readiness_contract(self.plan.get("runtime_contract")):
                     values["oracle_applicability"] = result.oracle
                 for name, value in values.items():
-                    if name == "oracle" and self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+                    if name == "oracle" and is_readiness_contract(self.plan.get("runtime_contract")):
                         continue
                     paths[name].parent.mkdir(parents=True, exist_ok=True)
                     paths[name].write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 hashes = {name: sha256_file(path) for name, path in paths.items() if path.is_file()}
+                ledger_rows = [
+                    row for row in ledger.snapshot() if row.get("run_id") == str(cell["run_id"])
+                ]
                 record = {
                     **dict(cell), "status": "passed", "plan_hash": self.plan["plan_hash"],
                     "resource_id": next(p for p in self.profiles if p.logical_label == cell["model_label"]).resource_id,
@@ -365,10 +374,14 @@ class RuntimeRunner:
                     "billing_status": "known", "oracle_status": result.oracle_status, "gateway_relay_lock_hash": self.relay_lock_hash,
                     "runtime_contract": str(self.plan.get("runtime_contract", "")),
                     "invocation_ledger_path": str(ledger_path.relative_to(self.root)), "invocation_ledger_sha256": ledger_hash,
+                    "invocation_ledger_hash": ledger_hash,
+                    "invocation_call_indices": [int(row["call_index"]) for row in ledger_rows if "call_index" in row],
+                    "invocation_replay_count": sum(int(row.get("replay_count", 0)) for row in ledger_rows),
+                    "invocation_response_count": len(ledger_rows),
                     "smoke_id": str(cell["run_id"]) if phase == "smoke" else "",
                 }
                 evidence_names: tuple[str, ...] = ("event_ledger", "proof", "usage", "cost", "evaluator", "cleanup")
-                if self.plan.get("runtime_contract") == R10_4_RUNTIME_CONTRACT:
+                if is_readiness_contract(self.plan.get("runtime_contract")):
                     evidence_names = (*evidence_names, "oracle_applicability")
                 else:
                     evidence_names = (*evidence_names, "oracle")
@@ -404,8 +417,8 @@ class RuntimeRunner:
             phases=topology_evidence,
         )
         topology_hash = sha256_file(topology_path)
-        canaries = [record for record in records if record["kind"] == "vertex_canary"]
-        smokes = [record for record in records if record["kind"] == "framework_model_smoke"]
+        canaries = [record for record in records if execution_kind(record) == "vertex_canary"]
+        smokes = [record for record in records if execution_kind(record) == "framework_model_smoke"]
         output = write_runtime_smoke_evidence(
             artifact_root=self.root, dataset_lock_hash=str(canaries[0]["dataset_lock_hash"]),
             dataset_evidence_hash=self.dataset_evidence_hash or str(self.plan.get("dataset_evidence_hash", "0" * 64)),
