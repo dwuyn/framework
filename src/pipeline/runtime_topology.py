@@ -199,7 +199,7 @@ class TopologyLifecycle:
             raise TopologyError("baseline image/command is not immutably pinned")
         required_runtime = {
             "VERIPLANPT_RUN_ID": run_id,
-            "VERIPLANPT_PROVIDER_TOKEN": handle.phase_token,
+            "VERIPLANPT_PROVIDER_TOKEN": f"{handle.phase_token}~{run_id}~{environment.get('VERIPLANPT_PROFILE_HASH', '')}",
             "VERIPLANPT_PROVIDER_URL": "http://gateway-relay:8080/v1/generate",
             "VERIPLANPT_PROVIDER_BASE_URL": "http://gateway-relay:8080/v1",
         }
@@ -243,16 +243,17 @@ class TopologyLifecycle:
             raise TopologyError("runtime environment run-ID is not approved for this phase")
         if not handle.phase_token or not handle.token_expires_at:
             raise TopologyError("runtime environment token is incomplete")
+        bound_token = f"{handle.phase_token}~{run_id}~{profile_hash}"
         return {
             "VERIPLANPT_RUN_ID": run_id,
-            "VERIPLANPT_PROVIDER_TOKEN": handle.phase_token,
+            "VERIPLANPT_PROVIDER_TOKEN": bound_token,
             "VERIPLANPT_PROVIDER_TOKEN_EXPIRES_AT": handle.token_expires_at,
             "VERIPLANPT_PROVIDER_URL": "http://gateway-relay:8080/v1/generate",
             "VERIPLANPT_PROVIDER_BASE_URL": "http://gateway-relay:8080/v1",
             "OPENAI_BASE_URL": "http://gateway-relay:8080/v1",
             "OPENAI_API_BASE": "http://gateway-relay:8080/v1",
             "OPENAI_BASEURL": "http://gateway-relay:8080/v1",
-            "OPENAI_API_KEY": f"{handle.phase_token}.{run_id}.{profile_hash}",
+            "OPENAI_API_KEY": bound_token,
             "VERIPLANPT_EPOCH": handle.epoch,
             "VERIPLANPT_PROFILE_HASH": profile_hash,
             "VERIPLANPT_MODEL_LABEL": model_label,

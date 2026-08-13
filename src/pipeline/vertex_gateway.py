@@ -210,8 +210,13 @@ class VertexGateway:
         return result
 
     def authorize(self, token: str) -> None:
-        if token != self.token and not token.startswith(self.token + "."):
-            raise GatewayError("gateway token is invalid")
+        # Bound cell credentials use exactly phase_token~run_id~profile_hash.
+        # Keep the unbound phase token for metadata requests, but do not retain
+        # the retired dotted-token compatibility path.
+        if token != self.token:
+            parts = token.split("~")
+            if len(parts) != 3 or parts[0] != self.token:
+                raise GatewayError("gateway token is invalid")
         if self.token_expires_at:
             expiry = datetime.fromisoformat(self.token_expires_at.replace("Z", "+00:00"))
             if datetime.now(UTC) >= expiry.astimezone(UTC):
@@ -222,7 +227,7 @@ class VertexGateway:
         self.authorize(token)
         if token == self.token:
             return {}
-        parts = token.split(".")
+        parts = token.split("~")
         if len(parts) != 3 or parts[0] != self.token:
             raise GatewayError("gateway bearer binding is invalid")
         run_id, profile_hash = parts[1], parts[2]

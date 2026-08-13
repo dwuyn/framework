@@ -12,9 +12,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 
@@ -32,23 +34,63 @@ def _redact(value: str) -> str:
     )
 
 
+def _task_target(task: dict[str, object]) -> tuple[str, int]:
+    target = task.get("target")
+    if not isinstance(target, dict):
+        raise SystemExit("public task target must be an object")
+    host = str(target.get("host", "")).strip()
+    scope = task.get("scope")
+    allowed = scope.get("allowed_ports", []) if isinstance(scope, dict) else []
+    ports = target.get("exposed_ports") or allowed
+    if not host or not isinstance(ports, list) or len(ports) != 1:
+        raise SystemExit("public task must pin exactly one target host and port")
+    try:
+        port = int(ports[0])
+    except (TypeError, ValueError) as exc:
+        raise SystemExit("public task target port is invalid") from exc
+    if not 1 <= port <= 65535:
+        raise SystemExit("public task target port is outside TCP range")
+    parsed = urllib.parse.urlparse(str(target.get("url", "")))
+    if parsed.hostname and parsed.hostname != host:
+        raise SystemExit("public task target URL host differs from target host")
+    return host, port
+
+
 def _commands(framework: str, run_dir: Path, source: Path) -> tuple[tuple[str, ...], ...]:
-    if framework == "PentestAgent":
-        return (
-            (sys.executable, str(source / "agents/recon_agent.py")),
-            (sys.executable, str(source / "agents/planning_agent.py")),
-            (sys.executable, str(source / "agents/execution_agent.py")),
-        )
-    if framework == "PentestGPT":
-        return ((sys.executable, "-m", "pentestgpt.main"),)
+    task = json.loads(Path(os.environ["VERIPLANPT_PUBLIC_INVOCATION_FILE"]).read_text(encoding="utf-8"))
+    public_task = task["task"]
+    if not isinstance(public_task, dict):
+        raise SystemExit("public task must be an object")
+    host, port = _task_target(public_task)
+    budget = int(os.environ.get("VERIPLANPT_MAX_LLM_CALLS", "1"))
+    if budget <= 0:
+        raise SystemExit("public task budget must be positive")
+    generated = run_dir / "generated-public-config.json"
+    generated.write_text(json.dumps({
+        "framework": framework, "host": host, "port": port, "budget": budget,
+        "objective": str(public_task.get("objective", "")),
+    }, sort_keys=True) + "\n", encoding="utf-8")
+    os.environ["VERIPLANPT_GENERATED_CONFIG_HASH"] = hashlib.sha256(generated.read_bytes()).hexdigest()
+    if framework in {"PentestAgent", "PentestGPT"}:
+        return ((sys.executable, "/opt/adapter/baseline_client_driver.py"),)
     if framework == "VulnBot":
-        return ((sys.executable, str(source / "cli.py"), "vulnbot", "--max_interactions", os.environ.get("VERIPLANPT_MAX_LLM_CALLS", "1")),)
+        config_root = run_dir / "vulnbot-config"
+        config_root.mkdir(parents=True, exist_ok=True)
+        config_path = config_root / "model_config.yaml"
+        config_path.write_text(
+            f"api_key: local-relay\nllm_model: openai\nbase_url: http://gateway-relay:8080/v1\n"
+            f"target_host: {host}\ntarget_port: {port}\nbudget: {budget}\n",
+            encoding="utf-8",
+        )
+        os.environ["VERIPLANPT_GENERATED_CONFIG_HASH"] = hashlib.sha256(config_path.read_bytes()).hexdigest()
+        return ((sys.executable, "/opt/adapter/baseline_client_driver.py"),)
     benchmark = run_dir / "hacksynth-benchmark.json"
     config = run_dir / "hacksynth-config.json"
-    task = json.loads(Path(os.environ["VERIPLANPT_PUBLIC_INVOCATION_FILE"]).read_text(encoding="utf-8"))
-    benchmark.write_text(json.dumps({task["case_id"]: {"description": task["task"].get("objective", ""), "target": "lab.local"}}, sort_keys=True) + "\n", encoding="utf-8")
+    benchmark.write_text(json.dumps({task["case_id"]: {
+        "description": public_task.get("objective", ""), "target": host, "port": port,
+    }}, sort_keys=True) + "\n", encoding="utf-8")
     config.write_text(json.dumps({
-        "attackbox": "lab.local",
+        "attackbox": host, "target_port": port,
         "llm": {
             # HackSynth selects its OpenAI client by model family. The
             # bearer binding maps this harmless client alias to the signed
@@ -57,9 +99,10 @@ def _commands(framework: str, run_dir: Path, source: Path) -> tuple[tuple[str, .
             "model_local": False,
             "base_url": "http://gateway-relay:8080/v1",
         },
-        "max_tries": int(os.environ.get("VERIPLANPT_MAX_LLM_CALLS", "1")),
+        "max_tries": budget,
     }, sort_keys=True) + "\n", encoding="utf-8")
-    return ((sys.executable, str(source / "run_bench.py"), "-b", str(benchmark), "-c", str(config)),)
+    os.environ["VERIPLANPT_GENERATED_CONFIG_HASH"] = hashlib.sha256(config.read_bytes()).hexdigest()
+    return ((sys.executable, "/opt/adapter/baseline_client_driver.py"),)
 
 
 def _run_child(command: tuple[str, ...], *, cwd: Path, env: dict[str, str]):
@@ -82,28 +125,20 @@ def main() -> int:
     source = Path(os.environ.get("VERIPLANPT_SOURCE_DIR", "/opt/upstream"))
     run_dir.mkdir(parents=True, exist_ok=True)
     child_environment = os.environ.copy()
+    framework = _framework()
+    if framework in {"PentestAgent", "PentestGPT"}:
+        writable_source = run_dir / "upstream-copy"
+        shutil.copytree(source, writable_source, symlinks=False)
+        source = writable_source
     source_string = str(source)
     child_environment["PYTHONPATH"] = os.pathsep.join(
         item for item in (source_string, child_environment.get("PYTHONPATH", "")) if item
     )
-    framework = _framework()
-    if framework == "VulnBot":
-        # Keep the upstream checkout immutable while giving its settings
-        # loader an image-owned, relay-pinned config envelope.
-        config_root = run_dir / "vulnbot-config"
-        config_root.mkdir(parents=True, exist_ok=True)
-        (config_root / "model_config.yaml").write_text(
-            "api_key: local-relay\n"
-            "llm_model: openai\n"
-            "base_url: http://gateway-relay:8080/v1\n"
-            "llm_model_name: gpt-4o\n"
-            "embedding_type: local\n"
-            "temperature: 0\n"
-            "timeout: 300\n",
-            encoding="utf-8",
-        )
-        child_environment["PENTEST_ROOT"] = str(config_root)
     phases = _commands(framework, run_dir, source)
+    child_environment.update({
+        "VERIPLANPT_GENERATED_CONFIG_HASH": os.environ.get("VERIPLANPT_GENERATED_CONFIG_HASH", ""),
+        "VERIPLANPT_MAX_OUTPUT_TOKENS": os.environ.get("VERIPLANPT_MAX_OUTPUT_TOKENS", "2048"),
+    })
     results: list[dict[str, object]] = []
     started = time.monotonic()
     for command in phases:

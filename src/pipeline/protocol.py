@@ -247,12 +247,12 @@ def validate_training_protocol(
         for name in ("max_input_tokens", "max_output_tokens", "reservation_ceiling_usd"):
             if name not in budgets or float(budgets[name]) <= 0:
                 raise ValueError(f"runtime budget {name} must be positive")
-        if protocol.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10" and (
+        if protocol.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10.3" and (
             int(budgets.get("max_input_tokens", 0)) != 4096
             or int(budgets.get("max_output_tokens", 0)) != 2048
         ):
             raise ValueError("r10 runtime budget must pin input=4096 and output=2048")
-        r10 = protocol.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10"
+        r10 = protocol.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10.3"
         for item in profiles:
             validate_runtime_profile(ModelProfile.from_dict(item), strict=True, r10=r10)
         freeze_ref = protocol["dataset_freeze_manifest"]

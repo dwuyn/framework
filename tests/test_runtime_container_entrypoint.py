@@ -48,7 +48,7 @@ def _invocation() -> dict[str, object]:
     }
 
 
-def test_readiness_entrypoint_binds_run_and_writes_artifact(tmp_path, monkeypatch) -> None:
+def test_readiness_entrypoint_rejects_fake_provider(tmp_path, monkeypatch) -> None:
     module = _module()
     monkeypatch.setitem(sys.modules, "provider_shim", SimpleNamespace(request=lambda _payload: {
         "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3, "usd": 0.01},
@@ -68,11 +68,8 @@ def test_readiness_entrypoint_binds_run_and_writes_artifact(tmp_path, monkeypatc
     }.items():
         monkeypatch.setenv(key, value)
 
-    assert module.main() == 0
-    artifact = json.loads((tmp_path / "run_artifact.json").read_text())
-    assert artifact["run_id"] == "smoke-veriplanpt-model"
-    assert artifact["usage"]["total_usd"] == 0.03
-    assert artifact["run_context"]["stage"] == "canary_smoke"
+    with pytest.raises(module.RuntimeBoundaryError, match="test-only"):
+        module.main()
 
 
 def test_unsupported_stage_fails_closed_before_reading_invocation(monkeypatch) -> None:

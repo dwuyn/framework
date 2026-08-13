@@ -95,7 +95,10 @@ def build_canary_smoke_plan(
 
     def identity(*, kind: str, label: str, framework: str = "") -> dict[str, Any]:
         profile = next(profile for profile in profiles if profile.logical_label == label)
-        production_semantics = bool(source_snapshot_hash and gateway_relay_lock_hash)
+        production_semantics = bool(
+            source_snapshot_hash and gateway_relay_lock_hash
+            and max_input_tokens == 4096 and max_output_tokens == 2048
+        )
         cell_calls = 1 if kind == "vertex_canary" and production_semantics else max_llm_calls
         cost = (
             worst_case_cost_usd(profile, max_input_tokens=max_input_tokens,
@@ -154,8 +157,8 @@ def build_canary_smoke_plan(
         except ValueError as exc:
             raise ValueError("runtime readiness epoch must be ISO-8601") from exc
         plan["epoch"] = epoch
-    if (max_input_tokens, max_output_tokens, max_llm_calls) == (4096, 2048, 40):
-        plan["runtime_contract"] = "veriplanpt-runtime-v0.4.0-r10"
+    if (max_input_tokens, max_output_tokens) == (4096, 2048):
+        plan["runtime_contract"] = "veriplanpt-runtime-v0.4.0-r10.3"
     plan["plan_hash"] = _canonical_hash(plan)
     if strict:
         validate_canary_smoke_plan(plan, profiles=profiles, strict=True)
@@ -191,11 +194,11 @@ def validate_canary_smoke_plan(
     if len({str(cell.get("run_id", "")) for cell in cells}) != 18:
         raise ValueError("canary smoke run IDs must be unique")
     if strict:
-        if plan.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10":
+        if plan.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10.3":
             from src.pipeline.runtime_contract import validate_runtime_profile
             for profile in profiles:
                 validate_runtime_profile(profile, strict=True, r10=True)
-        if plan.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10" and any(
+        if plan.get("runtime_contract") == "veriplanpt-runtime-v0.4.0-r10.3" and any(
             int(cell.get(key, 0)) != expected
             for cell in cells
             for key, expected in (("max_input_tokens", 4096), ("max_output_tokens", 2048))
@@ -238,10 +241,14 @@ def validate_canary_smoke_plan(
                 or int(cell["max_llm_calls"]) <= 0
             ):
                 raise ValueError("strict canary smoke cell token/call caps must be positive")
-            production_semantics = str(plan.get("schema_version")) == "1.2.0"
+            production_semantics = (
+                str(plan.get("runtime_contract")) == "veriplanpt-runtime-v0.4.0-r10.3"
+            )
             expected_calls = int(cell["max_llm_calls"])
             if production_semantics:
-                expected_calls = 1 if cell.get("kind") == "vertex_canary" else 40
+                # r10.3 readiness is deliberately one-response-per-cell;
+                # paid sweep/benchmark budgets are separate stage plans.
+                expected_calls = 1
             if int(cell["max_llm_calls"]) != expected_calls:
                 raise ValueError("strict readiness canary/smoke call cap is invalid")
             policy = cell["retry_policy"]

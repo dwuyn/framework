@@ -49,7 +49,7 @@ def _invocation(framework: str) -> dict[str, object]:
 
 
 @pytest.mark.parametrize("framework", ["VeriPlanPT", "PentestAgent", "PentestGPT", "VulnBot", "HackSynth"])
-def test_paid_adapter_uses_same_fake_provider_path(tmp_path, monkeypatch, framework: str) -> None:
+def test_paid_adapter_rejects_fake_provider_path(tmp_path, monkeypatch, framework: str) -> None:
     module = _module()
     calls: list[dict[str, object]] = []
 
@@ -78,12 +78,9 @@ def test_paid_adapter_uses_same_fake_provider_path(tmp_path, monkeypatch, framew
     output = tmp_path / framework
     output.mkdir()
 
-    assert module.main() == 0
-    artifact = json.loads((output / "run_artifact.json").read_text(encoding="utf-8"))
-    assert artifact["framework_identity"]["adapter_version"] == "adapter-3.0"
-    assert [item["event"]["phase"] for item in artifact["transcript"]] == ["recon", "planning", "execution"]
-    assert len(calls) == 3
-    assert artifact["run_context"]["target_runtime_lock_hash"] == "9" * 64
+    with pytest.raises(module.RuntimeBoundaryError, match="test-only"):
+        module.main()
+    assert calls == []
 
 
 def test_production_canary_probe_emits_controlled_run_artifact(tmp_path, monkeypatch) -> None:

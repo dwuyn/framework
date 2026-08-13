@@ -91,7 +91,7 @@ def test_runtime_runner_canary_then_smoke_and_observed_usage(tmp_path: Path, mon
         evaluator_hash="e" * 64, oracle_hash="f" * 64, image_digests=images,
         gateway_relay_lock_hash=relay_hash, target_runtime_lock_hash="1" * 64,
         source_snapshot_hash="3" * 64, max_input_tokens=10, max_output_tokens=5,
-        max_llm_calls=40, retry_policy={"max_attempts": 1}, strict=True,
+        max_llm_calls=1, retry_policy={"max_attempts": 1}, strict=True,
     )
     lock = {
         "schema_version": "1.0.0", "uid_policy": "host_euid_nonroot",

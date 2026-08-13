@@ -74,13 +74,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--feature-schema-hash", required=True)
     parser.add_argument("--max-input-tokens", type=int, default=4096)
     parser.add_argument("--max-output-tokens", type=int, default=2048)
-    parser.add_argument("--max-llm-calls", type=int, default=40)
+    parser.add_argument("--max-llm-calls", type=int, default=1)
     parser.add_argument("--source-snapshot-hash", required=True)
     parser.add_argument("--reservation-ceiling-usd", type=float, required=True)
     args = parser.parse_args(argv)
 
-    if (args.max_input_tokens, args.max_output_tokens, args.max_llm_calls) != (4096, 2048, 40):
-        raise SystemExit("r10 runtime contract pins max_input_tokens=4096, max_output_tokens=2048, max_llm_calls=40")
+    if (args.max_input_tokens, args.max_output_tokens, args.max_llm_calls) != (4096, 2048, 1):
+        raise SystemExit("r10.3 runtime contract pins max_input_tokens=4096, max_output_tokens=2048, max_llm_calls=1")
 
     import re
     if not re.fullmatch(r"[0-9a-f]{40}", args.evaluator_commit):
@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     dataset_commit = _git_commit(dataset_root)
     protocol = {
         "schema_version": "3.1.0", "dataset_repository_commit": dataset_commit,
-        "runtime_contract": "veriplanpt-runtime-v0.4.0-r10",
+        "runtime_contract": "veriplanpt-runtime-v0.4.0-r10.3",
         "dataset_lock_hash": dataset_hash, "framework_commit": framework_state["commit"],
         "evaluator_commit": args.evaluator_commit, "evaluator_bundle_hash": args.evaluator_bundle_hash,
         "oracle_bundle_hash": args.oracle_bundle_hash, "evaluator_image_digest": args.evaluator_image_digest,

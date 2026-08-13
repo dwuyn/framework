@@ -13,6 +13,9 @@ from typing import Any, Iterator, Mapping
 SCHEMA = "veriplanpt-cve-source-snapshot-1.0"
 INDEX_NAME = "source-snapshot.sqlite3"
 RAW_ARCHIVE = "raw/cves.zip"
+CANONICAL_INDEX_SHA256 = "31421ea39ed809a34e3bdbfeda5fa34b26ff5ed194247309c60f015b710811bd"
+CANONICAL_RECORD_COUNT = 542975
+CANONICAL_CVE_COUNT = 354521
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -258,8 +261,9 @@ def validate_source_snapshot(
             "source": "CVE List V5",
             "upstream_release": "cve_2026-08-01_0000Z",
             "upstream_asset_sha256": "700234c38e2e4158a320f6fd9c7aeecbe5dc5510fbfb34bc4195d1f012c263cc",
-            "cve_count": 354521,
-            "record_count": 542975,
+            "index_sha256": CANONICAL_INDEX_SHA256,
+            "cve_count": CANONICAL_CVE_COUNT,
+            "record_count": CANONICAL_RECORD_COUNT,
         }
         for key, value in expected_official.items():
             if manifest.get(key) != value:

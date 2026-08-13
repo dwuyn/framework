@@ -140,6 +140,13 @@ class AppConfig:
 
     def get_role_llm(self, role: str, override: str = ""):
         """Instantiate the configured LLM for an active-pipeline role."""
+        if os.environ.get("VERIPLANPT_GATEWAY_LIVE", "").lower() == "true":
+            # Production containers have no provider credentials. Bind the
+            # real graph role to the adapter's relay-backed client surface.
+            sys.path.insert(0, _ROOT)
+            from utils.llm_factory import GatewayLLM  # noqa: PLC0415
+
+            return GatewayLLM({"model": override or self.role_model(role)})
         if override:
             profiles = self._data.get("vertex_profiles", {})
             if override in profiles:

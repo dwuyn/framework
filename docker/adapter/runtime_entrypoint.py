@@ -232,10 +232,30 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
         if driver_input.exists():
             driver_input.unlink()
         return events, [], responses, "infrastructure_failure"
+    evidence_path = output / "driver-evidence.json"
+    if not evidence_path.is_file() or evidence_path.is_symlink():
+        raise RuntimeBoundaryError("actual driver did not emit driver-evidence.json")
+    evidence = _object(json.loads(evidence_path.read_text(encoding="utf-8")), "driver evidence")
+    if int(evidence.get("provider_response_count", -1)) < 0:
+        raise RuntimeBoundaryError("driver evidence provider response count is invalid")
+    if not str(evidence.get("public_task_hash", "")) or not str(evidence.get("generated_config_hash", "")):
+        raise RuntimeBoundaryError("driver evidence is missing public-task/config hashes")
+    events.append({
+        "role": framework,
+        "event": {
+            "event_type": "driver_evidence",
+            "mode": str(evidence.get("mode", "")),
+            "provider_response_count": int(evidence["provider_response_count"]),
+            "public_task_hash": str(evidence["public_task_hash"]),
+            "generated_config_hash": str(evidence["generated_config_hash"]),
+            "outcome": str(evidence.get("outcome", "")),
+        },
+    })
     proof = [{
         "kind": "framework_execution",
         "framework": framework,
         "phases": list(phases),
+        "driver_evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }]
     if driver_input.exists():
@@ -347,7 +367,10 @@ def main() -> int:
     if not output.is_dir() or output.is_symlink():
         raise RuntimeBoundaryError("runtime output directory is not a real mounted directory")
     invocation = _load_public_invocation()
-    fake = os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true"
+    if os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true":
+        raise RuntimeBoundaryError(
+            "VERIPLANPT_FAKE_PROVIDER is test-only and is not accepted by r10.3 production certification"
+        )
     if stage == "canary_smoke" or os.environ.get("VERIPLANPT_ADAPTER_PRODUCTION", "") == "true":
         if str(invocation.get("condition")) == "vertex_canary":
             events, proof, responses, termination = _run_canary(invocation)
@@ -374,7 +397,7 @@ def main() -> int:
         # controlled-probe artifact for that path instead of treating the
         # missing driver artifact as a post-response failure.
         is_vertex_canary = str(invocation.get("condition")) == "vertex_canary"
-        if not fake and termination == "completed" and not is_vertex_canary:
+        if termination == "completed" and not is_vertex_canary:
             if candidate.is_file() and not candidate.is_symlink():
                 artifact = _object(json.loads(candidate.read_text(encoding="utf-8")), "production RunArtifact")
                 if artifact.get("schema_version") != "2.1.0" or artifact.get("run_id") != invocation["run_id"]:
@@ -408,7 +431,7 @@ def main() -> int:
     else:
         raise RuntimeBoundaryError("paid stage requires VERIPLANPT_ADAPTER_PRODUCTION=true")
     destination = output / "run_artifact.json"
-    if destination.exists() and (os.environ.get("VERIPLANPT_FAKE_PROVIDER", "").lower() == "true" or not destination.is_file() or destination.is_symlink()):
+    if destination.exists() and (not destination.is_file() or destination.is_symlink()):
         raise RuntimeBoundaryError("refusing to overwrite an existing RunArtifact")
     if not destination.exists():
         destination.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")

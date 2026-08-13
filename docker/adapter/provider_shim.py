@@ -8,9 +8,11 @@ provider used by contract smokes.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -78,6 +80,13 @@ def request(payload: dict[str, object]) -> dict[str, object]:
         raise ProviderShimError(f"provider gateway request failed: {type(exc).__name__}") from exc
     if not isinstance(value, dict):
         raise ProviderShimError("provider gateway response must be a JSON object")
+    evidence_root = Path(os.environ.get("VERIPLANPT_OUTPUT_DIR", os.environ.get("VERIPLANPT_RUN_DIR", ".")))
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    with evidence_root.joinpath("provider-calls.jsonl").open("a", encoding="utf-8") as evidence:
+        evidence.write(json.dumps({
+            "request_sha256": hashlib.sha256(body).hexdigest(),
+            "response_sha256": str(value.get("response_hash", "")),
+        }, sort_keys=True) + "\n")
     return value
 
 

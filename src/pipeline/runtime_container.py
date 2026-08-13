@@ -123,9 +123,12 @@ class ReadinessContainerExecutor:
             "VERIPLANPT_DATASET_LOCK_HASH": str(cell["dataset_lock_hash"]),
             "VERIPLANPT_EVALUATOR_COMMIT": self.evaluator_commit,
             "VERIPLANPT_TRAINING_PROTOCOL_HASH": self.training_protocol_hash,
+            "VERIPLANPT_MAX_LLM_CALLS": str(cell.get("max_llm_calls", 1)),
             "VERIPLANPT_REPOSITORY_URL": str(identity["repository_url"]),
             "VERIPLANPT_FRAMEWORK_COMMIT": str(identity["commit"]),
-            "PENTEST_SOURCE_SNAPSHOT": self.source_snapshot_root,
+            # The host path is only a Docker bind source. Code inside the
+            # container must use the stable container-side contract.
+            "PENTEST_SOURCE_SNAPSHOT": "/run/veriplanpt/source-snapshot",
             "PENTEST_SOURCE_SNAPSHOT_HASH": str(cell.get("source_snapshot_hash") or self.source_snapshot_hash),
         })
         if str(cell["kind"]) == "vertex_canary":
