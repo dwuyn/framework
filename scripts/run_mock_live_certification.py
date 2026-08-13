@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-EPOCH = ROOT.parent / "veriplanpt-epoch-r10.3-r27-20260813T060000Z"
+EPOCH = ROOT.parent / "veriplanpt-epoch-r10.3-r27-20260813T073000Z"
 OUTPUT = EPOCH / "mock-live-certification"
 SNAPSHOT = ROOT.parent / "veriplanpt-cve-source-snapshot-20260812T182421Z-recovered"
 PUBLIC_TASK = ROOT.parent / "veriplanpt-runtime-staging-20260807T123503Z/contract-smoke/public-task.json"
@@ -129,7 +129,7 @@ def main() -> int:
                     "condition": "mock_live", "task": public_task,
                     "provenance": {
                         "dataset_lock_hash": DATASET_LOCK_HASH, "protocol_hash": _sha(EPOCH / "envelopes-r10.3-r27.json"),
-                        "framework_commit": "1562dabebfb48f05941ec582c16902274aaec396" if framework == "VeriPlanPT" else "unknown",
+                        "framework_commit": str(_json(NATIVE_IDENTITY)["source"]["commit"]) if framework == "VeriPlanPT" else "unknown",
                         "framework_image_digest": image_map[framework], "framework_repository_url": "https://example.invalid/veriplanpt",
                         "evaluator_commit": EVALUATOR_COMMIT, "target_runtime_lock_hash": target_lock_hash,
                         "source_snapshot_hash": SOURCE_SNAPSHOT_HASH,
@@ -145,7 +145,7 @@ def main() -> int:
                     "VERIPLANPT_PROVIDER_TOKEN_EXPIRES_AT": (datetime.now(UTC) + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
                     "VERIPLANPT_GATEWAY_LIVE": "true", "VERIPLANPT_PROVIDER_URL": "http://gateway-relay:8080/v1/generate",
                     "VERIPLANPT_PROVIDER_BASE_URL": "http://gateway-relay:8080/v1", "OPENAI_BASEURL": "http://gateway-relay:8080/v1",
-                    "OPENAI_API_KEY": "local-relay", "VERIPLANPT_FRAMEWORK_NAME": framework,
+                    "OPENAI_API_KEY": token, "VERIPLANPT_FRAMEWORK_NAME": framework,
                     "VERIPLANPT_STAGE": "canary_smoke", "VERIPLANPT_ADAPTER_PRODUCTION": "true",
                     "VERIPLANPT_MAX_LLM_CALLS": "1", "VERIPLANPT_MAX_RUNTIME_SECONDS": "120",
                     "VERIPLANPT_RUN_DIR": "/run/veriplanpt/output", "VERIPLANPT_OUTPUT_DIR": "/run/veriplanpt/output",
