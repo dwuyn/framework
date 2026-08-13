@@ -116,6 +116,12 @@ def _adapter_bundle(spec: Mapping[str, Any]) -> tuple[dict[str, str], str]:
             or spec.get("runtime_adapter")
             or ""
         ),
+        "client_driver": str(
+            bundle.get("client_driver")
+            or spec.get("client_driver_path")
+            or spec.get("client_driver")
+            or ""
+        ),
     }
     missing = [role for role, value in paths.items() if not value]
     if missing:

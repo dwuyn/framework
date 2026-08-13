@@ -220,6 +220,14 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(f"Docker labels do not match receipt-scoped metadata for {name}")
         if name == "PentestAgent" and labels.get("com.veriplanpt.os-package-lock-hash") != os_package_hash:
             raise RuntimeError("Docker label does not match the PentestAgent OS package lock")
+        expected_labels = {
+            "com.veriplanpt.adapter-bundle-hash": adapter_hash,
+            "com.veriplanpt.dependency-lock-hash": dependency_hash,
+            "com.veriplanpt.recipe-hash": recipe_hash,
+        }
+        for label_name, expected_value in expected_labels.items():
+            if labels.get(label_name) != expected_value:
+                raise RuntimeError(f"Docker label {label_name} does not match staged inputs for {name}")
         if name == "PentestAgent":
             expected = " ".join(f"{package}={version}" for package, version in os_package_versions)
             contract = (

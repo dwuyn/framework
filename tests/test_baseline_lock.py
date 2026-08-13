@@ -16,6 +16,7 @@ def _git_repo(tmp_path):
     (root / "framework.py").write_text("framework\n")
     (root / "wrapper.py").write_text("wrapper\n")
     (root / "runtime.py").write_text("runtime\n")
+    (root / "client_driver.py").write_text("client driver\n")
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(
@@ -40,6 +41,7 @@ def _specs(root):
                 "framework": str(root / "framework.py"),
                 "wrapper": str(root / "wrapper.py"),
                 "runtime": str(root / "runtime.py"),
+                "client_driver": str(root / "client_driver.py"),
                 "contract_version": "adapter-3.0",
             },
         }
@@ -70,7 +72,7 @@ def test_git_tree_hash_ignores_ignored_cache_and_bundle_hash_is_complete(tmp_pat
 
 def test_adapter_bundle_hash_changes_with_contract_version(tmp_path):
     paths = {}
-    for role in ("common", "framework", "wrapper", "runtime"):
+    for role in ("common", "framework", "wrapper", "runtime", "client_driver"):
         path = tmp_path / f"{role}.py"
         path.write_text(role)
         paths[role] = str(path)
