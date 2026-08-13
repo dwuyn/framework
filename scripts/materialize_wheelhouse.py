@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 PACKAGE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*)==([^\s\\]+)")
+DIRECT = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]*)\s+@\s+(\S+)")
 HASH = re.compile(r"--hash=sha256:([0-9a-f]{64})")
 
 
@@ -21,21 +22,28 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _requirements(lock: Path) -> list[tuple[str, str, set[str]]]:
-    records: list[tuple[str, str, set[str]]] = []
-    current: tuple[str, str, set[str]] | None = None
+def _requirements(lock: Path) -> list[tuple[str, str, set[str], str]]:
+    records: list[tuple[str, str, set[str], str]] = []
+    current: tuple[str, str, set[str], str] | None = None
     for line in lock.read_text(encoding="utf-8").splitlines():
         match = PACKAGE.match(line)
         if match:
             if current is not None:
                 records.append(current)
-            current = (match.group(1), match.group(2), set(HASH.findall(line)))
+            current = (match.group(1), match.group(2), set(HASH.findall(line)), "")
+            continue
+        direct = DIRECT.match(line)
+        if direct:
+            if current is not None:
+                records.append(current)
+            filename = direct.group(2).split("#", 1)[0].rsplit("/", 1)[-1]
+            current = (direct.group(1), filename, set(HASH.findall(line)), filename)
             continue
         if current is not None:
             current[2].update(HASH.findall(line))
     if current is not None:
         records.append(current)
-    if not records or any(not hashes for _, _, hashes in records):
+    if not records or any(not hashes for _, _, hashes, _filename in records):
         raise ValueError("lock contains a package without SHA-256 hashes")
     return records
 
@@ -61,7 +69,7 @@ def main() -> int:
         if path.is_file() and not path.is_symlink()
     ]
     copied: list[str] = []
-    for name, version, hashes in _requirements(lock):
+    for name, version, hashes, filename_hint in _requirements(lock):
         normalized_name = re.sub(r"[-_.]+", "-", name).lower()
         normalized_version = re.sub(r"[-_.]+", "-", version.lower())
         matches = {
@@ -71,6 +79,11 @@ def main() -> int:
             )
             and _sha256(path) in hashes
         }
+        if filename_hint:
+            matches = {
+                (path.name, _sha256(path)): path for path in files
+                if path.name == filename_hint and _sha256(path) in hashes
+            }
         if len(matches) != 1:
             raise SystemExit(
                 f"cache does not contain exactly one hash-verified artifact for {name}=={version}: "
