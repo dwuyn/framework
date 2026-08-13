@@ -23,13 +23,13 @@ from src.pipeline.baseline_lock import _adapter_bundle_hash, generate_baseline_l
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGES = {
-    "PentestAgent": "veriplanpt/pentestagent:r10.4-r29",
-    "PentestGPT": "veriplanpt/pentestgpt:r10.4-r29",
-    "VulnBot": "veriplanpt/vulnbot:r10.4-r29",
-    "HackSynth": "veriplanpt/hacksynth:r10.4-r29",
-    "VeriPlanPT": "veriplanpt/veriplanpt:r10.4",
+    "PentestAgent": "veriplanpt/pentestagent:locked",
+    "PentestGPT": "veriplanpt/pentestgpt:locked",
+    "VulnBot": "veriplanpt/vulnbot:locked",
+    "HackSynth": "veriplanpt/hacksynth:locked",
+    "VeriPlanPT": "veriplanpt/veriplanpt:locked",
 }
-RELAY_IMAGE = "veriplanpt/gateway-relay:r10.4-r29"
+RELAY_IMAGE = "veriplanpt/gateway-relay:locked"
 
 
 def _sha(path: Path) -> str:
