@@ -52,14 +52,23 @@ def _inspect(image: str) -> tuple[str, dict[str, str]]:
 
 
 def _build(command: list[str], image: str) -> None:
-    """Build one image, accepting a legacy-daemon client timeout only after inspect."""
+    """Build one image, accepting timeout only after the image ID changes."""
+    before = subprocess.run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+        capture_output=True, text=True, check=False,
+    )
+    previous_id = before.stdout.strip() if before.returncode == 0 else ""
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=180)
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=900)
     except subprocess.TimeoutExpired:
         # The legacy Docker builder can commit/tag the image and leave the
-        # client waiting for a final stream flush.  A tagged image is accepted
-        # only after the immutable inspect below succeeds.
-        if subprocess.run(["docker", "image", "inspect", image], check=False).returncode == 0:
+        # client waiting for a final stream flush. A pre-existing tag is never
+        # accepted as evidence of this build.
+        after = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+            capture_output=True, text=True, check=False,
+        )
+        if after.returncode == 0 and after.stdout.strip() != previous_id:
             return
         raise RuntimeError(f"Docker build timed out before producing {image}") from None
     if result.returncode:
