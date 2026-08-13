@@ -43,18 +43,23 @@ def _requirements(lock: Path) -> list[tuple[str, str, set[str]]]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--lock", required=True)
-    parser.add_argument("--source", required=True)
+    parser.add_argument("--source", action="append", required=True)
     parser.add_argument("--destination", required=True)
     args = parser.parse_args()
     lock = Path(args.lock).resolve()
-    source = Path(args.source).resolve()
+    sources = [Path(value).resolve() for value in args.source]
     destination = Path(args.destination).resolve()
-    if not source.is_dir():
-        raise SystemExit(f"package cache is missing: {source}")
+    for source in sources:
+        if not source.is_dir():
+            raise SystemExit(f"package cache is missing: {source}")
     if destination.exists() and any(destination.iterdir()):
         raise SystemExit(f"refusing to overwrite wheelhouse: {destination}")
     destination.mkdir(parents=True, exist_ok=True)
-    files = [path for path in source.iterdir() if path.is_file() and not path.is_symlink()]
+    files = [
+        path for source in sources
+        for path in source.iterdir()
+        if path.is_file() and not path.is_symlink()
+    ]
     copied: list[str] = []
     for name, version, hashes in _requirements(lock):
         normalized_name = re.sub(r"[-_.]+", "-", name).lower()
