@@ -54,6 +54,14 @@ def main() -> int:
     images["VeriPlanPT"] = args.veriplanpt_image
     run_root = Path(args.run_root) if args.run_root else Path(tempfile.mkdtemp(prefix="veriplanpt-contract-"))
     run_root.mkdir(parents=True, exist_ok=True)
+    # The image entrypoint creates these paths below the bind mount before it
+    # can run the probe.  Pre-create them with the non-root runtime UID's
+    # required write permission; the parent mount itself may remain read-only
+    # to that UID.
+    for name in ("home", "xdg-cache", "xdg-config", "tmp"):
+        runtime_path = run_root / name
+        runtime_path.mkdir(exist_ok=True)
+        runtime_path.chmod(0o777)
     task = run_root / "public-task.json"
     profile = run_root / "model-profile.json"
     task.write_text(json.dumps({
