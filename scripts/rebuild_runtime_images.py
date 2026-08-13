@@ -51,6 +51,22 @@ def _inspect(image: str) -> tuple[str, dict[str, str]]:
     return digest, {str(key): str(item) for key, item in labels.items()}
 
 
+def _build(command: list[str], image: str) -> None:
+    """Build one image, accepting a legacy-daemon client timeout only after inspect."""
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=180)
+    except subprocess.TimeoutExpired:
+        # The legacy Docker builder can commit/tag the image and leave the
+        # client waiting for a final stream flush.  A tagged image is accepted
+        # only after the immutable inspect below succeeds.
+        if subprocess.run(["docker", "image", "inspect", image], check=False).returncode == 0:
+            return
+        raise RuntimeError(f"Docker build timed out before producing {image}") from None
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip()[-4000:]
+        raise RuntimeError(f"Docker build failed for {image}: {detail}")
+
+
 def _context_manifest(staging_root: Path, metadata_path: Path) -> tuple[dict[str, Any], str]:
     manifest_path = staging_root / "baseline-build-contexts/context-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -172,6 +188,7 @@ def main(argv: list[str] | None = None) -> int:
             "framework": next(context.joinpath("adapter").glob("framework-*.py")),
             "wrapper": context / "adapter/wrapper-wrapper.py",
             "runtime": context / "adapter/runtime_entrypoint.py",
+            "client_driver": context / "adapter/baseline_client_driver.py",
         }
         adapter_hash = _adapter_bundle_hash({key: str(path) for key, path in adapter_paths.items()}, "adapter-3.0")
         _lock_path, dependency_hash = _dependency_lock(context_record, envelope)
@@ -195,10 +212,7 @@ def main(argv: list[str] | None = None) -> int:
             check=False,
         )
         if not (args.skip_existing and existing.returncode == 0):
-            result = subprocess.run(command, capture_output=True, text=True, check=False)
-            if result.returncode:
-                detail = (result.stderr or result.stdout).strip()[-4000:]
-                raise RuntimeError(f"Docker build failed for {name}: {detail}")
+            _build(command, image)
         digest, labels = _inspect(image)
         commit_label = labels.get("com.veriplanpt.upstream-commit")
         tree_label = labels.get("com.veriplanpt.git-tree-hash")
@@ -251,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
                 "os_package_requirements": envelope.get("os_package_requirements", []),
                 "adapter_bundle": {"common": str(adapter_paths["common"]), "framework": str(adapter_paths["framework"]),
                                    "wrapper": str(adapter_paths["wrapper"]), "runtime": str(adapter_paths["runtime"]),
+                                   "client_driver": str(adapter_paths["client_driver"]),
                                    "contract_version": "adapter-3.0"},
             })
     relay_context = Path(str(contexts["gateway-relay"]["path"])).resolve()
@@ -272,9 +287,7 @@ def main(argv: list[str] | None = None) -> int:
         check=False,
     )
     if not (args.skip_existing and relay_existing.returncode == 0):
-        relay_result = subprocess.run(relay_build, capture_output=True, text=True, check=False)
-        if relay_result.returncode:
-            raise RuntimeError(f"Docker build failed for gateway relay: {(relay_result.stderr or relay_result.stdout).strip()[-4000:]}")
+        _build(relay_build, RELAY_IMAGE)
     relay_digest, _relay_labels = _inspect(RELAY_IMAGE)
     relay_lock_path = Path(args.output_relay_lock or (staging_root / "gateway-relay.lock.json"))
     relay_lock_path.parent.mkdir(parents=True, exist_ok=True)
