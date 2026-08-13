@@ -144,6 +144,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-baseline-lock", required=True)
     parser.add_argument("--output-native-identity", required=True)
     parser.add_argument("--output-relay-lock", default="")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="reuse an already-tagged successor image after revalidating its labels",
+    )
     args = parser.parse_args(argv)
     staging_root = Path(args.staging_root).resolve()
     if shutil.disk_usage(staging_root).free < 50 * 1024 ** 3:
@@ -183,10 +188,17 @@ def main(argv: list[str] | None = None) -> int:
         for key, value in sorted(args_for_build.items()):
             command.extend(["--build-arg", f"{key}={value}"])
         command.append(str(context))
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-        if result.returncode:
-            detail = (result.stderr or result.stdout).strip()[-4000:]
-            raise RuntimeError(f"Docker build failed for {name}: {detail}")
+        existing = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if not (args.skip_existing and existing.returncode == 0):
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            if result.returncode:
+                detail = (result.stderr or result.stdout).strip()[-4000:]
+                raise RuntimeError(f"Docker build failed for {name}: {detail}")
         digest, labels = _inspect(image)
         commit_label = labels.get("com.veriplanpt.upstream-commit")
         tree_label = labels.get("com.veriplanpt.git-tree-hash")
@@ -253,9 +265,16 @@ def main(argv: list[str] | None = None) -> int:
         "--build-arg", f"RECIPE_HASH={relay_recipe_hash}",
         "--build-arg", f"SOURCE_HASH={relay_source_hash}", str(relay_context),
     ]
-    relay_result = subprocess.run(relay_build, capture_output=True, text=True, check=False)
-    if relay_result.returncode:
-        raise RuntimeError(f"Docker build failed for gateway relay: {(relay_result.stderr or relay_result.stdout).strip()[-4000:]}")
+    relay_existing = subprocess.run(
+        ["docker", "image", "inspect", RELAY_IMAGE],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if not (args.skip_existing and relay_existing.returncode == 0):
+        relay_result = subprocess.run(relay_build, capture_output=True, text=True, check=False)
+        if relay_result.returncode:
+            raise RuntimeError(f"Docker build failed for gateway relay: {(relay_result.stderr or relay_result.stdout).strip()[-4000:]}")
     relay_digest, _relay_labels = _inspect(RELAY_IMAGE)
     relay_lock_path = Path(args.output_relay_lock or (staging_root / "gateway-relay.lock.json"))
     relay_lock_path.parent.mkdir(parents=True, exist_ok=True)

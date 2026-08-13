@@ -31,6 +31,10 @@ def _prompt(invocation: Mapping[str, Any]) -> str:
 
 def _call(framework: str, prompt: str) -> str:
     if framework == "PentestAgent":
+        # The upstream model manager reads OpenAI's standard base-url
+        # environment variable.  Keep the actual LangChain/OpenAI client on
+        # the locked relay rather than allowing its default public endpoint.
+        os.environ["OPENAI_BASE_URL"] = os.environ["OPENAI_BASEURL"]
         from utils.model_manager import get_model  # type: ignore[import-not-found]
 
         model = get_model("openai")
@@ -39,11 +43,15 @@ def _call(framework: str, prompt: str) -> str:
         result = model.invoke(prompt)
         return str(getattr(result, "content", result))
     if framework == "PentestGPT":
-        from pentestgpt.config.chat_config import GPT4O  # type: ignore[import-not-found]
+        from pentestgpt.config.chat_config import ChatGPTConfig  # type: ignore[import-not-found]
         from pentestgpt.utils.APIs.chatgpt_api import ChatGPTAPI  # type: ignore[import-not-found]
 
-        config = GPT4O()
+        # Use PentestGPT's public API client class directly; do not enter its
+        # interactive main loop or depend on browser-cookie authentication.
+        config = ChatGPTConfig()
         config.api_base = os.environ["OPENAI_BASEURL"]
+        config.openai_key = os.environ["OPENAI_API_KEY"]
+        config.cookie = "local-relay"
         config.log_dir = os.environ["VERIPLANPT_RUN_DIR"]
         client = ChatGPTAPI(config)
         return str(client.send_new_message(prompt)[0])
@@ -56,6 +64,20 @@ def _call(framework: str, prompt: str) -> str:
         if version("openai") != "1.53.0":
             raise RuntimeError("HackSynth requires openai==1.53.0")
     if framework in {"VulnBot", "HackSynth"}:
+        if framework == "HackSynth":
+            # openai==1.53.0 passes the removed ``proxies`` keyword to
+            # httpx==0.28.1.  This adapter-only compatibility seam preserves
+            # both pinned dependencies while still using the real SDK.
+            import httpx
+
+            original_init = httpx.Client.__init__
+
+            def compatible_init(self: Any, *args: Any, **kwargs: Any) -> None:
+                if "proxies" in kwargs and "proxy" not in kwargs:
+                    kwargs["proxy"] = kwargs.pop("proxies")
+                original_init(self, *args, **kwargs)
+
+            httpx.Client.__init__ = compatible_init  # type: ignore[method-assign]
         from openai import OpenAI
 
         result = OpenAI(
