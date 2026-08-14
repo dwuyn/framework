@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 
 import pytest
 
@@ -13,7 +16,7 @@ from src.pipeline.runtime_readiness import (
     build_canary_smoke_plan,
     validate_canary_smoke_plan,
 )
-from src.pipeline.vertex_gateway import GatewayError, VertexGateway
+from src.pipeline.vertex_gateway import GatewayError, VertexGateway, gateway_handler
 from src.pipeline.vertex_runtime import GEMMA_ENDPOINT_URL, InvocationResult
 
 
@@ -137,3 +140,54 @@ def test_r30_gateway_rejects_missing_call_index_before_provider() -> None:
             "run_id": "run-1", "model_label": profile.logical_label,
             "profile_hash": profile.profile_hash, "contents": "probe", "epoch": "epoch",
         }, token="token")
+
+
+def test_r10_6_openai_chat_boundary_binds_signed_identity() -> None:
+    profile = next(item for item in _profiles() if item.logical_label == "gemini-3.5-flash")
+
+    class FakeGemini:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def invoke(self, selected: ModelProfile, _contents: object) -> InvocationResult:
+            self.calls += 1
+            return InvocationResult(
+                text="ok", usage=NormalizedUsage(input_tokens=1, output_tokens=1, total_tokens=2, usd=0.01),
+                response_hash="d" * 64, model_id=selected.logical_label,
+                resource_revision=selected.resource_revision,
+            )
+
+    provider = FakeGemini()
+    ledger = InvocationLedger(phase="smoke", gateway_relay_lock_hash="a" * 64, epoch="epoch")
+    gateway = VertexGateway(
+        profiles=[profile], allowed_run_ids={"run-1"}, token="phase-token",
+        gemini=provider, gemma=object(), invocation_ledger=ledger,
+        max_llm_calls_by_run={"run-1": 1}, epoch="epoch",
+        max_input_tokens_by_run={"run-1": 4096}, max_output_tokens_by_run={"run-1": 2048},
+        require_signed_plan=True,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), gateway_handler(gateway))
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    connection.request(
+        "POST", "/v1/chat/completions",
+        body=json.dumps({
+            "model": profile.logical_label,
+            "messages": [{"role": "user", "content": "probe"}],
+            "max_tokens": 2048,
+        }),
+        headers={
+            "Authorization": f"Bearer phase-token~run-1~{profile.profile_hash}",
+            "Content-Type": "application/json",
+        },
+    )
+    response = connection.getresponse()
+    body = json.loads(response.read())
+    thread.join(timeout=5)
+    server.server_close()
+
+    assert response.status == 200
+    assert body["choices"][0]["message"]["content"] == "ok"
+    assert provider.calls == 1
+    assert ledger.snapshot()[0]["call_index"] == 0

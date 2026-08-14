@@ -510,6 +510,15 @@ def gateway_handler(gateway: VertexGateway) -> type[BaseHTTPRequestHandler]:
                     binding = gateway.token_context(token)
                     for key, bound in binding.items():
                         value.setdefault(key, bound)
+                    # Actual OpenAI-compatible baseline clients only send
+                    # model/messages.  The signed readiness plan still
+                    # requires the durable invocation identity, so bind the
+                    # first (and only) response slot from the cell token at
+                    # this boundary.  This keeps the client request to one
+                    # raw HTTP call without weakening the signed-plan gate.
+                    if gateway.require_signed_plan:
+                        value.setdefault("epoch", gateway.epoch)
+                        value.setdefault("call_index", 0)
                     messages = value.get("messages")
                     if not isinstance(messages, list):
                         raise GatewayError("chat completions requires messages")
