@@ -20,6 +20,12 @@ from urllib.request import Request, urlopen
 class ProviderShimError(RuntimeError):
     """Raised when a request cannot be routed through the controlled gateway."""
 
+    def __init__(self, message: str, *, failure_id: str = "", retryable: bool = False) -> None:
+        super().__init__(message)
+        self.failure_id = failure_id
+        self.retryable = retryable
+        self.model_response_received = False
+
 
 _CALL_INDEX = 0
 
@@ -73,14 +79,38 @@ def request(payload: dict[str, object]) -> dict[str, object]:
     token = os.environ.get("VERIPLANPT_PROVIDER_TOKEN", "")
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    evidence_root = Path(os.environ.get("VERIPLANPT_OUTPUT_DIR", os.environ.get("VERIPLANPT_RUN_DIR", ".")))
     try:
         with urlopen(Request(_gateway_url(), data=body, headers=headers, method="POST"), timeout=30) as response:
             value = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except HTTPError as exc:
+        failure: dict[str, object] = {}
+        try:
+            decoded = json.loads(exc.read().decode("utf-8"))
+            if isinstance(decoded, dict):
+                failure = decoded
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+        failure_id = str(failure.get("failure_id", ""))
+        record = {
+            "failure_id": failure_id,
+            "upstream_status": failure.get("upstream_status"),
+            "retryable": bool(failure.get("retryable", False)),
+            "error_body_sha256": str(failure.get("error_body_sha256", "")),
+            "google_request_id": str(failure.get("google_request_id", "")),
+            "model_response_received": False,
+        }
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        with evidence_root.joinpath("provider-failures.jsonl").open("a", encoding="utf-8") as evidence:
+            evidence.write(json.dumps(record, sort_keys=True) + "\n")
+        raise ProviderShimError(
+            f"provider gateway request failed: {type(exc).__name__}",
+            failure_id=failure_id, retryable=bool(failure.get("retryable", False)),
+        ) from exc
+    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise ProviderShimError(f"provider gateway request failed: {type(exc).__name__}") from exc
     if not isinstance(value, dict):
         raise ProviderShimError("provider gateway response must be a JSON object")
-    evidence_root = Path(os.environ.get("VERIPLANPT_OUTPUT_DIR", os.environ.get("VERIPLANPT_RUN_DIR", ".")))
     evidence_root.mkdir(parents=True, exist_ok=True)
     with evidence_root.joinpath("provider-calls.jsonl").open("a", encoding="utf-8") as evidence:
         evidence.write(json.dumps({

@@ -30,7 +30,7 @@ from src.pipeline.runtime_contract import (
     sha256_file,
     validate_gateway_relay_lock,
 )
-from src.pipeline.runtime_readiness import build_canary_smoke_plan
+from src.pipeline.runtime_readiness import R10_6_RUNTIME_CONTRACT, build_canary_smoke_plan
 from src.pipeline.vertex_runtime import ModelResolver, PricingSnapshot
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -229,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         max_llm_calls=args.max_llm_calls,
         epoch=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         retry_policy={"max_attempts": 2, "retryable": ["408", "429", "500", "502", "503", "504"]}, strict=True,
+        runtime_contract=R10_6_RUNTIME_CONTRACT,
     )
     reserved_cost = sum(float(cell["cell_worst_case_cost_usd"]) for cell in plan["cells"])
     if abs(reserved_cost - float(args.reservation_ceiling_usd)) > 1e-12:
@@ -247,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     dataset_commit = _git_commit(dataset_root)
     protocol = {
         "schema_version": "3.1.0", "dataset_repository_commit": dataset_commit,
-        "runtime_contract": "veriplanpt-runtime-v0.4.0-r10.3",
+        "runtime_contract": R10_6_RUNTIME_CONTRACT,
         "dataset_lock_hash": dataset_hash, "framework_commit": framework_state["commit"],
         "evaluator_commit": args.evaluator_commit, "evaluator_bundle_hash": args.evaluator_bundle_hash,
         "oracle_bundle_hash": args.oracle_bundle_hash, "evaluator_image_digest": args.evaluator_image_digest,

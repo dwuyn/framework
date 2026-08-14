@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from src.pipeline.runtime_contract import LOCKED_MODEL_LABELS
-from src.pipeline.vertex_runtime import LOCKED_MODEL_INVOCATIONS
+from src.pipeline.vertex_runtime import (
+    GEMMA_ENDPOINT_URL,
+    LOCKED_MODEL_INVOCATIONS,
+    validate_gemma_endpoint_url,
+)
 
 
 def _hash(value: Mapping[str, Any]) -> str:
@@ -63,8 +67,14 @@ def _gemma_endpoint_snapshot(path: Path, document: Path) -> dict[str, Any]:
     expected_model_id = LOCKED_MODEL_INVOCATIONS["gemma-4-26b-a4b-it"]["model_id"].rsplit("/", 1)[-1]
     if value["model_id"] != expected_model_id:
         raise RuntimeError("Gemma MaaS endpoint snapshot model ID mismatch")
-    if not str(value["endpoint_url"]).startswith("https://") or "googleapis.com" not in str(value["endpoint_url"]):
-        raise RuntimeError("Gemma MaaS endpoint snapshot is not a verified Google endpoint")
+    if value["schema_version"] != "1.1.0":
+        raise RuntimeError("Gemma MaaS endpoint snapshot schema_version must be 1.1.0")
+    try:
+        validate_gemma_endpoint_url(str(value["endpoint_url"]))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if str(value["endpoint_url"]) != GEMMA_ENDPOINT_URL:
+        raise RuntimeError("Gemma MaaS endpoint snapshot endpoint_url is not canonical")
     actual = hashlib.sha256(document.read_bytes()).hexdigest()
     if str(value["source_sha256"]) != actual:
         raise RuntimeError("Gemma MaaS endpoint snapshot does not match raw source document")

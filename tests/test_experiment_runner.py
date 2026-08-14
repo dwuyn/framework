@@ -20,7 +20,7 @@ def test_runner_retries_only_unbilled_infrastructure_failure(tmp_path) -> None:
     runner.register_plan(_plan())
     claimed = runner._claim("worker", 1.0)
     assert claimed is not None
-    runner._finish("run-a", CellResult("infrastructure_failure", billable_model_response=False), "hash-a")
+    runner._finish("run-a", CellResult("infrastructure_failure", billable_model_response=False, retryable=True), "hash-a")
     assert runner.status()["states"] == {"pending": 2}
 
     claimed = runner._claim("worker", 1.0)
@@ -117,7 +117,7 @@ def test_retry_preserves_attempt_artifacts_and_cleanup_evidence(tmp_path, monkey
     assert first is not None
     runner._execute_claim(
         claimed=first,
-        executor=lambda _cell, _path, _labels: CellResult("infrastructure_failure"),
+        executor=lambda _cell, _path, _labels: CellResult("infrastructure_failure", retryable=True),
         labels={"veriplanpt.run_id": "run-a"},
         stage="smoke",
         connection=runner.db,

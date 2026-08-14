@@ -215,7 +215,7 @@ def test_post_response_failure_with_usage_is_known_and_not_retryable(tmp_path) -
     state = ledger.lookup("run-1")
     assert state["billing_status"] == "known"
     assert state["records"][0]["outcome"] == "post_response_failure"
-    assert json.loads((tmp_path / "ledger.json").read_text())["schema_version"] == "1.2.0"
+    assert json.loads((tmp_path / "ledger.json").read_text())["schema_version"] == "1.3.0"
 
 
 def test_post_response_failure_without_usage_is_billing_unknown(tmp_path) -> None:
@@ -233,6 +233,32 @@ def test_post_response_failure_without_usage_is_billing_unknown(tmp_path) -> Non
     assert record["usage"] is None and record["cost_usd"] is None
 
 
+def test_post_response_failure_replays_durably_without_second_model_call(tmp_path, monkeypatch) -> None:
+    class CountingTransport:
+        calls = 0
+
+        def generate(self, **_kwargs):
+            self.calls += 1
+            return {"text": "pong", "usage": {"input_tokens": 1, "output_tokens": 1}}
+
+    profile = _profile("gemini-3.5-flash")
+    ledger = InvocationLedger(
+        phase="canary", gateway_relay_lock_hash="a" * 64,
+        path=tmp_path / "ledger.json", epoch="epoch-1",
+    )
+    transport = CountingTransport()
+    gateway = _gateway(profile, transport, tmp_path, ledger=ledger)
+    request = {**_request(profile), "epoch": "epoch-1", "call_index": 0}
+    def fail_hash(_payload):
+        raise ValueError("post-response hash failure")
+    monkeypatch.setattr("src.pipeline.vertex_runtime.semantic_response_hash", fail_hash)
+    with pytest.raises(ProviderGatewayError):
+        gateway.invoke(request, token="test-token")
+    with pytest.raises(ProviderGatewayError, match="known-billed"):
+        gateway.invoke(request, token="test-token")
+    assert transport.calls == 1
+
+
 def test_pre_response_failure_creates_no_invocation(tmp_path) -> None:
     class Transport:
         def generate(self, **_kwargs):
@@ -244,10 +270,13 @@ def test_pre_response_failure_creates_no_invocation(tmp_path) -> None:
         path=tmp_path / "ledger.json",
     )
     gateway = _gateway(profile, Transport(), tmp_path, ledger=ledger)
-    with pytest.raises(RuntimeError, match="connection"):
+    with pytest.raises(ProviderGatewayError, match="provider request failed before a model response"):
         gateway.invoke(_request(profile), token="test-token")
     assert ledger.lookup("run-1")["billing_status"] == "none"
-    assert not (tmp_path / "ledger.json").exists()
+    persisted = json.loads((tmp_path / "ledger.json").read_text())
+    assert persisted["invocations"] == []
+    assert len(persisted["failure_evidence"]) == 1
+    assert persisted["failure_evidence"][0]["model_response_received"] is False
 
 
 def test_atomic_ledger_persistence_failure_halts_unknown(tmp_path, monkeypatch) -> None:

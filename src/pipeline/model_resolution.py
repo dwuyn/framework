@@ -10,8 +10,10 @@ from typing import Any, Mapping, Sequence
 
 from src.pipeline.framework_adapter import ModelProfile
 from src.pipeline.vertex_runtime import (
+    GEMMA_ENDPOINT_URL,
     LOCKED_MODEL_INVOCATIONS,
     VertexContractError,
+    validate_gemma_endpoint_url,
     validate_resolution_fields,
 )
 
@@ -97,8 +99,12 @@ def validate_resolution_lock(
             if profile.logical_label == "gemma-4-26b-a4b-it":
                 if profile.resource_revision != "001":
                     raise ValueError("Gemma MaaS must be pinned to immutable revision @001")
-                if not profile.endpoint_url.startswith("https://") or "googleapis.com" not in profile.endpoint_url:
-                    raise ValueError("Gemma MaaS endpoint must come from verified metadata")
+                try:
+                    validate_gemma_endpoint_url(profile.endpoint_url)
+                except ValueError as exc:
+                    raise ValueError("Gemma MaaS endpoint must be the canonical verified endpoint") from exc
+                if profile.endpoint_url != GEMMA_ENDPOINT_URL:
+                    raise ValueError("Gemma MaaS endpoint must be canonical")
                 for key in ("endpoint_snapshot", "endpoint_source"):
                     path = root / _relative(entry.get(f"{key}_path"), f"{key}_path")
                     if not path.is_file() or _hash_file(path) != str(entry.get(f"{key}_sha256", "")):

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from src.pipeline.framework_adapter import ModelProfile
+from src.pipeline.vertex_runtime import validate_gemma_endpoint_url
 
 ALIAS_EXCEPTION_SCHEMA = "1.0.0"
 GATEWAY_RELAY_LOCK_SCHEMA = "1.0.0"
@@ -140,8 +141,10 @@ def validate_runtime_profile(
             raise ValueError("Gemma runtime profile must not bill thinking tokens")
         if profile.usage_semantics.get("output_includes_reasoning") != "true":
             raise ValueError("Gemma runtime profile must declare output-only billing")
-        if not profile.endpoint_url.startswith("https://") or "googleapis.com" not in profile.endpoint_url:
-            raise ValueError("Gemma runtime profile requires the metadata-pinned MaaS endpoint")
+        try:
+            validate_gemma_endpoint_url(profile.endpoint_url)
+        except ValueError as exc:
+            raise ValueError("Gemma runtime profile requires the canonical metadata-pinned MaaS endpoint") from exc
     else:
         if profile.resource_revision != "default" or profile.resolution_mode != "provider_alias":
             raise ValueError(f"{profile.logical_label} must use the explicit @default provider alias")

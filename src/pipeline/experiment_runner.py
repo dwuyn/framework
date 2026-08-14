@@ -71,6 +71,8 @@ class CellResult:
     model_response_received: bool = False
     artifact: Mapping[str, Any] | None = None
     strict_artifact: bool = False
+    retryable: bool = False
+    failure_id: str = ""
 
 
 Executor = Callable[[Mapping[str, Any], Path, Mapping[str, str]], CellResult]
@@ -339,7 +341,8 @@ class ExperimentRunner:
             result.status == "infrastructure_failure"
             and not result.billable_model_response
             and not unknown
-            and row["attempts"] < max_attempts
+            and result.retryable
+            and row["attempts"] < min(max_attempts, 2)
         )
         status = "pending" if retry else result.status
         with connection:
@@ -483,18 +486,24 @@ class ExperimentRunner:
                 result = CellResult(
                     "failed", cost_usd=float(known_cost),
                     billable_model_response=True, model_response_received=True,
+                    failure_id=str(getattr(exc, "failure_id", "")),
                 )
             else:
                 result = CellResult(
                     "billing_unknown" if unknown else "infrastructure_failure",
                     billing_unknown=unknown,
                     model_response_received=unknown,
+                    retryable=bool(getattr(exc, "retryable", False)),
+                    failure_id=str(getattr(exc, "failure_id", "")),
                 )
             error = str(exc)[:2000]
             error_path = attempt_dir / "coordinator-error.json"
             error_path.write_text(
                 json.dumps(
-                    {"run_id": run_id, "error": error, "billing_unknown": unknown},
+                    {
+                        "run_id": run_id, "error": error, "billing_unknown": unknown,
+                        "failure_id": result.failure_id, "retryable": result.retryable,
+                    },
                     indent=2,
                     sort_keys=True,
                 )

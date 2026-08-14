@@ -19,6 +19,7 @@ from datetime import date, datetime
 from datetime import time as datetime_time
 from enum import Enum
 from typing import Any, Mapping, Protocol, Sequence
+from urllib.parse import urlsplit
 
 from src.pipeline.framework_adapter import ModelProfile
 from src.pipeline.llm_budget import NormalizedUsage, normalize_usage
@@ -43,6 +44,12 @@ LOCKED_MODEL_INVOCATIONS: dict[str, dict[str, str]] = {
         "location": "global",
     },
 }
+
+GEMMA_ENDPOINT_URL = (
+    "https://aiplatform.googleapis.com/v1/projects/school-projects-501110/"
+    "locations/global/endpoints/openapi"
+)
+RETRYABLE_PROVIDER_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 _NON_PINNED_REVISIONS = {"", "latest", "unknown", "benchmark-pinned"}
 MAX_INPUT_TOKENS = 4096
@@ -76,6 +83,28 @@ class PostResponseFailure(RuntimeError):
         self.billable_model_response = usage is not None
 
 
+def validate_gemma_endpoint_url(endpoint_url: str) -> str:
+    """Require the exact canonical Vertex OpenAI-compatible endpoint base URL."""
+    if endpoint_url != GEMMA_ENDPOINT_URL:
+        raise ValueError(
+            "Gemma MaaS endpoint must be the canonical endpoint base URL without "
+            "an operation suffix, query, or fragment"
+        )
+    parsed = urlsplit(endpoint_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "aiplatform.googleapis.com"
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != "/v1/projects/school-projects-501110/locations/global/endpoints/openapi"
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Gemma MaaS endpoint host, project, location, or path is invalid")
+    return endpoint_url
+
+
 def invoke_with_retry(
     operation: Any, *, max_attempts: int = 2, backoff_seconds: float = 0.0,
     sleep: Any = time.sleep,
@@ -83,6 +112,7 @@ def invoke_with_retry(
     """Retry only transient provider failures; never retry auth failures."""
     if max_attempts < 1:
         raise ValueError("retry policy max_attempts must be positive")
+    max_attempts = min(max_attempts, 2)
     last: BaseException | None = None
     for attempt in range(max_attempts):
         try:
@@ -94,10 +124,9 @@ def invoke_with_retry(
                 status_value = int(status) if status is not None else None
             except (TypeError, ValueError):
                 status_value = None
-            if status_value in {401, 403}:
+            if status_value not in RETRYABLE_PROVIDER_STATUSES:
                 raise
-            transient = status_value in {408, 425, 429, 500, 502, 503, 504} or status_value is None
-            if not transient or attempt + 1 >= max_attempts:
+            if attempt + 1 >= max_attempts:
                 break
             if backoff_seconds > 0:
                 sleep(backoff_seconds * (2 ** attempt))
@@ -477,6 +506,11 @@ class ModelResolver:
             raise VertexContractError(f"model resource_id for {logical_label} is not a full Vertex resource")
         if api_family != expected["api_family"]:
             raise VertexContractError(f"provider surface mismatch for {logical_label}")
+        if logical_label == "gemma-4-26b-a4b-it":
+            try:
+                validate_gemma_endpoint_url(endpoint_url)
+            except ValueError as exc:
+                raise VertexContractError(str(exc)) from exc
         canonical_metadata = {key: value for key, value in metadata.items() if key != "metadata_hash"}
         computed_hash = _canonical_hash(canonical_metadata)
         supplied_hash = str(metadata.get("metadata_hash") or computed_hash)

@@ -10,11 +10,12 @@ from src.pipeline.framework_adapter import BudgetTier, ModelProfile, RunArtifact
 from src.pipeline.readiness_evidence import validate_smoke_evidence
 from src.pipeline.runtime_executor import RuntimeCellResult, execute_runtime_plan
 from src.pipeline.runtime_readiness import build_canary_smoke_plan
+from src.pipeline.vertex_runtime import GEMMA_ENDPOINT_URL
 
 
 def _profile(label: str) -> ModelProfile:
     gemma = label == "gemma-4-26b-a4b-it"
-    return ModelProfile.from_dict({"logical_label": label, "location": "global", "resource_id": f"projects/p/locations/global/publishers/google/models/{label}", "resource_revision": "001" if gemma else "default", "resolution_mode": "immutable" if gemma else "provider_alias", "resolution_evidence_hash": "a" * 64, "resolution_resolved_at": "2026-08-05T00:00:00Z", "endpoint_url": "https://global-aiplatform.googleapis.com/v1" if gemma else "", "pricing": {"input_per_million": 1.0, "cached_input_per_million": .1, "output_per_million": 2.0}, "pricing_effective_at": "2026-08-05T00:00:00Z", "usage_semantics": {"input_includes_cached": "true", "total_formula": "input+output", "output_includes_reasoning": "true"}})
+    return ModelProfile.from_dict({"logical_label": label, "location": "global", "resource_id": f"projects/p/locations/global/publishers/google/models/{label}", "resource_revision": "001" if gemma else "default", "resolution_mode": "immutable" if gemma else "provider_alias", "resolution_evidence_hash": "a" * 64, "resolution_resolved_at": "2026-08-05T00:00:00Z", "endpoint_url": GEMMA_ENDPOINT_URL if gemma else "", "pricing": {"input_per_million": 1.0, "cached_input_per_million": .1, "output_per_million": 2.0}, "pricing_effective_at": "2026-08-05T00:00:00Z", "usage_semantics": {"input_includes_cached": "true", "total_formula": "input+output", "output_includes_reasoning": "true"}})
 
 
 def test_fake_executor_produces_all_runtime_evidence(tmp_path: Path) -> None:

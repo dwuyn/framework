@@ -7,12 +7,14 @@ short-lived gateway token, never Vertex credentials.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import socketserver
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +34,7 @@ from src.pipeline.vertex_runtime import (
     InvocationResult,
     OpenAICompatibleClientTransport,
     PostResponseFailure,
+    validate_gemma_endpoint_url,
 )
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -43,6 +46,44 @@ class GatewayError(ValueError):
 
 class ProviderGatewayError(RuntimeError):
     """A provider or post-response failure that must be returned as HTTP 502."""
+
+    def __init__(
+        self, message: str, *, failure_id: str = "", upstream_status: int | None = None,
+        google_request_id: str = "", error_body_hash: str = "", retryable: bool = False,
+        model_response_received: bool = False, billing_unknown: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.failure_id = failure_id
+        self.upstream_status = upstream_status
+        self.google_request_id = google_request_id
+        self.error_body_hash = error_body_hash
+        self.retryable = retryable
+        self.model_response_received = model_response_received
+        self.billing_unknown = billing_unknown
+
+
+def _provider_failure_details(exc: BaseException) -> tuple[int | None, str, str]:
+    response = getattr(exc, "response", None)
+    status = getattr(exc, "status_code", None)
+    if status is None and response is not None:
+        status = getattr(response, "status_code", None)
+    try:
+        status_value = int(status) if status is not None else None
+    except (TypeError, ValueError):
+        status_value = None
+    headers = getattr(response, "headers", {}) if response is not None else {}
+    request_id = ""
+    if isinstance(headers, Mapping):
+        for name in ("x-goog-request-id", "x-request-id", "request-id"):
+            if headers.get(name):
+                request_id = str(headers[name])
+                break
+    body = getattr(response, "content", b"") if response is not None else b""
+    if isinstance(body, str):
+        body = body.encode("utf-8", errors="replace")
+    elif not isinstance(body, bytes):
+        body = b""
+    return status_value, request_id, hashlib.sha256(body).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -218,6 +259,28 @@ class VertexGateway:
         except PostResponseFailure as exc:
             self._record_post_response_failure(parsed, request, exc)
             raise AssertionError("post-response failure handler must raise")
+        except GatewayError:
+            raise
+        except Exception as exc:
+            status, google_request_id, error_body_hash = _provider_failure_details(exc)
+            failure_id = f"failure-{uuid.uuid4().hex}"
+            retryable = status in {408, 425, 429, 500, 502, 503, 504}
+            if self.invocation_ledger is not None:
+                self.invocation_ledger.record_failure(
+                    failure_id=failure_id, run_id=parsed.run_id,
+                    model_label=parsed.model_label, model_profile_hash=parsed.profile_hash,
+                    request=request, upstream_status=status,
+                    exception_class=type(exc).__name__, google_request_id=google_request_id,
+                    error_body_hash=error_body_hash, retryable=retryable,
+                    epoch=identity_epoch if durable_identity else "",
+                    call_index=parsed.call_index if durable_identity else None,
+                )
+            raise ProviderGatewayError(
+                "provider request failed before a model response",
+                failure_id=failure_id, upstream_status=status,
+                google_request_id=google_request_id, error_body_hash=error_body_hash,
+                retryable=retryable,
+            ) from exc
         if self.invocation_ledger is not None:
             try:
                 self.invocation_ledger.record(
@@ -287,12 +350,14 @@ class VertexGateway:
                 raise BillingUnknownError(
                     "gateway could not durably persist post-response billing state"
                 ) from persist_exc
+        failure_id = f"failure-{uuid.uuid4().hex}"
         if usage is None:
             raise BillingUnknownError(
-                "provider response received but usage/cost is unknown"
+                "provider response received but usage/cost is unknown", failure_id=failure_id,
             ) from exc
         raise ProviderGatewayError(
-            "provider response received, but post-response processing failed"
+            "provider response received, but post-response processing failed",
+            failure_id=failure_id, model_response_received=True,
         ) from exc
 
 
@@ -327,10 +392,12 @@ def build_host_gateway(
     gemma_profiles = [profile for profile in profiles if profile.logical_label == "gemma-4-26b-a4b-it"]
     if len(gemini_profiles) != 2 or len(gemma_profiles) != 1:
         raise GatewayError("host gateway requires exactly two Gemini and one Gemma profile")
-    gemini_client = gemini_client_factory(project, "global")
     gemma_endpoint = gemma_profiles[0].endpoint_url
-    if not gemma_endpoint.startswith("https://") or "googleapis.com" not in gemma_endpoint:
-        raise GatewayError("Gemma endpoint is not a verified Google endpoint")
+    try:
+        validate_gemma_endpoint_url(gemma_endpoint)
+    except ValueError as exc:
+        raise GatewayError(str(exc)) from exc
+    gemini_client = gemini_client_factory(project, "global")
     gemma_client = gemma_client_factory(gemma_endpoint)
     return VertexGateway(
         profiles=profiles,
@@ -470,6 +537,26 @@ def gateway_handler(gateway: VertexGateway) -> type[BaseHTTPRequestHandler]:
                     self._write_json(result.to_dict())
             except (GatewayError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
                 self.send_error(403)
+            except BillingUnknownError as exc:
+                self._write_json(
+                    {
+                        "error": "provider response billing is unknown", "failure_id": exc.failure_id,
+                        "upstream_status": None, "google_request_id": "", "error_body_sha256": "",
+                        "retryable": False, "model_response_received": True, "billing_unknown": True,
+                    }, status=502,
+                )
+            except ProviderGatewayError as exc:
+                self._write_json(
+                    {
+                        "error": "provider request failed", "failure_id": exc.failure_id,
+                        "upstream_status": exc.upstream_status,
+                        "google_request_id": exc.google_request_id,
+                        "error_body_sha256": exc.error_body_hash,
+                        "retryable": exc.retryable,
+                        "model_response_received": exc.model_response_received,
+                        "billing_unknown": exc.billing_unknown,
+                    }, status=502,
+                )
             except Exception:
                 # Provider and post-response failures are deliberately
                 # sanitized at the HTTP boundary. Detailed state remains in

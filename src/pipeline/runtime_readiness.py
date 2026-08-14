@@ -15,12 +15,14 @@ from src.pipeline.protocol import write_json_atomically
 from src.pipeline.readiness_evidence import (
     FRAMEWORKS,
     R10_5_RUNTIME_SCHEMA_VERSION,
+    R10_6_RUNTIME_SCHEMA_VERSION,
     validate_smoke_evidence,
 )
 
 R10_4_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.4"
 R10_5_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.5"
-READINESS_RUNTIME_CONTRACTS = frozenset({R10_4_RUNTIME_CONTRACT, R10_5_RUNTIME_CONTRACT})
+R10_6_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.6"
+READINESS_RUNTIME_CONTRACTS = frozenset({R10_4_RUNTIME_CONTRACT, R10_5_RUNTIME_CONTRACT, R10_6_RUNTIME_CONTRACT})
 READINESS_CONDITION = "not_applicable"
 READINESS_SCOPE = "readiness_transport"
 
@@ -47,10 +49,10 @@ def worst_case_cost_usd(
         max_input_tokens <= 0
         or max_output_tokens <= 0
         or max_llm_calls <= 0
-        or not 1 <= max_attempts <= 3
+        or not 1 <= max_attempts <= 2
     ):
         raise ValueError(
-            "runtime cost requires positive token/call caps and one to three attempts"
+            "runtime cost requires positive token/call caps and one to two attempts"
         )
     per_attempt = (
         max_input_tokens * float(profile.pricing["input_per_million"])
@@ -93,7 +95,7 @@ def build_canary_smoke_plan(
             raise ValueError("strict runtime plan requires all upstream SHA-256 identities")
         if max_input_tokens <= 0 or max_output_tokens <= 0 or max_llm_calls <= 0:
             raise ValueError("strict runtime plan requires positive token/call caps")
-        if not retry_policy or not 1 <= int(retry_policy.get("max_attempts", 0)) <= 3:
+        if not retry_policy or not 1 <= int(retry_policy.get("max_attempts", 0)) <= 2:
             raise ValueError("strict runtime plan requires a retry policy")
         if framework_costs is not None or canary_cost is not None:
             raise ValueError("strict runtime plan derives reservation from pinned pricing and token caps")
@@ -187,8 +189,8 @@ def build_canary_smoke_plan(
     if runtime_contract:
         if runtime_contract not in READINESS_RUNTIME_CONTRACTS:
             raise ValueError("unsupported runtime contract")
-        if runtime_contract == R10_5_RUNTIME_CONTRACT and not epoch:
-            raise ValueError("r10.5 readiness plan requires a UTC epoch")
+        if runtime_contract in {R10_5_RUNTIME_CONTRACT, R10_6_RUNTIME_CONTRACT} and not epoch:
+            raise ValueError("r10.6 readiness plan requires a UTC epoch")
         plan["runtime_contract"] = runtime_contract
         plan["execution_kind_field"] = "execution_kind"
         plan["readiness_condition"] = READINESS_CONDITION
@@ -301,7 +303,7 @@ def validate_canary_smoke_plan(
             if int(cell["max_llm_calls"]) != expected_calls:
                 raise ValueError("strict readiness canary/smoke call cap is invalid")
             policy = cell["retry_policy"]
-            if not isinstance(policy, Mapping) or not 1 <= int(policy.get("max_attempts", 0)) <= 3:
+            if not isinstance(policy, Mapping) or not 1 <= int(policy.get("max_attempts", 0)) <= 2:
                 raise ValueError("strict canary smoke cell retry policy is invalid")
             label = str(cell["model_label"])
             profile = next(profile for profile in profiles if profile.logical_label == label)
@@ -338,7 +340,8 @@ def write_runtime_smoke_evidence(
     production = bool(gateway_relay_lock_hash or runtime_topology_evidence_path or runtime_topology_evidence_hash)
     if production and not all((gateway_relay_lock_hash, runtime_topology_evidence_path, runtime_topology_evidence_hash)):
         raise ValueError("production runtime evidence requires relay lock and topology evidence bindings")
-    r10_5 = any(str(record.get("runtime_contract", "")) == R10_5_RUNTIME_CONTRACT for record in (*canaries, *smokes))
+    r10_5 = any(str(record.get("runtime_contract", "")) in {R10_5_RUNTIME_CONTRACT, R10_6_RUNTIME_CONTRACT} for record in (*canaries, *smokes))
+    r10_6 = any(str(record.get("runtime_contract", "")) == R10_6_RUNTIME_CONTRACT for record in (*canaries, *smokes))
     if production and r10_5:
         response_count = sum(int(record.get("invocation_response_count", -1)) for record in (*canaries, *smokes))
         if response_count < 0:
@@ -346,7 +349,7 @@ def write_runtime_smoke_evidence(
     else:
         response_count = len(canaries) + len(smokes)
     evidence = {
-        "schema_version": R10_5_RUNTIME_SCHEMA_VERSION if production and r10_5 else ("2.2.0" if production else ("2.1.0" if strict else "2.0.0")),
+        "schema_version": R10_6_RUNTIME_SCHEMA_VERSION if production and r10_6 else (R10_5_RUNTIME_SCHEMA_VERSION if production and r10_5 else ("2.2.0" if production else ("2.1.0" if strict else "2.0.0"))),
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "dataset_lock_hash": dataset_lock_hash,
         "dataset_evidence_hash": dataset_evidence_hash,

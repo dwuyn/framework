@@ -17,6 +17,7 @@ from src.pipeline.vertex_gateway import (
     serve_gateway_unix,
 )
 from src.pipeline.vertex_runtime import (
+    GEMMA_ENDPOINT_URL,
     GeminiExecutor,
     GemmaMaaSExecutor,
     ModelResolver,
@@ -58,6 +59,7 @@ def _metadata(label: str) -> dict[str, str]:
         "resource_revision": "v20260805",
         "location": "global",
         "api_family": api_family,
+        **({"endpoint_url": GEMMA_ENDPOINT_URL} if label == "gemma-4-26b-a4b-it" else {}),
     }
 
 
@@ -362,7 +364,7 @@ def test_retry_policy_never_retries_auth_and_bounds_429() -> None:
 
     with pytest.raises(RetryExhausted):
         invoke_with_retry(throttled, max_attempts=3)
-    assert throttled_calls == 3
+    assert throttled_calls == 2
 
 
 def test_usage_rejects_negative_and_inconsistent_provider_counts() -> None:
@@ -415,7 +417,7 @@ def test_host_gateway_uses_pinned_gemma_endpoint() -> None:
     gemma = ModelProfile.from_dict({
         **_profile("gemma-4-26b-a4b-it").to_dict(),
         "resource_revision": "001",
-        "endpoint_url": "https://global-aiplatform.googleapis.com/v1/projects/p",
+        "endpoint_url": GEMMA_ENDPOINT_URL,
     })
     seen: list[tuple[str, ...]] = []
     gateway = build_host_gateway(
@@ -427,7 +429,7 @@ def test_host_gateway_uses_pinned_gemma_endpoint() -> None:
     assert isinstance(gateway, VertexGateway)
     assert seen == [
         ("gemini", "project", "global"),
-        ("gemma", "https://global-aiplatform.googleapis.com/v1/projects/p"),
+        ("gemma", GEMMA_ENDPOINT_URL),
     ]
 
 

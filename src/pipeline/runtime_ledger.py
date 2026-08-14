@@ -18,6 +18,11 @@ class BillingUnknownError(RuntimeError):
     billing_unknown = True
     model_response_received = True
 
+    def __init__(self, message: str, *, failure_id: str = "") -> None:
+        super().__init__(message)
+        self.failure_id = failure_id
+        self.retryable = False
+
 
 class BillableInvocationError(RuntimeError):
     """A known-billed invocation failed after the provider response."""
@@ -48,7 +53,7 @@ def _hash(value: Any) -> str:
 class InvocationLedger:
     """Capture response state and atomically persist it before gateway return."""
 
-    CURRENT_SCHEMA = "1.2.0"
+    CURRENT_SCHEMA = "1.3.0"
     _PHASES = {"canary", "smoke", "sweep", "confirmation", "benchmark"}
 
     def __init__(
@@ -67,6 +72,7 @@ class InvocationLedger:
         self.path = Path(path).resolve() if path is not None else None
         self._lock = threading.RLock()
         self._records: list[dict[str, Any]] = []
+        self._failures: list[dict[str, Any]] = []
 
     @classmethod
     def from_file(cls, path: str | Path) -> "InvocationLedger":
@@ -75,7 +81,7 @@ class InvocationLedger:
         if not isinstance(value, Mapping):
             raise ValueError("invocation ledger must be a JSON object")
         schema = str(value.get("schema_version", ""))
-        if schema not in {"1.0.0", "1.1.0", cls.CURRENT_SCHEMA}:
+        if schema not in {"1.0.0", "1.1.0", "1.2.0", cls.CURRENT_SCHEMA}:
             raise ValueError("unsupported invocation ledger schema")
         phase = str(value.get("phase", ""))
         lock_hash = str(value.get("gateway_relay_lock_hash", ""))
@@ -97,6 +103,15 @@ class InvocationLedger:
                 record.setdefault("model_response_received", True)
             ledger._validate_record(record)
             ledger._records.append(record)
+        failures = value.get("failure_evidence", [])
+        if not isinstance(failures, list):
+            raise ValueError("invocation ledger failure_evidence must be an array")
+        for raw in failures:
+            if not isinstance(raw, Mapping):
+                raise ValueError("invocation failure evidence record must be an object")
+            record = dict(raw)
+            ledger._validate_failure(record)
+            ledger._failures.append(record)
         return ledger
 
     read = from_file
@@ -132,6 +147,28 @@ class InvocationLedger:
         elif record.get("cost_usd") is not None or record.get("usage") is not None:
             raise ValueError("unknown billing cannot carry partial cost evidence")
 
+    @staticmethod
+    def _validate_failure(record: Mapping[str, Any]) -> None:
+        required = {
+            "failure_id", "run_id", "model_label", "model_profile_hash", "request_sha256",
+            "upstream_status", "exception_class", "google_request_id", "error_body_sha256",
+            "retryable", "model_response_received",
+        }
+        if not required.issubset(record):
+            raise ValueError("pre-response failure evidence is incomplete")
+        for name in ("failure_id", "run_id", "model_label", "exception_class"):
+            if not str(record[name]).strip():
+                raise ValueError(f"pre-response failure evidence {name} is required")
+        for name in ("model_profile_hash", "request_sha256", "error_body_sha256"):
+            value = str(record[name])
+            if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+                raise ValueError(f"pre-response failure evidence {name} must be SHA-256")
+        status = record["upstream_status"]
+        if status is not None and (not isinstance(status, int) or not 100 <= status <= 599):
+            raise ValueError("pre-response failure upstream_status is invalid")
+        if not isinstance(record["retryable"], bool) or record["model_response_received"] is not False:
+            raise ValueError("pre-response failure response/retry flags are invalid")
+
     def _value(self) -> dict[str, Any]:
         return {
             "schema_version": self.CURRENT_SCHEMA,
@@ -139,6 +176,7 @@ class InvocationLedger:
             "epoch": self.epoch,
             "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
             "invocations": [dict(record) for record in self._records],
+            "failure_evidence": [dict(record) for record in self._failures],
         }
 
     def _write_locked(self, destination: Path) -> Path:
@@ -242,6 +280,53 @@ class InvocationLedger:
                 raise
         return dict(record)
 
+    def record_failure(
+        self,
+        *,
+        failure_id: str,
+        run_id: str,
+        model_label: str,
+        model_profile_hash: str,
+        request: Any,
+        upstream_status: int | None,
+        exception_class: str,
+        google_request_id: str = "",
+        error_body_hash: str,
+        retryable: bool,
+        epoch: str = "",
+        call_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Append redacted pre-response evidence without retaining request/body data."""
+        record: dict[str, Any] = {
+            "failure_id": str(failure_id),
+            "run_id": str(run_id),
+            "model_label": str(model_label),
+            "model_profile_hash": str(model_profile_hash),
+            "request_sha256": _hash(request),
+            "upstream_status": upstream_status,
+            "exception_class": str(exception_class),
+            "google_request_id": str(google_request_id),
+            "error_body_sha256": str(error_body_hash),
+            "retryable": bool(retryable),
+            "model_response_received": False,
+            "phase": self.phase,
+            "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
+        }
+        identity_epoch = str(epoch or self.epoch)
+        if identity_epoch:
+            record["epoch"] = identity_epoch
+        if call_index is not None:
+            if int(call_index) < 0:
+                raise ValueError("failure call_index cannot be negative")
+            record["call_index"] = int(call_index)
+        self._validate_failure(record)
+        with self._lock:
+            self._failures.append(record)
+            if self.path is not None:
+                self._write_locked(self.path)
+        return dict(record)
+
     def replay_or_conflict(
         self, *, epoch: str, run_id: str, call_index: int, request: Any,
         model_profile_hash: str,
@@ -285,6 +370,10 @@ class InvocationLedger:
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
             return [dict(record) for record in self._records]
+
+    def failure_snapshot(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(record) for record in self._failures]
 
     def lookup(self, run_id: str) -> dict[str, Any]:
         rows = [row for row in self.snapshot() if row["run_id"] == run_id]

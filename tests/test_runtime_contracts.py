@@ -16,7 +16,7 @@ from src.pipeline.runtime_contract import (
 from src.pipeline.runtime_ledger import InvocationLedger
 from src.pipeline.runtime_readiness import build_canary_smoke_plan, validate_canary_smoke_plan
 from src.pipeline.vertex_gateway import GatewayError, VertexGateway
-from src.pipeline.vertex_runtime import InvocationResult
+from src.pipeline.vertex_runtime import GEMMA_ENDPOINT_URL, InvocationResult
 
 
 def _profile(label: str) -> ModelProfile:
@@ -29,7 +29,7 @@ def _profile(label: str) -> ModelProfile:
         "resolution_mode": "immutable" if gemma else "provider_alias",
         "resolution_evidence_hash": "a" * 64,
         "resolution_resolved_at": "2026-08-05T00:00:00Z",
-        "endpoint_url": "https://global-aiplatform.googleapis.com/v1" if gemma else "",
+        "endpoint_url": GEMMA_ENDPOINT_URL if gemma else "",
         "pricing": {"input_per_million": 1.0, "cached_input_per_million": 0.5, "output_per_million": 2.0},
         "pricing_effective_at": "2026-08-05T00:00:00Z",
         "generation_parameters": {"temperature": 0.0},
