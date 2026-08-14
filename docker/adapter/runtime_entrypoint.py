@@ -40,7 +40,7 @@ def _redact(value: str) -> str:
 
 def _driver_diagnostics(
     *, command: tuple[str, ...], returncode: int, stdout: str = "", stderr: str = "",
-    error_class: str = "",
+    error_class: str = "", failure_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": "1.0.0",
@@ -51,7 +51,25 @@ def _driver_diagnostics(
         "stderr": _redact(stderr)[-8192:],
         "stdout_sha256": hashlib.sha256(stdout.encode("utf-8", errors="replace")).hexdigest(),
         "stderr_sha256": hashlib.sha256(stderr.encode("utf-8", errors="replace")).hexdigest(),
+        "failure_ids": list(failure_ids or []),
     }
+
+
+def _provider_failure_ids(output: Path) -> list[str]:
+    """Read only failure IDs from shim evidence; never copy provider bodies."""
+    path = output / "provider-failures.jsonl"
+    if not path.is_file() or path.is_symlink():
+        return []
+    found: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            value = json.loads(line)
+        except (UnicodeError, json.JSONDecodeError):
+            continue
+        failure_id = str(value.get("failure_id", "")) if isinstance(value, Mapping) else ""
+        if failure_id.startswith("failure-") and failure_id not in found:
+            found.append(failure_id)
+    return found
 
 
 def _required_env(name: str) -> str:
@@ -205,6 +223,7 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
         diagnostics = _driver_diagnostics(
             command=command, returncode=completed.returncode,
             stdout=completed.stdout, stderr=completed.stderr,
+            failure_ids=_provider_failure_ids(output),
         )
     except subprocess.TimeoutExpired as exc:
         diagnostics = _driver_diagnostics(
@@ -228,6 +247,7 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
             "error_class": diagnostics["error_class"],
             "stdout_sha256": diagnostics["stdout_sha256"],
             "stderr_sha256": diagnostics["stderr_sha256"],
+            "failure_ids": list(diagnostics.get("failure_ids", [])),
         },
     })
     if completed is None or completed.returncode != 0:
@@ -258,7 +278,7 @@ def _run_adapter(invocation: Mapping[str, Any]) -> tuple[list[dict[str, Any]], l
         "framework": framework,
         "phases": list(phases),
         "driver_evidence_sha256": hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
-        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "elapsed_seconds": round(float(time.monotonic() - started), 3),  # type: ignore[arg-type]
     }]
     if driver_input.exists():
         driver_input.unlink()
@@ -442,6 +462,17 @@ def main() -> int:
                 artifact["valid"] = False
     else:
         raise RuntimeBoundaryError("paid stage requires VERIPLANPT_ADAPTER_PRODUCTION=true")
+    failure_ids = sorted({
+        failure_id
+        for item in events
+        if isinstance(item, Mapping)
+        for failure_id in (
+            item.get("event", {}).get("failure_ids", [])
+            if isinstance(item.get("event"), Mapping) else []
+        )
+        if isinstance(failure_id, str) and failure_id.startswith("failure-")
+    })
+    artifact["failure_ids"] = failure_ids
     destination = output / "run_artifact.json"
     if destination.exists() and (not destination.is_file() or destination.is_symlink()):
         raise RuntimeBoundaryError("refusing to overwrite an existing RunArtifact")

@@ -29,20 +29,63 @@ def _prompt(invocation: Mapping[str, Any]) -> str:
     }, sort_keys=True)
 
 
+def _force_no_sdk_retries() -> None:
+    """Install adapter-local zero-retry constructors for baseline SDKs."""
+    import openai
+
+    openai_constructor = getattr(openai, "OpenAI")
+    if not getattr(openai_constructor, "_veriplanpt_no_retry", False):
+        class NoRetryOpenAI(openai_constructor):  # type: ignore[misc,valid-type]
+            _veriplanpt_no_retry = True
+
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                kwargs["max_retries"] = 0
+                super().__init__(*args, **kwargs)
+
+        setattr(openai, "OpenAI", NoRetryOpenAI)
+    try:
+        import langchain_openai
+
+        chat_constructor = getattr(langchain_openai, "ChatOpenAI")
+        if not getattr(chat_constructor, "_veriplanpt_no_retry", False):
+            class NoRetryChatOpenAI(chat_constructor):  # type: ignore[misc,valid-type]
+                _veriplanpt_no_retry = True
+
+                def __init__(self, *args: Any, **kwargs: Any) -> None:
+                    kwargs["max_retries"] = 0
+                    super().__init__(*args, **kwargs)
+
+            setattr(langchain_openai, "ChatOpenAI", NoRetryChatOpenAI)
+    except (ImportError, AttributeError):
+        pass
+
+
+def _assert_no_sdk_retries(model: Any) -> None:
+    """Verify both LangChain clients are pinned to zero retries."""
+    for name in ("client", "async_client"):
+        client = getattr(model, name, None)
+        if client is not None and getattr(client, "max_retries", 0) != 0:
+            raise RuntimeError(f"{name} max_retries must be zero")
+
+
 def _call(framework: str, prompt: str) -> str:
     if framework == "PentestAgent":
         # The upstream model manager reads OpenAI's standard base-url
         # environment variable.  Keep the actual LangChain/OpenAI client on
         # the locked relay rather than allowing its default public endpoint.
+        _force_no_sdk_retries()
         os.environ["OPENAI_BASE_URL"] = os.environ["OPENAI_BASEURL"]
         from utils.model_manager import get_model  # type: ignore[import-not-found]
 
         model = get_model("openai")
         if model is None:
             raise RuntimeError("PentestAgent model manager returned no model")
+        _assert_no_sdk_retries(model)
         result = model.invoke(prompt)
         return str(getattr(result, "content", result))
     if framework == "PentestGPT":
+        _force_no_sdk_retries()
+        os.environ["CHATGPT_COOKIE"] = "local-relay"
         from pentestgpt.config.chat_config import ChatGPTConfig  # type: ignore[import-not-found]
         from pentestgpt.utils.APIs.chatgpt_api import ChatGPTAPI  # type: ignore[import-not-found]
 
@@ -54,6 +97,7 @@ def _call(framework: str, prompt: str) -> str:
         config.cookie = "local-relay"
         config.log_dir = os.environ["VERIPLANPT_RUN_DIR"]
         client = ChatGPTAPI(config)
+        _assert_no_sdk_retries(client)
         return str(client.send_new_message(prompt)[0])
     if framework == "VulnBot":
         import paramiko  # type: ignore[import-not-found]  # noqa: F401
@@ -83,6 +127,7 @@ def _call(framework: str, prompt: str) -> str:
         result = OpenAI(
             api_key=os.environ["OPENAI_API_KEY"],
             base_url=os.environ["OPENAI_BASEURL"],
+            max_retries=0,
         ).chat.completions.create(
             model=os.environ["VERIPLANPT_MODEL_LABEL"],
             messages=[{"role": "user", "content": prompt}],

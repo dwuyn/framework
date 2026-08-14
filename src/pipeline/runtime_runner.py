@@ -166,13 +166,13 @@ class RuntimeRunner:
         if result.billing_status != "known":
             raise RuntimeHalt("billing unknown halted runtime")
         if str(self.plan.get("runtime_contract")) in {
-            "veriplanpt-runtime-v0.4.0-r10.5", "veriplanpt-runtime-v0.4.0-r10.6",
+            "veriplanpt-runtime-v0.4.0-r10.5", "veriplanpt-runtime-v0.4.0-r10.6", "veriplanpt-runtime-v0.4.0-r10.7",
         }:
             observed_rows = [
                 row for row in ledger.snapshot() if row.get("run_id") == str(cell["run_id"])
             ]
             if len(observed_rows) != 1 or int(observed_rows[0].get("call_index", -1)) != 0:
-                raise RuntimeHalt("r10.6 readiness requires exactly one ledger response at call_index=0")
+                raise RuntimeHalt("r10.7 readiness requires exactly one ledger response at call_index=0")
         if result.cleanup.get("success") is not True:
             raise RuntimeHalt("cell cleanup failed")
         resources = result.cleanup.get("resources", {})
@@ -364,6 +364,17 @@ class RuntimeRunner:
                 ledger_rows = [
                     row for row in ledger.snapshot() if row.get("run_id") == str(cell["run_id"])
                 ]
+                counters = ledger.counter_snapshot(
+                    str(cell["run_id"]), epoch=str(self.plan.get("epoch", "")),
+                )
+                if str(self.plan.get("runtime_contract", "")) == "veriplanpt-runtime-v0.4.0-r10.7" and counters != {
+                    "gateway_request_count": 1,
+                    "provider_attempt_count": 1,
+                    "provider_response_count": 1,
+                }:
+                    raise RuntimeHalt(
+                        f"r10.7 readiness cell {cell['run_id']} has invalid gateway counters: {counters}"
+                    )
                 record = {
                     **dict(cell), "status": "passed", "plan_hash": self.plan["plan_hash"],
                     "resource_id": next(p for p in self.profiles if p.logical_label == cell["model_label"]).resource_id,
@@ -380,6 +391,7 @@ class RuntimeRunner:
                     "invocation_call_indices": [int(row["call_index"]) for row in ledger_rows if "call_index" in row],
                     "invocation_replay_count": sum(int(row.get("replay_count", 0)) for row in ledger_rows),
                     "invocation_response_count": len(ledger_rows),
+                    **counters,
                     "smoke_id": str(cell["run_id"]) if phase == "smoke" else "",
                 }
                 evidence_names: tuple[str, ...] = ("event_ledger", "proof", "usage", "cost", "evaluator", "cleanup")

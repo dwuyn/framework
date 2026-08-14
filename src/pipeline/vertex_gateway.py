@@ -246,6 +246,16 @@ class VertexGateway:
             )
             if used >= limit:
                 raise GatewayError("gateway max_llm_calls exceeded before provider call")
+        if self.invocation_ledger is not None:
+            # This is the durable admission point for the provider attempt.
+            # It is intentionally before the SDK/transport call so a local
+            # validation failure cannot be mistaken for an unused call slot.
+            self.invocation_ledger.record_attempt_started(
+                run_id=parsed.run_id, model_label=parsed.model_label,
+                request=request, model_profile_hash=parsed.profile_hash,
+                epoch=identity_epoch if durable_identity else "",
+                call_index=parsed.call_index if durable_identity else None,
+            )
         try:
             if profile.logical_label.startswith("gemini-"):
                 result = self.gemini.invoke(profile, parsed.contents)
@@ -526,8 +536,16 @@ def gateway_handler(gateway: VertexGateway) -> type[BaseHTTPRequestHandler]:
                     value["contents"] = messages
                     stream = value.get("stream") is True
                 result = gateway.invoke(value, token=token)
+                counters = (
+                    gateway.invocation_ledger.counter_snapshot(
+                        str(value.get("run_id", "")),
+                        epoch=str(value.get("epoch", "")),
+                    )
+                    if gateway.invocation_ledger is not None else {}
+                )
                 if self.path == "/v1/chat/completions":
                     response = self._openai_result(result)
+                    response.update(counters)
                     if stream:
                         self.send_response(200)
                         self.send_header("Content-Type", "text/event-stream")
@@ -543,7 +561,9 @@ def gateway_handler(gateway: VertexGateway) -> type[BaseHTTPRequestHandler]:
                     else:
                         self._write_json(response)
                 else:
-                    self._write_json(result.to_dict())
+                    response = result.to_dict()
+                    response.update(counters)
+                    self._write_json(response)
             except (GatewayError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
                 self.send_error(403)
             except BillingUnknownError as exc:

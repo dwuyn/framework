@@ -34,7 +34,7 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _run(args: list[str], *, input_bytes: bytes | None = None, timeout: int = 180) -> subprocess.CompletedProcess[str]:
+def _run(args: list[str], *, input_bytes: bytes | None = None, timeout: int = 180) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(args, input=input_bytes, capture_output=True, text=False, timeout=timeout, check=False)
 
 

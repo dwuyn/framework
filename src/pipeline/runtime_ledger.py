@@ -73,6 +73,7 @@ class InvocationLedger:
         self._lock = threading.RLock()
         self._records: list[dict[str, Any]] = []
         self._failures: list[dict[str, Any]] = []
+        self._attempts: list[dict[str, Any]] = []
 
     @classmethod
     def from_file(cls, path: str | Path) -> "InvocationLedger":
@@ -81,7 +82,7 @@ class InvocationLedger:
         if not isinstance(value, Mapping):
             raise ValueError("invocation ledger must be a JSON object")
         schema = str(value.get("schema_version", ""))
-        if schema not in {"1.0.0", "1.1.0", "1.2.0", cls.CURRENT_SCHEMA}:
+        if schema not in {"1.0.0", "1.1.0", "1.2.0", "1.3.0", cls.CURRENT_SCHEMA}:
             raise ValueError("unsupported invocation ledger schema")
         phase = str(value.get("phase", ""))
         lock_hash = str(value.get("gateway_relay_lock_hash", ""))
@@ -103,6 +104,15 @@ class InvocationLedger:
                 record.setdefault("model_response_received", True)
             ledger._validate_record(record)
             ledger._records.append(record)
+        attempts = value.get("attempts", [])
+        if not isinstance(attempts, list):
+            raise ValueError("invocation ledger attempts must be an array")
+        for raw in attempts:
+            if not isinstance(raw, Mapping):
+                raise ValueError("invocation ledger attempt must be an object")
+            record = dict(raw)
+            ledger._validate_attempt(record)
+            ledger._attempts.append(record)
         failures = value.get("failure_evidence", [])
         if not isinstance(failures, list):
             raise ValueError("invocation ledger failure_evidence must be an array")
@@ -169,12 +179,33 @@ class InvocationLedger:
         if not isinstance(record["retryable"], bool) or record["model_response_received"] is not False:
             raise ValueError("pre-response failure response/retry flags are invalid")
 
+    @staticmethod
+    def _validate_attempt(record: Mapping[str, Any]) -> None:
+        required = {
+            "event_type", "run_id", "model_label", "model_profile_hash",
+            "request_sha256", "gateway_request_count", "provider_attempt_count",
+            "provider_response_count", "observed_at",
+        }
+        if not required.issubset(record) or record.get("event_type") != "attempt_started":
+            raise ValueError("invocation attempt_started evidence is incomplete")
+        for name in ("run_id", "model_label", "model_profile_hash", "request_sha256"):
+            if not str(record.get(name, "")).strip():
+                raise ValueError(f"invocation attempt {name} is required")
+        for name in ("model_profile_hash", "request_sha256"):
+            value = str(record[name])
+            if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+                raise ValueError(f"invocation attempt {name} must be SHA-256")
+        for name in ("gateway_request_count", "provider_attempt_count", "provider_response_count"):
+            if not isinstance(record[name], int) or int(record[name]) < 0:
+                raise ValueError(f"invocation attempt {name} is invalid")
+
     def _value(self) -> dict[str, Any]:
         return {
             "schema_version": self.CURRENT_SCHEMA,
             "phase": self.phase,
             "epoch": self.epoch,
             "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
+            "attempts": [dict(record) for record in self._attempts],
             "invocations": [dict(record) for record in self._records],
             "failure_evidence": [dict(record) for record in self._failures],
         }
@@ -197,6 +228,80 @@ class InvocationLedger:
                 pass
             raise
         return destination
+
+    def counter_snapshot(self, run_id: str, *, epoch: str = "") -> dict[str, int]:
+        """Return durable gateway/attempt/response counters for one cell."""
+        with self._lock:
+            attempts = [
+                row for row in self._attempts
+                if row.get("run_id") == run_id
+                and (not epoch or row.get("epoch") == str(epoch))
+            ]
+            responses = [
+                row for row in self._records
+                if row.get("run_id") == run_id
+                and row.get("model_response_received", True) is not False
+                and (not epoch or row.get("epoch") == str(epoch))
+            ]
+            return {
+                "gateway_request_count": len(attempts),
+                "provider_attempt_count": len(attempts),
+                "provider_response_count": len(responses),
+            }
+
+    def record_attempt_started(
+        self, *, run_id: str, model_label: str, request: Any,
+        model_profile_hash: str, epoch: str = "", call_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Durably append ``attempt_started`` before touching the provider."""
+        if not run_id or not model_label:
+            raise ValueError("invocation attempt requires run ID and model label")
+        if call_index is not None and int(call_index) < 0:
+            raise ValueError("invocation attempt call_index cannot be negative")
+        identity_epoch = str(epoch or self.epoch)
+        with self._lock:
+            current = self.counter_snapshot(run_id, epoch=identity_epoch)
+            record: dict[str, Any] = {
+                "event_type": "attempt_started",
+                "run_id": str(run_id),
+                "model_label": str(model_label),
+                "model_profile_hash": str(model_profile_hash),
+                "request_sha256": _hash(request),
+                "gateway_request_count": current["gateway_request_count"] + 1,
+                "provider_attempt_count": current["provider_attempt_count"] + 1,
+                "provider_response_count": current["provider_response_count"],
+                "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
+            }
+            if identity_epoch:
+                record["epoch"] = identity_epoch
+            if call_index is not None:
+                record["call_index"] = int(call_index)
+            self._validate_attempt(record)
+            self._attempts.append(record)
+            if self.path is not None:
+                try:
+                    self._write_locked(self.path)
+                except Exception as exc:
+                    # The provider has not been touched, but durable billing
+                    # state is already unknowable. Keep a sticky in-memory
+                    # tombstone so callers cannot misclassify this as an
+                    # unused slot or retry it.
+                    self._records.append({
+                        "run_id": str(run_id), "model_label": str(model_label),
+                        "phase": self.phase, "request_sha256": _hash(request),
+                        "response_sha256": None, "usage": None, "cost_usd": None,
+                        "billing_status": "unknown", "outcome": "completed",
+                        "model_response_received": False,
+                        "observed_at": record["observed_at"],
+                        "gateway_relay_lock_hash": self.gateway_relay_lock_hash,
+                        "epoch": identity_epoch,
+                        "call_index": call_index,
+                    })
+                    raise BillingUnknownError(
+                        "gateway could not durably persist attempt_started state"
+                    ) from exc
+            return dict(record)
 
     def record(
         self,
@@ -260,6 +365,9 @@ class InvocationLedger:
             record["model_profile_hash"] = str(model_profile_hash)
         if response is not None:
             record["response"] = response
+        counters = self.counter_snapshot(run_id, epoch=identity_epoch)
+        counters["provider_response_count"] += 1
+        record.update(counters)
         record["replay_count"] = int(replay_count)
         self._validate_record(record)
         with self._lock:
@@ -320,6 +428,7 @@ class InvocationLedger:
             if int(call_index) < 0:
                 raise ValueError("failure call_index cannot be negative")
             record["call_index"] = int(call_index)
+        record.update(self.counter_snapshot(run_id, epoch=identity_epoch))
         self._validate_failure(record)
         with self._lock:
             self._failures.append(record)
@@ -361,11 +470,22 @@ class InvocationLedger:
             return dict(row)
 
     def provider_call_count(self, run_id: str, *, epoch: str = "") -> int:
-        """Count provider responses in one run/epoch, excluding replays."""
-        return sum(
-            1 for row in self.snapshot()
-            if row.get("run_id") == run_id and (not epoch or row.get("epoch") == str(epoch))
-        )
+        """Count provider attempts, including pre-response failures."""
+        with self._lock:
+            attempts = [
+                row for row in self._attempts
+                if row.get("run_id") == run_id
+                and (not epoch or row.get("epoch") == str(epoch))
+            ]
+            if attempts:
+                return len(attempts)
+            # Read compatibility for r10.5/r10.6 ledgers that predate the
+            # durable attempt_started event.
+            return sum(
+                1 for row in self._records
+                if row.get("run_id") == run_id
+                and (not epoch or row.get("epoch") == str(epoch))
+            )
 
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:

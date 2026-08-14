@@ -83,6 +83,43 @@ class PostResponseFailure(RuntimeError):
         self.billable_model_response = usage is not None
 
 
+def normalize_openai_messages_for_gemini(
+    messages: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """Translate text-only OpenAI chat messages to the Gemini content shape.
+
+    Baseline adapters speak the OpenAI-compatible relay protocol.  Gemini's
+    native API does not accept the OpenAI ``content`` field, so this boundary
+    performs the conversion before the SDK is called.  Unsupported tool,
+    multimodal, or unknown message shapes fail closed before any provider
+    request can be made.
+    """
+    contents: list[dict[str, Any]] = []
+    system_parts: list[dict[str, str]] = []
+    for message in messages:
+        if not isinstance(message, Mapping):
+            raise VertexContractError("Gemini chat messages must be objects")
+        role = str(message.get("role", ""))
+        if role not in {"user", "assistant", "system", "developer"}:
+            raise VertexContractError(f"Gemini chat role is unsupported: {role or '<missing>'}")
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise VertexContractError(
+                "Gemini relay accepts text-only OpenAI messages; tools and multimodal content are unsupported"
+            )
+        if role in {"system", "developer"}:
+            system_parts.append({"text": content})
+            continue
+        contents.append({
+            "role": "model" if role == "assistant" else "user",
+            "parts": [{"text": content}],
+        })
+    if not contents:
+        raise VertexContractError("Gemini chat messages require at least one user or assistant message")
+    system_instruction = {"parts": system_parts} if system_parts else None
+    return contents, system_instruction
+
+
 def validate_gemma_endpoint_url(endpoint_url: str) -> str:
     """Require the exact canonical Vertex OpenAI-compatible endpoint base URL."""
     if endpoint_url != GEMMA_ENDPOINT_URL:
@@ -565,9 +602,15 @@ class GoogleGenAITransport:
     def generate(
         self, *, model_id: str, contents: Any, generation_parameters: Mapping[str, Any]
     ) -> Any:
+        config = dict(generation_parameters)
+        if isinstance(contents, list):
+            normalized, system_instruction = normalize_openai_messages_for_gemini(contents)
+            contents = normalized
+            if system_instruction is not None:
+                config["system_instruction"] = system_instruction
         kwargs: dict[str, Any] = {"model": model_id, "contents": contents}
-        if generation_parameters:
-            kwargs["config"] = dict(generation_parameters)
+        if config:
+            kwargs["config"] = config
         return self.client.models.generate_content(**kwargs)
 
 

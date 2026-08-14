@@ -20,6 +20,7 @@ from src.pipeline.vertex_runtime import (
     GEMMA_ENDPOINT_URL,
     GeminiExecutor,
     GemmaMaaSExecutor,
+    GoogleGenAITransport,
     ModelResolver,
     PricingSnapshot,
     RetryExhausted,
@@ -216,6 +217,60 @@ def test_pinned_gemini_profile_sends_r10_generation_contract() -> None:
     })
     result = GeminiExecutor(_PinnedGeminiTransport()).invoke(profile, "ping")
     assert result.text == "pong"
+
+
+@pytest.mark.parametrize("label", ["gemini-3.5-flash", "gemini-3.6-flash"])
+def test_gemini_openai_messages_are_converted_before_google_sdk(label: str) -> None:
+    captured: dict[str, object] = {}
+
+    class Models:
+        def generate_content(self, **kwargs: object) -> dict[str, object]:
+            captured.update(kwargs)
+            contents = kwargs["contents"]
+            assert isinstance(contents, list)
+            assert all("content" not in item for item in contents if isinstance(item, dict))
+            return {"text": "pong", "usage": {"input_tokens": 4, "output_tokens": 2}}
+
+    class Client:
+        models = Models()
+
+    messages = [
+        {"role": "system", "content": "system-first"},
+        {"role": "user", "content": "user-text"},
+        {"role": "assistant", "content": "assistant-text"},
+        {"role": "developer", "content": "developer-second"},
+    ]
+    result = GeminiExecutor(GoogleGenAITransport(Client())).invoke(
+        _profile(label), messages,
+    )
+    assert result.text == "pong"
+    assert captured["contents"] == [
+        {"role": "user", "parts": [{"text": "user-text"}]},
+        {"role": "model", "parts": [{"text": "assistant-text"}]},
+    ]
+    assert captured["config"] == {
+        "system_instruction": {"parts": [{"text": "system-first"}, {"text": "developer-second"}]},
+    }
+
+
+def test_gemini_rejects_multimodal_openai_content_before_provider() -> None:
+    calls = 0
+
+    class Models:
+        def generate_content(self, **_kwargs: object) -> dict[str, object]:
+            nonlocal calls
+            calls += 1
+            return {"text": "unexpected", "usage": {"input_tokens": 1, "output_tokens": 1}}
+
+    class Client:
+        models = Models()
+
+    with pytest.raises(VertexContractError, match="text-only"):
+        GeminiExecutor(GoogleGenAITransport(Client())).invoke(
+            _profile("gemini-3.5-flash"),
+            [{"role": "user", "content": [{"type": "text", "text": "unsupported"}]}],
+        )
+    assert calls == 0
 
 
 def test_gemma_executor_normalizes_openai_response() -> None:

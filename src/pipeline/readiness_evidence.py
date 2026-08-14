@@ -16,9 +16,11 @@ LEGACY_RUNTIME_SCHEMA_VERSION = "2.1.0"
 RUNTIME_SCHEMA_VERSION = "2.2.0"
 R10_5_RUNTIME_SCHEMA_VERSION = "2.3.0"
 R10_6_RUNTIME_SCHEMA_VERSION = "2.4.0"
+R10_7_RUNTIME_SCHEMA_VERSION = "2.5.0"
 R10_4_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.4"
 R10_5_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.5"
 R10_6_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.6"
+R10_7_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.7"
 BASE_CASE_COUNT = 94
 ROBUSTNESS_COUNT = 9
 VERTEX_CANARY_COUNT = 3
@@ -121,8 +123,8 @@ def _runtime_record(
     production: bool = False,
 ) -> None:
     """Verify the complete source-backed v2 runtime cell evidence."""
-    r10_4 = str(record.get("runtime_contract", "")) in {R10_4_RUNTIME_CONTRACT, R10_5_RUNTIME_CONTRACT, R10_6_RUNTIME_CONTRACT} or str(record.get("evaluation_scope", "")) == "readiness_transport"
-    r10_5 = str(record.get("runtime_contract", "")) in {R10_5_RUNTIME_CONTRACT, R10_6_RUNTIME_CONTRACT}
+    r10_4 = str(record.get("runtime_contract", "")) in {R10_4_RUNTIME_CONTRACT, R10_5_RUNTIME_CONTRACT, R10_6_RUNTIME_CONTRACT, R10_7_RUNTIME_CONTRACT} or str(record.get("evaluation_scope", "")) == "readiness_transport"
+    r10_5 = str(record.get("runtime_contract", "")) in {R10_5_RUNTIME_CONTRACT, R10_6_RUNTIME_CONTRACT, R10_7_RUNTIME_CONTRACT}
     required = {
         "status", "run_id", "model_label", "plan_hash", "dataset_lock_hash",
         "baseline_identity_hash", "native_identity_hash", "model_profile_hash",
@@ -330,9 +332,9 @@ def validate_smoke_evidence(
         unexpected_runtime = sorted(set(evidence).difference(required_runtime | strict_runtime_fields | counter_fields))
         if unexpected_runtime:
             raise ValueError(f"runtime smoke evidence has unexpected field(s): {', '.join(unexpected_runtime)}")
-        runtime_strict = evidence["schema_version"] in {LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION, R10_6_RUNTIME_SCHEMA_VERSION}
-        production_runtime = evidence["schema_version"] in {RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION, R10_6_RUNTIME_SCHEMA_VERSION}
-        if evidence["schema_version"] not in {SCHEMA_VERSION, LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION, R10_6_RUNTIME_SCHEMA_VERSION} or not str(evidence["generated_at"]).endswith("Z"):
+        runtime_strict = evidence["schema_version"] in {LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION, R10_6_RUNTIME_SCHEMA_VERSION, R10_7_RUNTIME_SCHEMA_VERSION}
+        production_runtime = evidence["schema_version"] in {RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION, R10_6_RUNTIME_SCHEMA_VERSION, R10_7_RUNTIME_SCHEMA_VERSION}
+        if evidence["schema_version"] not in {SCHEMA_VERSION, LEGACY_RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_VERSION, R10_5_RUNTIME_SCHEMA_VERSION, R10_6_RUNTIME_SCHEMA_VERSION, R10_7_RUNTIME_SCHEMA_VERSION} or not str(evidence["generated_at"]).endswith("Z"):
             raise ValueError("runtime smoke evidence schema or timestamp is invalid")
         if runtime_strict:
             strict_required = {
@@ -423,7 +425,7 @@ def validate_smoke_evidence(
                 _passed(record, name, artifact_root=artifact_root)
         if runtime_pairs != expected_pairs:
             raise ValueError("framework-model smokes must cover exactly every framework/model pair")
-        if evidence["schema_version"] in {R10_5_RUNTIME_SCHEMA_VERSION, R10_6_RUNTIME_SCHEMA_VERSION}:
+        if evidence["schema_version"] in {R10_5_RUNTIME_SCHEMA_VERSION, R10_6_RUNTIME_SCHEMA_VERSION, R10_7_RUNTIME_SCHEMA_VERSION}:
             response_count = sum(int(record.get("invocation_response_count", -1)) for record in (*canary_records, *smoke_records))
             if response_count != 18 or int(evidence.get("paid_provider_responses", -1)) != response_count:
                 raise ValueError("r10.5 readiness response count must be 18 observed ledger responses")
