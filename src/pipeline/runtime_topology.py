@@ -111,7 +111,6 @@ class TopologyLifecycle:
     ) -> None:
         self.root = Path(artifact_root).resolve()
         self.relay_lock = relay_lock
-        self.relay_image = relay_image
         self.relay_lock_hash = str(relay_lock.get("lock_hash", ""))
         self.docker = docker or SubprocessDocker()
         self.host_uid = os.geteuid() if host_uid is None else host_uid
@@ -124,8 +123,14 @@ class TopologyLifecycle:
             if self.source_snapshot_root.is_symlink() or not self.source_snapshot_root.is_dir():
                 raise TopologyError("source snapshot mount must be a real directory")
         validate_gateway_relay_lock(relay_lock, strict=True)
-        if str(relay_lock.get("relay", {}).get("image")) != relay_image:
+        locked_relay = relay_lock.get("relay", {})
+        locked_relay_tag = str(locked_relay.get("image", ""))
+        locked_relay_digest = str(locked_relay.get("image_digest", ""))
+        if relay_image not in {locked_relay_tag, locked_relay_digest}:
             raise TopologyError("runtime relay image does not match the relay lock")
+        # The tag remains descriptive provenance; execution is always pinned
+        # to the digest from the lock, even when legacy callers pass the tag.
+        self.relay_image = locked_relay_digest
         self._active: dict[str, TopologyHandle] = {}
 
     def start(
