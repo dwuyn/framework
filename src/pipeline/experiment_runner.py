@@ -112,8 +112,8 @@ class ExperimentRunner:
     """SQLite-backed, at-most-two-worker coordinator for one approved plan."""
 
     def __init__(self, *, artifact_root: str | Path, workers: int = 2) -> None:
-        if workers < 1 or workers > 2:
-            raise ValueError("workers must be between 1 and 2")
+        if workers < 1 or workers > 4:
+            raise ValueError("workers must be between 1 and 4")
         self.root = Path(artifact_root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.runs_root = self.root / "runs"

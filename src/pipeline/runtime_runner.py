@@ -166,7 +166,7 @@ class RuntimeRunner:
         if result.billing_status != "known":
             raise RuntimeHalt("billing unknown halted runtime")
         if str(self.plan.get("runtime_contract")) in {
-            "veriplanpt-runtime-v0.4.0-r10.5", "veriplanpt-runtime-v0.4.0-r10.6", "veriplanpt-runtime-v0.4.0-r10.7",
+            "veriplanpt-runtime-v0.4.0-r10.5", "veriplanpt-runtime-v0.4.0-r10.6", "veriplanpt-runtime-v0.4.0-r10.8",
         }:
             observed_rows = [
                 row for row in ledger.snapshot() if row.get("run_id") == str(cell["run_id"])
@@ -293,7 +293,7 @@ class RuntimeRunner:
             epoch=str(self.plan.get("epoch", "")),
         )
         coordinator = ExperimentRunner(
-            artifact_root=self.root / f"coordinator-{phase}", workers=1 if phase == "canary" else 2,
+            artifact_root=self.root / f"coordinator-{phase}", workers=1,
         )
         result_by_id: dict[str, RuntimeCellResult] = {}
         try:
@@ -367,7 +367,7 @@ class RuntimeRunner:
                 counters = ledger.counter_snapshot(
                     str(cell["run_id"]), epoch=str(self.plan.get("epoch", "")),
                 )
-                if str(self.plan.get("runtime_contract", "")) == "veriplanpt-runtime-v0.4.0-r10.7" and counters != {
+                if str(self.plan.get("runtime_contract", "")) == "veriplanpt-runtime-v0.4.0-r10.8" and counters != {
                     "gateway_request_count": 1,
                     "provider_attempt_count": 1,
                     "provider_response_count": 1,

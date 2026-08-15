@@ -23,7 +23,7 @@ from src.pipeline.readiness_evidence import (
 R10_4_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.4"
 R10_5_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.5"
 R10_6_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.6"
-R10_7_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.7"
+R10_7_RUNTIME_CONTRACT = "veriplanpt-runtime-v0.4.0-r10.8"
 READINESS_RUNTIME_CONTRACTS = frozenset({R10_4_RUNTIME_CONTRACT, R10_5_RUNTIME_CONTRACT, R10_6_RUNTIME_CONTRACT, R10_7_RUNTIME_CONTRACT})
 READINESS_CONDITION = "not_applicable"
 READINESS_SCOPE = "readiness_transport"
