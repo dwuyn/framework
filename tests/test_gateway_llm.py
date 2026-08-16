@@ -47,3 +47,30 @@ def test_gateway_llm_adds_bound_tool_contract(monkeypatch) -> None:
     GatewayLLM({"model": "locked-model"}).bind_tools([Tool()]).invoke("prompt")
     assert "Available tools" in str(captured[0]["contents"])
     assert '"name": "run_shell"' in str(captured[0]["contents"])
+
+
+def test_gateway_llm_uses_chat_contract_for_gemma(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    def request(payload: dict[str, object]) -> dict[str, object]:
+        captured.append({"kind": "request", **payload})
+        return {"text": "wrong transport", "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+
+    def chat_completion(messages: list[dict[str, object]], *, model: str = "", stream: bool = False) -> dict[str, object]:
+        captured.append({"kind": "chat", "messages": messages, "model": model, "stream": stream})
+        return {"text": "gemma response", "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "provider_shim",
+        types.SimpleNamespace(request=request, chat_completion=chat_completion),
+    )
+    response = GatewayLLM({"model": "gemma-4-26b-a4b-it"}).invoke("prompt")
+
+    assert captured == [{
+        "kind": "chat",
+        "messages": [{"role": "user", "content": "prompt"}],
+        "model": "gemma-4-26b-a4b-it",
+        "stream": False,
+    }]
+    assert response.content == "gemma response"

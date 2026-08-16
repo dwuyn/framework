@@ -70,7 +70,16 @@ class GatewayLLM:
         from provider_shim import request  # type: ignore[import-not-found]
 
         contents = _content_text(prompt) + _tool_text(self.tools)
-        response = request({"contents": contents})
+        model = str(self.config.get("model", ""))
+        if model == "gemma-4-26b-a4b-it":
+            from provider_shim import chat_completion  # type: ignore[import-not-found]
+
+            response = chat_completion(
+                [{"role": "user", "content": contents}],
+                model=model,
+            )
+        else:
+            response = request({"contents": contents})
         if not isinstance(response, Mapping):
             raise RuntimeError("provider shim returned a non-object response")
         text = response.get("text")
