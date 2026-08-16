@@ -742,7 +742,7 @@ class FrameworkAdapter:
         if ledger_path and os.path.exists(ledger_path):
             ledger = EventLedger.load(ledger_path)
             transcript = [
-                {"role": e.phase, "event": {k: v for k, v in vars(e).items() if v is not None}}
+                {"role": e.phase, "event": e.to_public_dict()}
                 for e in ledger.events
             ]
 

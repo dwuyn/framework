@@ -16,6 +16,33 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping
 
+_PUBLIC_FORBIDDEN_KEYS = frozenset({
+    "cve", "cve_id", "truth", "oracle_truth", "hidden_truth", "hidden_version",
+    "canonical_case_id", "alias", "alias_metadata", "decoy", "decoy_metadata",
+    "access_token", "refresh_token", "service_account", "private_key", "adc",
+    "google_adc", "google_application_credentials", "docker_socket", "docker_sock",
+})
+
+
+def _public_key_forbidden(key: object) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    return normalized in _PUBLIC_FORBIDDEN_KEYS
+
+
+def _public_project(value: Any) -> Any:
+    """Project nested event payloads onto the public, non-sensitive wire shape."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): _public_project(child)
+            for key, child in value.items()
+            if not _public_key_forbidden(key)
+        }
+    if isinstance(value, list):
+        return [_public_project(child) for child in value]
+    if isinstance(value, tuple):
+        return [_public_project(child) for child in value]
+    return value
+
 # Allowed semantic outcomes. ``vulnerability_confirmed`` and
 # ``task_proof_obtained`` are progress facts, not interchangeable success
 # states. Only independent ``task_proof_obtained`` counts toward the primary
@@ -108,6 +135,14 @@ class Event:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def to_public_dict(self) -> dict[str, Any]:
+        """Serialize only the public event contract; retain raw fields internally."""
+        return {
+            key: _public_project(value)
+            for key, value in asdict(self).items()
+            if key != "cve_id" and not _public_key_forbidden(key)
+        }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Event":
